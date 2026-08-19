@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { TextractorThread } from "../../types";
-import { Cpu, RefreshCw, CheckCircle2, Filter } from "lucide-react";
+import { Cpu, RefreshCw, CheckCircle2 } from "lucide-react";
 
 // TODO: Replace with real process list from Windows system
 const DUMMY_PROCESSES = [
@@ -20,9 +20,6 @@ const DUMMY_THREADS: TextractorThread[] = [
 export const TextractorInputView: React.FC = () => {
   const [selectedPid, setSelectedPid] = useState<number>(14920);
   const [threads, setThreads] = useState<TextractorThread[]>(DUMMY_THREADS);
-  const [removeDuplicateChars, setRemoveDuplicateChars] = useState<boolean>(true);
-  const [filterControlCodes, setFilterControlCodes] = useState<boolean>(true);
-  const [customRegex, setCustomRegex] = useState<string>("\\\\[a-zA-Z0-9_]+(\\[.*?\\])?");
 
   const toggleThread = (id: number) => {
     setThreads(
@@ -107,44 +104,28 @@ export const TextractorInputView: React.FC = () => {
         </table>
       </div>
 
-      {/* Text Cleaner & Regex Filter Rules */}
-      <div className="card" style={{ margin: 0 }}>
-        <div className="card-header">
-          <span className="card-title">
-            <Filter size={16} /> Text Cleaner & Noise Filter Rules
-          </span>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={removeDuplicateChars}
-              onChange={(e) => setRemoveDuplicateChars(e.target.checked)}
-            />
-            <span>Remove repetitive duplicate characters (e.g. 「あああ」→「あ」)</span>
-          </label>
-
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={filterControlCodes}
-              onChange={(e) => setFilterControlCodes(e.target.checked)}
-            />
-            <span>Strip engine script control tags (e.g. \n, \p, [ruby], [chara_show])</span>
-          </label>
-
-          <div style={{ marginTop: "4px" }}>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Custom Regex Filter (Remove matched patterns)
-            </label>
-            <input
-              type="text"
-              value={customRegex}
-              onChange={(e) => setCustomRegex(e.target.value)}
-              style={{ width: "100%", fontFamily: "var(--font-mono)", fontSize: "12px" }}
-            />
+      {/* Linked Text Preprocessing Pipeline Banner */}
+      <div
+        className="card"
+        style={{
+          margin: 0,
+          backgroundColor: "var(--bg-surface)",
+          border: "1px solid var(--border-subtle)",
+          padding: "14px 18px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-primary)", display: "block" }}>
+              Unified Text Preprocessing Pipeline
+            </span>
+            <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+              All raw stream outputs from hooked threads are cleaned automatically through the centralized drag-and-drop Preprocessing pipeline (Furigana, Stutter, Control Tags, and Custom Regex).
+            </span>
           </div>
+          <span className="badge badge-success" style={{ whiteSpace: "nowrap" }}>
+            Pipeline Active
+          </span>
         </div>
       </div>
     </div>

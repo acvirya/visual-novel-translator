@@ -13,6 +13,7 @@ import {
   KeyRound,
   Menu,
   Languages,
+  Sparkles,
 } from "lucide-react";
 import { NavigationTab } from "../../types";
 
@@ -68,6 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {
       title: "Settings",
       items: [
+        { id: "text-preprocessing", label: "Text Preprocessing", icon: <Sparkles size={16} /> },
         { id: "general-settings", label: "General", icon: <Sliders size={16} /> },
         { id: "translation-providers", label: "Translation Providers", icon: <KeyRound size={16} /> },
       ],

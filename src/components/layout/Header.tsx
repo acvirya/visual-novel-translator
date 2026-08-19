@@ -40,8 +40,12 @@ const tabTitles: Record<NavigationTab, { title: string; subtitle: string }> = {
     subtitle: "Screen capture region, interval scanner, and image filter settings",
   },
   "overlay-settings": {
-    title: "Overlay & Read Mode",
-    subtitle: "Transparent in-game display, N-gram script matcher, and multi-box layout",
+    title: "Overlay Settings",
+    subtitle: "In-game transparent subtitle box, auto-expansion, and monitor positioning",
+  },
+  "text-preprocessing": {
+    title: "Text Preprocessing",
+    subtitle: "Centralized sequential pipeline for cleaning raw dialogue text",
   },
   "general-settings": {
     title: "General Settings",

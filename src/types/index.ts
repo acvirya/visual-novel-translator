@@ -12,8 +12,39 @@ export type NavigationTab =
   // Overlay
   | "overlay-settings"
   // Settings
+  | "text-preprocessing"
   | "general-settings"
   | "translation-providers";
+
+export type PreprocessingType =
+  | "furigana_cleaner"
+  | "control_char_cleaner"
+  | "stutter_reducer"
+  | "whitespace_normalizer"
+  | "punctuation_normalizer"
+  | "unicode_nfkc"
+  | "custom_regex";
+
+export interface PreprocessingStep {
+  id: string;
+  type: PreprocessingType;
+  name: string;
+  description: string;
+  isEnabled: boolean;
+  isCustom?: boolean;
+  options?: {
+    pattern?: string;
+    replacement?: string;
+    isRegex?: boolean;
+    ignoreCase?: boolean;
+    stripRubyParentheses?: boolean;
+    stripRubyBrackets?: boolean;
+    stripRubyHtml?: boolean;
+    collapseLimit?: number;
+    normalizeQuotes?: boolean;
+    removeDecorativeSymbols?: boolean;
+  };
+}
 
 export interface ScriptLineItem {
   id: string;

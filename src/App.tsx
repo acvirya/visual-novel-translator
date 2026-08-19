@@ -19,6 +19,7 @@ import { OcrInputView } from "./components/views/OcrInputView";
 import { OverlaySettingsView } from "./components/views/OverlaySettingsView";
 
 // Settings Views
+import { TextPreprocessingView } from "./components/views/TextPreprocessingView";
 import { GeneralSettingsView } from "./components/views/GeneralSettingsView";
 import { TranslationProvidersView } from "./components/views/TranslationProvidersView";
 
@@ -46,6 +47,8 @@ export function App() {
         return <OcrInputView />;
       case "overlay-settings":
         return <OverlaySettingsView />;
+      case "text-preprocessing":
+        return <TextPreprocessingView />;
       case "general-settings":
         return <GeneralSettingsView />;
       case "translation-providers":
