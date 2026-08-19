@@ -1,50 +1,78 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { NavigationTab } from "./types";
+import { Sidebar } from "./components/layout/Sidebar";
+import { Header } from "./components/layout/Header";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+// Translation Views
+import { LiveTranslateView } from "./components/views/LiveTranslateView";
+import { ManualTranslateView } from "./components/views/ManualTranslateView";
+import { BatchTranslateView } from "./components/views/BatchTranslateView";
+import { GlossaryManagerView } from "./components/views/GlossaryManagerView";
+import { ScriptManagerView } from "./components/views/ScriptManagerView";
+import { LogsView } from "./components/views/LogsView";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+// Input Views
+import { TextractorInputView } from "./components/views/TextractorInputView";
+import { OcrInputView } from "./components/views/OcrInputView";
+
+// Overlay Views
+import { OverlaySettingsView } from "./components/views/OverlaySettingsView";
+
+// Settings Views
+import { GeneralSettingsView } from "./components/views/GeneralSettingsView";
+import { TranslationProvidersView } from "./components/views/TranslationProvidersView";
+
+export function App() {
+  const [currentTab, setCurrentTab] = useState<NavigationTab>("live-translate");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+
+  const renderActiveView = () => {
+    switch (currentTab) {
+      case "live-translate":
+        return <LiveTranslateView />;
+      case "manual-translate":
+        return <ManualTranslateView />;
+      case "batch-translate":
+        return <BatchTranslateView />;
+      case "glossary-manager":
+        return <GlossaryManagerView />;
+      case "script-manager":
+        return <ScriptManagerView />;
+      case "logs":
+        return <LogsView />;
+      case "textractor":
+        return <TextractorInputView />;
+      case "ocr":
+        return <OcrInputView />;
+      case "overlay-settings":
+        return <OverlaySettingsView />;
+      case "general-settings":
+        return <GeneralSettingsView />;
+      case "translation-providers":
+        return <TranslationProvidersView />;
+      default:
+        return <LiveTranslateView />;
+    }
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="app-layout">
+      {/* Collapsible Left Sidebar */}
+      <Sidebar
+        currentTab={currentTab}
+        onSelectTab={setCurrentTab}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+      />
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+      {/* Main Content Area */}
+      <div className="main-content">
+        <Header currentTab={currentTab} />
+        <main className="view-container">
+          {renderActiveView()}
+        </main>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    </div>
   );
 }
 
