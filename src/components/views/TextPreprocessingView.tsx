@@ -34,7 +34,7 @@ export const TextPreprocessingView: React.FC = () => {
     "\\c[2]坂上　智代\\c[0]「……あ、、あのっ……！　私(わたし)は……遅刻(ちこく)したくないの！！♪♥」"
   );
   const [copied, setCopied] = useState<boolean>(false);
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
 
   // Save pipeline changes to localStorage
   useEffect(() => {
@@ -43,6 +43,36 @@ export const TextPreprocessingView: React.FC = () => {
 
   // Compute live trace
   const { finalOutput, traces } = executePipelineWithTrace(sampleInput, pipeline);
+
+  // Pointer-based Drag & Drop Reordering
+  const handlePointerDown = (index: number, e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    setDraggingIndex(index);
+  };
+
+  const handlePointerEnter = (targetIndex: number) => {
+    if (draggingIndex === null || draggingIndex === targetIndex) return;
+
+    setPipeline((prev) => {
+      const updated = [...prev];
+      const [draggedItem] = updated.splice(draggingIndex, 1);
+      updated.splice(targetIndex, 0, draggedItem);
+      return updated;
+    });
+    setDraggingIndex(targetIndex);
+  };
+
+  // Global pointerup to release drag
+  useEffect(() => {
+    const handleGlobalPointerUp = () => {
+      if (draggingIndex !== null) {
+        setDraggingIndex(null);
+      }
+    };
+
+    window.addEventListener("pointerup", handleGlobalPointerUp);
+    return () => window.removeEventListener("pointerup", handleGlobalPointerUp);
+  }, [draggingIndex]);
 
   // Toggle step enabled
   const handleToggleStep = (id: string) => {
@@ -69,27 +99,6 @@ export const TextPreprocessingView: React.FC = () => {
     newPipeline[index + 1] = newPipeline[index];
     newPipeline[index] = temp;
     setPipeline(newPipeline);
-  };
-
-  // Drag & Drop Handlers
-  const handleDragStart = (index: number) => {
-    setDraggedIndex(index);
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (draggedIndex === null || draggedIndex === index) return;
-
-    const newPipeline = [...pipeline];
-    const draggedItem = newPipeline[draggedIndex];
-    newPipeline.splice(draggedIndex, 1);
-    newPipeline.splice(index, 0, draggedItem);
-    setDraggedIndex(index);
-    setPipeline(newPipeline);
-  };
-
-  const handleDragEnd = () => {
-    setDraggedIndex(null);
   };
 
   // Add Custom Replacement Rule
@@ -187,21 +196,19 @@ export const TextPreprocessingView: React.FC = () => {
             return (
               <div
                 key={step.id}
-                draggable
-                onDragStart={() => handleDragStart(index)}
-                onDragOver={(e) => handleDragOver(e, index)}
-                onDragEnd={handleDragEnd}
+                onPointerEnter={() => handlePointerEnter(index)}
                 className="card"
                 style={{
                   margin: 0,
                   padding: "12px 14px",
                   borderLeft: step.isEnabled ? "3px solid var(--accent-primary)" : "3px solid var(--border-subtle)",
-                  backgroundColor: step.isEnabled ? "var(--bg-surface)" : "var(--bg-surface-elevated)",
+                  backgroundColor: draggingIndex === index ? "var(--bg-surface-elevated)" : step.isEnabled ? "var(--bg-surface)" : "var(--bg-surface-elevated)",
                   opacity: step.isEnabled ? 1 : 0.65,
-                  cursor: "default",
-                  transition: "all 0.15s ease",
-                  transform: draggedIndex === index ? "scale(1.02)" : "none",
-                  boxShadow: draggedIndex === index ? "0 8px 24px rgba(0,0,0,0.5)" : "none",
+                  transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                  transform: draggingIndex === index ? "scale(1.02)" : "none",
+                  boxShadow: draggingIndex === index ? "0 8px 24px rgba(0,0,0,0.6)" : "none",
+                  border: draggingIndex === index ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
+                  userSelect: "none",
                 }}
               >
                 {/* Step Top Bar: Grip, Step #, Title, Toggle, Reorder Buttons */}
@@ -209,14 +216,16 @@ export const TextPreprocessingView: React.FC = () => {
                   <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1 }}>
                     {/* Drag Handle Grip */}
                     <div
+                      onPointerDown={(e) => handlePointerDown(index, e)}
                       style={{
-                        cursor: "grab",
-                        color: "var(--text-muted)",
+                        cursor: draggingIndex === index ? "grabbing" : "grab",
+                        color: draggingIndex === index ? "var(--accent-primary)" : "var(--text-muted)",
                         display: "flex",
                         alignItems: "center",
-                        padding: "2px",
+                        padding: "6px 4px",
+                        touchAction: "none",
                       }}
-                      title="Drag to reorder"
+                      title="Click & Drag to reorder"
                     >
                       <GripVertical size={16} />
                     </div>
@@ -299,6 +308,7 @@ export const TextPreprocessingView: React.FC = () => {
                 {/* Specific Step Options / Custom Regex Inputs */}
                 {step.type === "custom_regex" && (
                   <div
+                    onMouseDown={(e) => e.stopPropagation()}
                     style={{
                       marginTop: "10px",
                       paddingTop: "10px",
