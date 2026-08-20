@@ -19,6 +19,7 @@ export type NavigationTab =
 export type PreprocessingType =
   | "furigana_cleaner"
   | "control_char_cleaner"
+  | "phrase_deduplicator"
   | "stutter_reducer"
   | "whitespace_normalizer"
   | "punctuation_normalizer"
@@ -81,12 +82,37 @@ export interface GlossaryEntry {
   notes?: string;
 }
 
+export interface TextractorProcessInfo {
+  pid: number;
+  name: string;
+  window_title: string;
+}
+
+export interface TextractorMessage {
+  handle: number;
+  pid: number;
+  address: string;
+  context: string;
+  context2: string;
+  name: string;
+  hook_code: string;
+  text: string;
+  timestamp: string;
+}
+
+export type TextractorThreadRole = "combined" | "message" | "speaker" | "ignored";
+
 export interface TextractorThread {
-  id: number;
+  id: number; // handle
   name: string;
   hookCode: string;
+  address?: string;
   totalLines: number;
+  lastText: string;
+  lastTimestamp: string;
   isActive: boolean;
+  role: TextractorThreadRole;
+  isPrimary?: boolean;
 }
 
 export interface OverlayConfig {

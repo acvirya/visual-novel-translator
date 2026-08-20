@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Copy, Sparkles, Languages, ArrowRightLeft, BookOpen } from "lucide-react";
+import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 
 export const ManualTranslateView: React.FC = () => {
   const [sourceText, setSourceText] = useState<string>(
@@ -8,7 +9,9 @@ export const ManualTranslateView: React.FC = () => {
   const [translatedText, setTranslatedText] = useState<string>(
     "\"Even if the world rejects you, I will stay by your side.\""
   );
-  const [selectedProvider, setSelectedProvider] = useState<string>("openrouter");
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    return localStorage.getItem("vn_selected_model") || "anthropic/claude-3.5-sonnet";
+  });
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
 
   // TODO: Connect to Tauri OpenRouter / MT API command
@@ -40,20 +43,18 @@ export const ManualTranslateView: React.FC = () => {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: 600 }}>
-            Provider:
+          <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontWeight: 600, whiteSpace: "nowrap" }}>
+            Model:
           </span>
-          <select
-            value={selectedProvider}
-            onChange={(e) => setSelectedProvider(e.target.value)}
-            style={{ width: "230px" }}
-          >
-            <option value="openrouter">OpenRouter (Claude 3.5 Sonnet)</option>
-            <option value="openrouter_gpt">OpenRouter (GPT-4o-mini)</option>
-            <option value="openrouter_deepseek">OpenRouter (DeepSeek-V3)</option>
-            <option value="google_free">Google Translate (Free MT)</option>
-            <option value="deepl_free">DeepL Web (Free)</option>
-          </select>
+          <ModelSelectorCombobox
+            selectedModelId={selectedModel}
+            onSelectModel={(id) => {
+              setSelectedModel(id);
+              localStorage.setItem("vn_selected_model", id);
+            }}
+            width="320px"
+            compact={true}
+          />
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>

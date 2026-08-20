@@ -1,12 +1,12 @@
 import React, { useState } from "react";
 import { TranslationLogItem } from "../../types";
+import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import {
   Play,
   Pause,
   Trash2,
   Database,
   RefreshCw,
-  Zap,
   ShieldCheck,
 } from "lucide-react";
 
@@ -115,25 +115,18 @@ export const LiveTranslateView: React.FC = () => {
             <span>{isAutoActive ? "Auto-Translate: Active" : "Stream Paused"}</span>
           </button>
 
-          {/* Translation Provider Selector */}
+          {/* Translation Model Selector */}
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <Zap size={14} style={{ color: "var(--accent-gold)" }} />
-            <select
-              value={selectedProvider}
-              onChange={(e) => setSelectedProvider(e.target.value)}
-              disabled={useScriptOnly}
-              style={{
-                width: "220px",
-                opacity: useScriptOnly ? 0.45 : 1,
-                cursor: useScriptOnly ? "not-allowed" : "pointer",
+            <ModelSelectorCombobox
+              selectedModelId={selectedProvider}
+              onSelectModel={(id) => {
+                setSelectedProvider(id);
+                localStorage.setItem("vn_selected_model", id);
               }}
-            >
-              <option value="openrouter_claude">OpenRouter (Claude 3.5 Sonnet)</option>
-              <option value="openrouter_gpt">OpenRouter (GPT-4o-mini)</option>
-              <option value="openrouter_deepseek">OpenRouter (DeepSeek-V3)</option>
-              <option value="google_free">Google Translate (Free MT)</option>
-              <option value="deepl_free">DeepL Web (Free)</option>
-            </select>
+              disabled={useScriptOnly}
+              width="260px"
+              compact={true}
+            />
           </div>
 
           {/* Use Script Only Toggle */}

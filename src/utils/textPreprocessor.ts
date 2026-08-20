@@ -31,6 +31,13 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     isEnabled: true,
   },
   {
+    id: "step_phrase_deduplicator",
+    type: "phrase_deduplicator",
+    name: "Repeated Phrase & Loop Deduplicator",
+    description: "Collapses repeating sentence loops and duplicate phrase bursts caused by outline/shadow text hooks (e.g. 遥月遥月... → 遥月)",
+    isEnabled: true,
+  },
+  {
     id: "step_stutter",
     type: "stutter_reducer",
     name: "Stutter & Repeated Character Reducer",
@@ -126,6 +133,9 @@ export function applyPreprocessingStep(text: string, step: PreprocessingStep): s
 
       // 8. Null bytes and non-printable control characters (Memory Hook noise 0x00-0x1F, 0x7F)
       result = result.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+
+      // 9. Strip isolated engine ruby/bullet prefixes (e.g. · , ・ , • , ●)
+      result = result.replace(/^[\s·・•●○\u00B7\u30FB]+/g, "");
       break;
     }
 
@@ -135,6 +145,17 @@ export function applyPreprocessingStep(text: string, step: PreprocessingStep): s
         result = result.normalize("NFKC");
       } catch {
         // Fallback if environment doesn't support normalize
+      }
+      break;
+    }
+
+    case "phrase_deduplicator": {
+      let prev = "";
+      // Multi-pass deduplication for nested phrase loops (e.g. shadow / outline font loops)
+      for (let pass = 0; pass < 3 && result !== prev; pass++) {
+        prev = result;
+        // Collapses consecutive identical phrase blocks of length 2 to 150 chars repeating 1+ additional times
+        result = result.replace(/(.{2,150}?)\1+/gu, "$1");
       }
       break;
     }
@@ -229,4 +250,94 @@ export function executePipelineWithTrace(
   }
 
   return { finalOutput: current, traces };
+}
+
+/**
+ * Convenience helper to execute active stored pipeline on raw input text
+ */
+export function executePreprocessingPipeline(rawText: string): string {
+  try {
+    let pipeline = DEFAULT_PREPROCESSING_PIPELINE;
+    const stored = localStorage.getItem("vn_preprocessing_pipeline");
+    if (stored) {
+      pipeline = JSON.parse(stored);
+    }
+    const { finalOutput } = executePipelineWithTrace(rawText, pipeline);
+    return finalOutput;
+  } catch {
+    return rawText;
+  }
+}
+
+export interface ExtractedDialogue {
+  speaker: string;
+  message: string;
+}
+
+/**
+ * Smart extractor to separate character name (speaker) and dialogue message from a single text line
+ */
+export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
+  const trimmed = text.trim();
+  if (!trimmed) return { speaker: "", message: "" };
+
+  // 1. Bracketed Speaker prefix: 【遥月】セリフ, [遥月] セリフ, ［遥月］セリフ, <遥月> セリフ, 〈遥月〉セリフ
+  const bracketMatch = trimmed.match(/^[【\[［<〈]([^【\]］>〉\r\n]{1,20})[】\]］>〉]\s*[:：]?\s*([\s\S]+)$/);
+  if (bracketMatch) {
+    return {
+      speaker: bracketMatch[1].trim(),
+      message: bracketMatch[2].trim(),
+    };
+  }
+
+  // 2. Name before Japanese quotation mark: 遥月「セリフ」 or 遥月『セリフ』 or 遥月（セリフ）
+  // Speaker name is typically 1 to 15 characters before 「 or 『
+  const quoteMatch = trimmed.match(/^([^「『（\r\n]{1,20})\s*([「『（][\s\S]+)$/);
+  if (quoteMatch) {
+    return {
+      speaker: quoteMatch[1].trim(),
+      message: quoteMatch[2].trim(),
+    };
+  }
+
+  // 3. Colon separator: 遥月: セリフ or 遥月：セリフ
+  const colonMatch = trimmed.match(/^([^:：\r\n]{1,20})[:：]\s*([\s\S]+)$/);
+  if (colonMatch) {
+    return {
+      speaker: colonMatch[1].trim(),
+      message: colonMatch[2].trim(),
+    };
+  }
+
+  // 4. Newline separator: First line is short name (< 15 chars), followed by dialogue lines
+  const lines = trimmed.split(/\r?\n/);
+  if (lines.length >= 2 && lines[0].trim().length >= 1 && lines[0].trim().length <= 15 && !lines[0].includes("。")) {
+    return {
+      speaker: lines[0].trim(),
+      message: lines.slice(1).join("\n").trim(),
+    };
+  }
+
+  // 5. Suffix speaker at the end: 「セリフ」――遥月 or 「セリフ」 (遥月) or 「セリフ」【遥月】
+  const suffixDashMatch = trimmed.match(/^([\s\S]+?[」』）\)])\s*(?:――|——|--)\s*([^「」\r\n]{1,20})$/);
+  if (suffixDashMatch) {
+    return {
+      speaker: suffixDashMatch[2].trim(),
+      message: suffixDashMatch[1].trim(),
+    };
+  }
+
+  const suffixParenMatch = trimmed.match(/^([\s\S]+?[」』])\s*[（(【\[]([^）)\]】\r\n]{1,20})[）)\]】]$/);
+  if (suffixParenMatch) {
+    return {
+      speaker: suffixParenMatch[2].trim(),
+      message: suffixParenMatch[1].trim(),
+    };
+  }
+
+  // 6. No speaker pattern found -> Entire text is dialogue / narration
+  return {
+    speaker: "",
+    message: trimmed,
+  };
 }

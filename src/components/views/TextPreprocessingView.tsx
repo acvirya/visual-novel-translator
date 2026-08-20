@@ -23,7 +23,13 @@ export const TextPreprocessingView: React.FC = () => {
   const [pipeline, setPipeline] = useState<PreprocessingStep[]>(() => {
     try {
       const saved = localStorage.getItem("vn_preprocessing_pipeline");
-      return saved ? JSON.parse(saved) : DEFAULT_PREPROCESSING_PIPELINE;
+      if (saved) {
+        const parsed: PreprocessingStep[] = JSON.parse(saved);
+        const existingIds = new Set(parsed.map((s) => s.id));
+        const missingDefaults = DEFAULT_PREPROCESSING_PIPELINE.filter((d) => !existingIds.has(d.id));
+        return [...parsed, ...missingDefaults];
+      }
+      return DEFAULT_PREPROCESSING_PIPELINE;
     } catch {
       return DEFAULT_PREPROCESSING_PIPELINE;
     }

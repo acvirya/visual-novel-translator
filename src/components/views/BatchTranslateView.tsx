@@ -11,6 +11,7 @@ import {
   Square,
   RefreshCw,
 } from "lucide-react";
+import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 
 interface QueuedFile {
   id: string;
@@ -541,19 +542,17 @@ export const BatchTranslateView: React.FC = () => {
         <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr auto", gap: "16px", alignItems: "center" }}>
           <div>
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Translation Engine Provider
+              Translation Engine Model
             </label>
-            <select
-              value={selectedEngine}
-              onChange={(e) => setSelectedEngine(e.target.value)}
-              style={{ width: "100%" }}
-            >
-              <option value="openrouter_claude">OpenRouter (Claude 3.5 Sonnet)</option>
-              <option value="openrouter_gpt">OpenRouter (GPT-4o-mini)</option>
-              <option value="openrouter_deepseek">OpenRouter (DeepSeek-V3)</option>
-              <option value="google_free">Google Translate (Free MT)</option>
-              <option value="deepl_free">DeepL Web (Free)</option>
-            </select>
+            <ModelSelectorCombobox
+              selectedModelId={selectedEngine}
+              onSelectModel={(id) => {
+                setSelectedEngine(id);
+                localStorage.setItem("vn_selected_model", id);
+              }}
+              compact={true}
+              disabled={isRunning}
+            />
           </div>
 
           <div>

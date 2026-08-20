@@ -1,5 +1,8 @@
+mod textractor;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+use textractor::TextractorState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MonitorInfo {
@@ -122,6 +125,7 @@ fn set_overlay_edit_mode(app: AppHandle, is_editing: bool) -> Result<(), String>
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(TextractorState::new())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 // If main control panel is closed, terminate the entire application and overlay
@@ -135,7 +139,11 @@ pub fn run() {
             show_overlay,
             hide_overlay,
             set_overlay_click_through,
-            set_overlay_edit_mode
+            set_overlay_edit_mode,
+            textractor::list_target_processes,
+            textractor::start_textractor,
+            textractor::send_textractor_command,
+            textractor::stop_textractor
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
