@@ -50,6 +50,15 @@ export interface PreprocessingStep {
   };
 }
 
+export interface DialogueTurn {
+  speaker?: string; // Character / Speaker Name (Empty for narration)
+  message: string;  // Dialogue Sentence / Text
+}
+
+export interface ManualDialogueInput {
+  message: string;  // Manual input without speaker name
+}
+
 export interface ScriptLineItem {
   id: string;
   speaker?: string;
@@ -133,6 +142,8 @@ export interface OverlayConfig {
 
   // Typography & Appearance
   fontSize: number;
+  speakerFontSize?: number;
+  messageFontSize?: number;
   fontColor: string;
   outlineColor: string;
   outlineWidth: number;

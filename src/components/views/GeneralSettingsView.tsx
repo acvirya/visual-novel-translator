@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Sliders, Keyboard, Globe, RotateCcw, AlertTriangle, Check, ShieldAlert, BookOpen, Database, Scan, Palette, Code } from "lucide-react";
+import { Keyboard, Globe, RotateCcw, AlertTriangle, Check, ShieldAlert, BookOpen, Database, Scan, Palette, Code } from "lucide-react";
 import { settingsManager } from "../../services/settingsManager";
 
 export const GeneralSettingsView: React.FC = () => {
@@ -8,12 +8,6 @@ export const GeneralSettingsView: React.FC = () => {
   });
   const [targetLang, setTargetLang] = useState<string>(() => {
     return localStorage.getItem("vn_target_lang") || "en";
-  });
-  const [autoStartWithWindows, setAutoStartWithWindows] = useState<boolean>(() => {
-    return localStorage.getItem("vn_auto_start") === "true";
-  });
-  const [minimizeToTray, setMinimizeToTray] = useState<boolean>(() => {
-    return localStorage.getItem("vn_minimize_tray") !== "false";
   });
 
   const [hotkeyLockOverlay, setHotkeyLockOverlay] = useState<string>(() => {
@@ -35,8 +29,6 @@ export const GeneralSettingsView: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("vn_source_lang", sourceLang);
     localStorage.setItem("vn_target_lang", targetLang);
-    localStorage.setItem("vn_auto_start", String(autoStartWithWindows));
-    localStorage.setItem("vn_minimize_tray", String(minimizeToTray));
     localStorage.setItem("vn_hotkey_lock", hotkeyLockOverlay);
     localStorage.setItem("vn_hotkey_pause", hotkeyTogglePause);
     localStorage.setItem("vn_hotkey_ocr", hotkeyOcrScan);
@@ -44,8 +36,6 @@ export const GeneralSettingsView: React.FC = () => {
     settingsManager.updateGeneral({
       sourceLang,
       targetLang,
-      autoStartWithWindows,
-      minimizeToTray,
       hotkeyLockOverlay,
       hotkeyTogglePause,
       hotkeyOcrScan,
@@ -53,8 +43,6 @@ export const GeneralSettingsView: React.FC = () => {
   }, [
     sourceLang,
     targetLang,
-    autoStartWithWindows,
-    minimizeToTray,
     hotkeyLockOverlay,
     hotkeyTogglePause,
     hotkeyOcrScan,
@@ -116,8 +104,6 @@ export const GeneralSettingsView: React.FC = () => {
       // Reset local state
       setSourceLang("ja");
       setTargetLang("en");
-      setAutoStartWithWindows(false);
-      setMinimizeToTray(true);
       setHotkeyLockOverlay("Ctrl+Shift+L");
       setHotkeyTogglePause("Ctrl+Shift+P");
       setHotkeyOcrScan("F9");
@@ -126,8 +112,6 @@ export const GeneralSettingsView: React.FC = () => {
     } else if (resetCategory === "general") {
       setSourceLang("ja");
       setTargetLang("en");
-      setAutoStartWithWindows(false);
-      setMinimizeToTray(true);
       setHotkeyLockOverlay("Ctrl+Shift+L");
       setHotkeyTogglePause("Ctrl+Shift+P");
       setHotkeyOcrScan("F9");
@@ -266,35 +250,6 @@ export const GeneralSettingsView: React.FC = () => {
               style={{ width: "100%", fontFamily: "var(--font-mono)" }}
             />
           </div>
-        </div>
-      </div>
-
-      {/* Application Behavior */}
-      <div className="card" style={{ margin: 0 }}>
-        <div className="card-header">
-          <span className="card-title">
-            <Sliders size={16} /> Window & System Behavior
-          </span>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={minimizeToTray}
-              onChange={(e) => setMinimizeToTray(e.target.checked)}
-            />
-            <span>Minimize to System Tray on window close</span>
-          </label>
-
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={autoStartWithWindows}
-              onChange={(e) => setAutoStartWithWindows(e.target.checked)}
-            />
-            <span>Start automatically with Windows startup</span>
-          </label>
         </div>
       </div>
 

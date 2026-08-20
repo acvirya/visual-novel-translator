@@ -15,9 +15,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     name: "Classic VN Dialogue Box",
     description: "Standard visual novel subtitle box with dark semi-transparent backdrop and gold nameplate badge",
     html: `<div class="vn-box">
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="vn-nameplate">
+    {{#if speaker}}
     <span class="vn-speaker-jp">{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="vn-speaker-trans">{{translatedSpeaker}}</span>
     {{/if}}
@@ -60,17 +62,17 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 .vn-speaker-jp {
   color: #f6c23e;
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--speaker-font-size, 15px);
 }
 
 .vn-speaker-trans {
   color: #e6edf3;
   font-weight: 600;
-  font-size: 13.5px;
+  font-size: calc(var(--speaker-font-size, 15px) * 0.95);
 }
 
 .vn-message-jp {
-  font-size: 14px;
+  font-size: calc(var(--message-font-size, 20px) * 0.72);
   color: #8b949e;
   line-height: 1.45;
   border-left: 2px solid #4e73df;
@@ -78,7 +80,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 }
 
 .vn-message-trans {
-  font-size: 20px;
+  font-size: var(--message-font-size, 20px);
   font-weight: 600;
   color: #ffffff;
   line-height: 1.4;
@@ -90,9 +92,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     name: "Persona / Anime Slanted Angular Frame",
     description: "Dynamic asymmetrical angled cutouts with a sharp slanted nameplate and high-contrast comic styling",
     html: `<div class="persona-wrapper">
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="persona-nameplate">
+    {{#if speaker}}
     <span class="persona-speaker-name">{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="persona-speaker-en">/ {{translatedSpeaker}}</span>
     {{/if}}
@@ -138,14 +142,14 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 .persona-speaker-name {
   color: #ffffff;
   font-weight: 900;
-  font-size: 15px;
+  font-size: var(--speaker-font-size, 15px);
   transform: skewX(14deg);
   letter-spacing: 0.5px;
 }
 
 .persona-speaker-en {
   color: #ffe6ec;
-  font-size: 13px;
+  font-size: calc(var(--speaker-font-size, 15px) * 0.9);
   font-weight: 700;
   transform: skewX(14deg);
 }
@@ -180,13 +184,13 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 
 .persona-raw {
   color: #8b949e;
-  font-size: 13.5px;
+  font-size: calc(var(--message-font-size, 21px) * 0.7);
   line-height: 1.4;
 }
 
 .persona-text {
   color: #ffffff;
-  font-size: 21px;
+  font-size: var(--message-font-size, 21px);
   font-weight: 700;
   line-height: 1.4;
   text-shadow: 2px 2px 0px #000;
@@ -202,10 +206,12 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   <div class="gothic-corner gothic-bl">✦</div>
   <div class="gothic-corner gothic-br">✦</div>
 
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="gothic-gem-header">
     <span class="gothic-gem">◆</span>
+    {{#if speaker}}
     <span class="gothic-speaker">{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="gothic-speaker-en">· {{translatedSpeaker}}</span>
     {{/if}}
@@ -267,24 +273,24 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 .gothic-speaker {
   color: #fce38a;
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--speaker-font-size, 15px);
   font-family: serif;
 }
 
 .gothic-speaker-en {
   color: #ffffff;
-  font-size: 13px;
+  font-size: calc(var(--speaker-font-size, 15px) * 0.92);
   font-family: serif;
 }
 
 .gothic-jp {
-  font-size: 13.5px;
+  font-size: calc(var(--message-font-size, 21px) * 0.7);
   color: #b3a4c8;
   line-height: 1.4;
 }
 
 .gothic-trans {
-  font-size: 21px;
+  font-size: var(--message-font-size, 21px);
   font-weight: 600;
   color: #ffffff;
   line-height: 1.4;
@@ -297,10 +303,12 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     name: "Modern Frosted Glass (Glassmorphism)",
     description: "Sleek translucent glass design with backdrop-filter blur, cyan neon glow, and floating pill badge",
     html: `<div class="glass-container">
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="glass-badge">
     <div class="glass-glow-dot"></div>
+    {{#if speaker}}
     <span class="glass-name">{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="glass-trans-name">({{translatedSpeaker}})</span>
     {{/if}}
@@ -353,22 +361,22 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 .glass-name {
   color: #36b9cc;
   font-weight: 700;
-  font-size: 13.5px;
+  font-size: var(--speaker-font-size, 15px);
 }
 
 .glass-trans-name {
   color: #e6edf3;
-  font-size: 12.5px;
+  font-size: calc(var(--speaker-font-size, 15px) * 0.9);
 }
 
 .glass-jp {
-  font-size: 13.5px;
+  font-size: calc(var(--message-font-size, 21px) * 0.7);
   color: #a0aec0;
   line-height: 1.4;
 }
 
 .glass-text {
-  font-size: 21px;
+  font-size: var(--message-font-size, 21px);
   font-weight: 600;
   color: #ffffff;
   line-height: 1.4;
@@ -381,9 +389,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     name: "Manga Comic Speech Balloon",
     description: "Curved organic comic speech balloon with directional speech tail and vibrant manga styling",
     html: `<div class="bubble-wrapper">
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="bubble-speaker">
+    {{#if speaker}}
     <span>{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="bubble-speaker-sub">({{translatedSpeaker}})</span>
     {{/if}}
@@ -420,7 +430,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   padding: 2px 12px;
   border-radius: 12px;
   font-weight: 800;
-  font-size: 13px;
+  font-size: var(--speaker-font-size, 14px);
   z-index: 10;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.7);
 }
@@ -446,14 +456,14 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 
 .bubble-jp {
   color: #57606a;
-  font-size: 13.5px;
+  font-size: calc(var(--message-font-size, 21px) * 0.7);
   line-height: 1.4;
   font-weight: 500;
 }
 
 .bubble-dialogue {
   color: #0d1117;
-  font-size: 21px;
+  font-size: var(--message-font-size, 21px);
   font-weight: 800;
   line-height: 1.4;
 }
@@ -477,9 +487,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   <div class="cyber-corner cyber-corner-tl"></div>
   <div class="cyber-corner cyber-corner-tr"></div>
   
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="cyber-header">
+    {{#if speaker}}
     <div class="cyber-tag">ID // {{speaker}}</div>
+    {{/if}}
     {{#if translatedSpeaker}}
     <div class="cyber-subtag">[{{translatedSpeaker}}]</div>
     {{/if}}
@@ -519,7 +531,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   background: #fcee0a;
   color: #000000;
   font-family: monospace;
-  font-size: 13px;
+  font-size: var(--speaker-font-size, 14px);
   font-weight: 800;
   padding: 2px 10px;
   letter-spacing: 1px;
@@ -528,20 +540,20 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 .cyber-subtag {
   color: #00f0ff;
   font-family: monospace;
-  font-size: 12px;
+  font-size: calc(var(--speaker-font-size, 14px) * 0.9);
   font-weight: 600;
 }
 
 .cyber-raw {
   color: #7982a9;
-  font-size: 13px;
+  font-size: calc(var(--message-font-size, 20px) * 0.7);
   font-family: sans-serif;
   line-height: 1.35;
 }
 
 .cyber-translated {
   color: #ffffff;
-  font-size: 20px;
+  font-size: var(--message-font-size, 20px);
   font-weight: 700;
   line-height: 1.4;
   text-shadow: 0 0 6px rgba(0, 240, 255, 0.6);
@@ -552,9 +564,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     name: "Minimalist Cinematic Subtitles",
     description: "Frameless floating subtitles with elegant outline and a subtle floating speaker pill",
     html: `<div class="cine-container">
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="cine-speaker">
+    {{#if speaker}}
     <span>{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="cine-speaker-en">({{translatedSpeaker}})</span>
     {{/if}}
@@ -585,7 +599,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   background: rgba(0, 0, 0, 0.75);
   border: 1px solid rgba(255, 255, 255, 0.3);
   color: #ffd700;
-  font-size: 13.5px;
+  font-size: var(--speaker-font-size, 14px);
   font-weight: 700;
   padding: 2px 14px;
   border-radius: 12px;
@@ -600,14 +614,14 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 
 .cine-source {
   color: rgba(220, 220, 220, 0.85);
-  font-size: 14px;
+  font-size: calc(var(--message-font-size, 22px) * 0.7);
   line-height: 1.4;
   text-shadow: 1px 1px 3px #000000, -1px -1px 3px #000000, 1px -1px 3px #000000, -1px 1px 3px #000000;
 }
 
 .cine-text {
   color: #ffffff;
-  font-size: 22px;
+  font-size: var(--message-font-size, 22px);
   font-weight: 700;
   line-height: 1.45;
   text-shadow: 2px 2px 4px #000000, -2px -2px 4px #000000, 2px -2px 4px #000000, -2px 2px 4px #000000, 0 4px 12px rgba(0,0,0,0.9);
@@ -618,9 +632,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     name: "Fantasy RPG / Novel Box",
     description: "Classic scroll style with parchment tones, ornate golden border, and ribbon nameplate",
     html: `<div class="rpg-box">
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="rpg-ribbon">
+    {{#if speaker}}
     <span class="rpg-speaker-text">{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="rpg-speaker-sub">◆ {{translatedSpeaker}}</span>
     {{/if}}
@@ -664,26 +680,26 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 .rpg-speaker-text {
   color: #f7d070;
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--speaker-font-size, 15px);
   font-family: serif;
 }
 
 .rpg-speaker-sub {
   color: #d1b894;
-  font-size: 13px;
+  font-size: calc(var(--speaker-font-size, 15px) * 0.9);
   font-family: serif;
 }
 
 .rpg-orig {
   color: #a8947b;
-  font-size: 13.5px;
+  font-size: calc(var(--message-font-size, 20px) * 0.7);
   line-height: 1.4;
   font-style: italic;
 }
 
 .rpg-dialogue {
   color: #fbeef0;
-  font-size: 20px;
+  font-size: var(--message-font-size, 20px);
   font-weight: 600;
   line-height: 1.45;
   font-family: serif;
@@ -695,9 +711,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     name: "Custom HTML/CSS Template",
     description: "Blank canvas template with essential wrapper structure ready for full customization",
     html: `<div class="custom-overlay-box">
-  {{#if speaker}}
+  {{#if hasSpeaker}}
   <div class="custom-nameplate">
+    {{#if speaker}}
     <span class="name">{{speaker}}</span>
+    {{/if}}
     {{#if translatedSpeaker}}
     <span class="translated-name">({{translatedSpeaker}})</span>
     {{/if}}
@@ -730,7 +748,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   gap: 6px;
   color: #f6c23e;
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--speaker-font-size, 15px);
 }
 
 .custom-nameplate .translated-name {
@@ -739,12 +757,12 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 }
 
 .custom-raw-message {
-  font-size: 13px;
+  font-size: calc(var(--message-font-size, 20px) * 0.7);
   color: #8b949e;
 }
 
 .custom-translated-message {
-  font-size: 20px;
+  font-size: var(--message-font-size, 20px);
   font-weight: 600;
   color: #ffffff;
 }`,
@@ -755,18 +773,24 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
  * Compiles dynamic template HTML by interpolating variables and resolving conditional blocks
  */
 export function compileOverlayTemplate(
-  templateHtml: string,
-  dialogue: OverlayDialogueMessage,
+  templateHtml?: string,
+  dialogue?: OverlayDialogueMessage,
   config?: OverlayConfig
 ): string {
-  if (!templateHtml) return "";
+  if (!templateHtml || !dialogue) return "";
 
   let output = templateHtml;
 
-  const speakerVal = dialogue.speaker || "";
-  const transSpeakerVal = dialogue.translatedSpeaker || "";
-  const messageVal = dialogue.message || "";
-  const transMessageVal = dialogue.translatedMessage || "";
+  // Apply display field visibility toggles if config is present
+  const allowSpeaker = config ? config.showSpeaker !== false : true;
+  const allowTransSpeaker = config ? config.showTranslatedSpeaker !== false : true;
+  const allowMessage = config ? config.showMessage !== false : true;
+  const allowTransMessage = config ? config.showTranslatedMessage !== false : true;
+
+  const speakerVal = allowSpeaker ? (dialogue.speaker || "") : "";
+  const transSpeakerVal = allowTransSpeaker ? (dialogue.translatedSpeaker || "") : "";
+  const messageVal = allowMessage ? (dialogue.message || "") : "";
+  const transMessageVal = allowTransMessage ? (dialogue.translatedMessage || "") : "";
 
   // 1. Resolve {{#if speaker}}...{{/if}}
   output = resolveConditionalBlock(output, "speaker", !!speakerVal.trim());
@@ -790,10 +814,15 @@ export function compileOverlayTemplate(
     .replace(/\{\{\s*message\s*\}\}/gi, escapeHtml(messageVal))
     .replace(/\{\{\s*translatedMessage\s*\}\}/gi, escapeHtml(transMessageVal));
 
-  // 7. Interpolate Config Variables if available
+  // 7. Interpolate Config Variables & Typography if available
   if (config) {
+    const speakerSize = config.speakerFontSize || Math.max(12, config.fontSize - 4);
+    const messageSize = config.messageFontSize || config.fontSize;
+
     output = output
       .replace(/\{\{\s*fontSize\s*\}\}/gi, `${config.fontSize}px`)
+      .replace(/\{\{\s*speakerFontSize\s*\}\}/gi, `${speakerSize}px`)
+      .replace(/\{\{\s*messageFontSize\s*\}\}/gi, `${messageSize}px`)
       .replace(/\{\{\s*fontColor\s*\}\}/gi, config.fontColor)
       .replace(/\{\{\s*outlineColor\s*\}\}/gi, config.outlineColor)
       .replace(/\{\{\s*backgroundColor\s*\}\}/gi, config.backgroundColor)

@@ -226,6 +226,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
       height: 130,
       maxExpandRatio: 2.0,
       fontSize: 20,
+      speakerFontSize: 16,
+      messageFontSize: 20,
       fontColor: "#FFFFFF",
       outlineColor: "#000000",
       outlineWidth: 2,

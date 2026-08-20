@@ -22,6 +22,7 @@ import { OcrRegion, OcrEngineStatus, OcrRegionRole, MonitorInfo } from "../../ty
 import { OcrService } from "../../services/ocrService";
 import { overlayChannel } from "../../utils/overlayChannel";
 import { executePreprocessingPipeline } from "../../utils/textPreprocessor";
+import { formatMonitorLabel } from "../../utils/monitorUtils";
 import { invoke } from "@tauri-apps/api/core";
 
 export const OcrInputView: React.FC = () => {
@@ -509,7 +510,7 @@ export const OcrInputView: React.FC = () => {
               >
                 {monitors.map((m) => (
                   <option key={m.name} value={m.name}>
-                    {m.name} ({m.width}×{m.height} @ {m.scale_factor}x{m.is_primary ? " - Primary" : ""})
+                    {formatMonitorLabel(m)}
                   </option>
                 ))}
               </select>

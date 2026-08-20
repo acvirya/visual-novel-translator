@@ -391,12 +391,29 @@ export const OverlayWindow: React.FC = () => {
           boxSizing: "border-box",
         }}
       >
-        {/* Custom HTML/CSS Template Mode */}
-        {config.useCustomTemplate && config.customTemplateHtml ? (
-          <div style={{ width: "100%", height: "100%" }}>
+        {config.useCustomTemplate ? (
+          /* Custom Component Template Engine Mode */
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              // @ts-ignore
+              "--speaker-font-size": `${config.speakerFontSize || 16}px`,
+              // @ts-ignore
+              "--message-font-size": `${config.messageFontSize || 20}px`,
+              // @ts-ignore
+              "--overlay-font-size": `${config.fontSize || 20}px`,
+            }}
+          >
+            {/* Inject Scoped CSS */}
             {config.customTemplateCss && (
-              <style dangerouslySetInnerHTML={{ __html: config.customTemplateCss }} />
+              <style
+                dangerouslySetInnerHTML={{
+                  __html: config.customTemplateCss,
+                }}
+              />
             )}
+            {/* Render Compiled Template HTML with reactive config */}
             <div
               dangerouslySetInnerHTML={{
                 __html: compileOverlayTemplate(config.customTemplateHtml, dialogue, config),
@@ -417,7 +434,7 @@ export const OverlayWindow: React.FC = () => {
                       padding: "1px 8px",
                       borderRadius: "var(--radius-sm)",
                       fontWeight: 700,
-                      fontSize: `${config.fontSize * 0.72}px`,
+                      fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
                       fontFamily: "var(--font-jp)",
                     }}
                   >
@@ -428,7 +445,7 @@ export const OverlayWindow: React.FC = () => {
                 {config.showTranslatedSpeaker && dialogue.translatedSpeaker && (
                   <span
                     style={{
-                      fontSize: `${config.fontSize * 0.75}px`,
+                      fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
                       fontWeight: 600,
                       color: "var(--text-primary)",
                     }}
@@ -443,7 +460,7 @@ export const OverlayWindow: React.FC = () => {
             {config.showMessage && dialogue.message && (
               <div
                 style={{
-                  fontSize: `${config.fontSize * 0.75}px`,
+                  fontSize: `${Math.max(12, (config.messageFontSize || config.fontSize) * 0.8)}px`,
                   fontFamily: "var(--font-jp)",
                   color: "var(--text-jp)",
                   lineHeight: 1.5,
@@ -459,7 +476,7 @@ export const OverlayWindow: React.FC = () => {
             {config.showTranslatedMessage && dialogue.translatedMessage && (
               <div
                 style={{
-                  fontSize: `${config.fontSize}px`,
+                  fontSize: `${config.messageFontSize || config.fontSize}px`,
                   fontWeight: 600,
                   lineHeight: 1.4,
                   color: config.fontColor,

@@ -14,6 +14,7 @@ import {
   isBuiltInPreset,
 } from "../../utils/overlayTemplateEngine";
 import { settingsManager } from "../../services/settingsManager";
+import { formatMonitorLabel } from "../../utils/monitorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Monitor,
@@ -62,6 +63,8 @@ const INITIAL_OVERLAY_CONFIG: OverlayConfig = {
 
   // Appearance
   fontSize: 20,
+  speakerFontSize: 16,
+  messageFontSize: 20,
   fontColor: "#FFFFFF",
   outlineColor: "#000000",
   outlineWidth: 2,
@@ -521,7 +524,7 @@ export const OverlaySettingsView: React.FC = () => {
                 >
                   {monitors.map((m) => (
                     <option key={m.name} value={m.name}>
-                      {m.name} ({m.width} × {m.height} @ {Math.round(m.scale_factor * 100)}%) {m.is_primary ? "• Primary" : ""}
+                      {formatMonitorLabel(m)}
                     </option>
                   ))}
                 </select>
@@ -599,6 +602,96 @@ export const OverlaySettingsView: React.FC = () => {
                 <span className="badge badge-neutral" style={{ fontWeight: 700 }}>
                   2.0× Max Height
                 </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Display Fields & Typography Sizing Card (Always Available in Both Modes) */}
+          <div className="card" style={{ margin: 0 }}>
+            <div className="card-header">
+              <div>
+                <span className="card-title">
+                  <Type size={16} /> Display Fields & Font Sizing
+                </span>
+                <span className="card-subtitle">
+                  Select which dialogue elements to show and adjust speaker / message font sizes
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              {/* 4 Display Field Toggles */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.showSpeaker}
+                    onChange={(e) => updateConfig({ showSpeaker: e.target.checked })}
+                  />
+                  <span style={{ fontWeight: config.showSpeaker ? 600 : 400 }}>1. Original Speaker (JP)</span>
+                </label>
+
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.showTranslatedSpeaker}
+                    onChange={(e) => updateConfig({ showTranslatedSpeaker: e.target.checked })}
+                  />
+                  <span style={{ fontWeight: config.showTranslatedSpeaker ? 600 : 400 }}>2. Translated Speaker</span>
+                </label>
+
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.showMessage}
+                    onChange={(e) => updateConfig({ showMessage: e.target.checked })}
+                  />
+                  <span style={{ fontWeight: config.showMessage ? 600 : 400 }}>3. Original Message (JP)</span>
+                </label>
+
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.showTranslatedMessage}
+                    onChange={(e) => updateConfig({ showTranslatedMessage: e.target.checked })}
+                  />
+                  <span style={{ fontWeight: config.showTranslatedMessage ? 600 : 400 }}>4. Translated Message</span>
+                </label>
+              </div>
+
+              {/* Separate Speaker Font Size & Message Font Size */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                    <label style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                      Speaker Name Font Size: <strong style={{ color: "var(--text-primary)" }}>{config.speakerFontSize || 16}px</strong>
+                    </label>
+                  </div>
+                  <input
+                    type="range"
+                    min={10}
+                    max={36}
+                    value={config.speakerFontSize || 16}
+                    onChange={(e) => updateConfig({ speakerFontSize: Number(e.target.value) })}
+                    style={{ width: "100%" }}
+                  />
+                </div>
+
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                    <label style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                      Dialogue Message Font Size: <strong style={{ color: "var(--text-primary)" }}>{config.messageFontSize || 20}px</strong>
+                    </label>
+                  </div>
+                  <input
+                    type="range"
+                    min={12}
+                    max={48}
+                    value={config.messageFontSize || 20}
+                    onChange={(e) => updateConfig({ messageFontSize: Number(e.target.value), fontSize: Number(e.target.value) })}
+                    style={{ width: "100%" }}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -751,6 +844,9 @@ export const OverlaySettingsView: React.FC = () => {
                     { tag: "{{translatedSpeaker}}", desc: "Translated English Name" },
                     { tag: "{{message}}", desc: "Japanese Dialogue Text" },
                     { tag: "{{translatedMessage}}", desc: "Translated English Dialogue" },
+                    { tag: "{{speakerFontSize}}", desc: "Speaker Font Size (px)" },
+                    { tag: "{{messageFontSize}}", desc: "Message Font Size (px)" },
+                    { tag: "{{fontColor}}", desc: "Font Color Hex" },
                   ].map((item) => (
                     <button
                       key={item.tag}
@@ -764,6 +860,7 @@ export const OverlaySettingsView: React.FC = () => {
                         backgroundColor: "var(--bg-app)",
                         border: "1px solid var(--border-subtle)",
                       }}
+                      title={item.desc}
                     >
                       {item.tag}
                     </button>
@@ -828,80 +925,16 @@ export const OverlaySettingsView: React.FC = () => {
             </div>
           ) : (
             <>
-              {/* 4 Display Fields Card */}
-              <div className="card" style={{ margin: 0 }}>
-                <div className="card-header">
-                  <div>
-                    <span className="card-title">
-                      <Type size={16} /> Display Fields in Subtitle Box
-                    </span>
-                    <span className="card-subtitle">Select which dialogue elements to show</span>
-                  </div>
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12.5px" }}>
-                    <input
-                      type="checkbox"
-                      checked={config.showSpeaker}
-                      onChange={(e) => updateConfig({ showSpeaker: e.target.checked })}
-                    />
-                    <span style={{ fontWeight: config.showSpeaker ? 600 : 400 }}>1. Speaker Name (JP)</span>
-                  </label>
-
-                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12.5px" }}>
-                    <input
-                      type="checkbox"
-                      checked={config.showTranslatedSpeaker}
-                      onChange={(e) => updateConfig({ showTranslatedSpeaker: e.target.checked })}
-                    />
-                    <span style={{ fontWeight: config.showTranslatedSpeaker ? 600 : 400 }}>2. Translated Speaker</span>
-                  </label>
-
-                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12.5px" }}>
-                    <input
-                      type="checkbox"
-                      checked={config.showMessage}
-                      onChange={(e) => updateConfig({ showMessage: e.target.checked })}
-                    />
-                    <span style={{ fontWeight: config.showMessage ? 600 : 400 }}>3. Message (JP Text)</span>
-                  </label>
-
-                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12.5px" }}>
-                    <input
-                      type="checkbox"
-                      checked={config.showTranslatedMessage}
-                      onChange={(e) => updateConfig({ showTranslatedMessage: e.target.checked })}
-                    />
-                    <span style={{ fontWeight: config.showTranslatedMessage ? 600 : 400 }}>4. Translated Message</span>
-                  </label>
-                </div>
-              </div>
-
               {/* Styling & Color Pickers Card */}
               <div className="card" style={{ margin: 0 }}>
                 <div className="card-header">
                   <span className="card-title">
-                    <Sliders size={16} /> Subtitle Box Styling
+                    <Sliders size={16} /> Subtitle Box Styling & Colors
                   </span>
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                        Font Size: {config.fontSize}px
-                      </label>
-                      <input
-                        type="range"
-                        min={14}
-                        max={40}
-                        value={config.fontSize}
-                        onChange={(e) => updateConfig({ fontSize: Number(e.target.value) })}
-                        style={{ width: "100%" }}
-                      />
-                    </div>
-
                     <div>
                       <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
                         Background Opacity: {Math.round(config.backgroundOpacity * 100)}%
@@ -913,6 +946,20 @@ export const OverlaySettingsView: React.FC = () => {
                         step={0.05}
                         value={config.backgroundOpacity}
                         onChange={(e) => updateConfig({ backgroundOpacity: Number(e.target.value) })}
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
+                        Border Radius: {config.borderRadius}px
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={30}
+                        value={config.borderRadius}
+                        onChange={(e) => updateConfig({ borderRadius: Number(e.target.value) })}
                         style={{ width: "100%" }}
                       />
                     </div>
@@ -945,7 +992,7 @@ export const OverlaySettingsView: React.FC = () => {
 
                     <div>
                       <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                        Background
+                        Box Background
                       </label>
                       <input
                         type="color"
@@ -1012,7 +1059,17 @@ export const OverlaySettingsView: React.FC = () => {
               }}
             >
               {config.useCustomTemplate && config.customTemplateHtml ? (
-                <div style={{ width: "100%" }}>
+                <div
+                  style={{
+                    width: "100%",
+                    // @ts-ignore
+                    "--speaker-font-size": `${config.speakerFontSize || 16}px`,
+                    // @ts-ignore
+                    "--message-font-size": `${config.messageFontSize || 20}px`,
+                    // @ts-ignore
+                    "--overlay-font-size": `${config.fontSize || 20}px`,
+                  }}
+                >
                   {config.customTemplateCss && (
                     <style dangerouslySetInnerHTML={{ __html: config.customTemplateCss }} />
                   )}
@@ -1053,7 +1110,7 @@ export const OverlaySettingsView: React.FC = () => {
                             padding: "1px 7px",
                             borderRadius: "var(--radius-sm)",
                             fontWeight: 700,
-                            fontSize: `${config.fontSize * 0.7}px`,
+                            fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
                             fontFamily: "var(--font-jp)",
                           }}
                         >
@@ -1064,7 +1121,7 @@ export const OverlaySettingsView: React.FC = () => {
                       {config.showTranslatedSpeaker && (
                         <span
                           style={{
-                            fontSize: `${config.fontSize * 0.75}px`,
+                            fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
                             fontWeight: 600,
                             color: "var(--text-primary)",
                           }}
@@ -1078,7 +1135,7 @@ export const OverlaySettingsView: React.FC = () => {
                   {config.showMessage && (
                     <div
                       style={{
-                        fontSize: `${config.fontSize * 0.75}px`,
+                        fontSize: `${Math.max(12, (config.messageFontSize || config.fontSize) * 0.8)}px`,
                         fontFamily: "var(--font-jp)",
                         color: "var(--text-jp)",
                         lineHeight: "1.5",
@@ -1093,7 +1150,7 @@ export const OverlaySettingsView: React.FC = () => {
                   {config.showTranslatedMessage && (
                     <div
                       style={{
-                        fontSize: `${config.fontSize}px`,
+                        fontSize: `${config.messageFontSize || config.fontSize}px`,
                         fontWeight: 600,
                         lineHeight: "1.4",
                         color: config.fontColor,
