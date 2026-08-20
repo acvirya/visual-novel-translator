@@ -2,7 +2,7 @@ mod oneocr;
 mod screen_capture;
 mod textractor;
 
-use oneocr::{find_oneocr_installation, scan_screen_regions, OcrEngineStatus, OcrScanResult};
+use oneocr::{find_oneocr_installation, scan_screen_regions, OcrEngineStatus, OcrScanResult, OcrStabilityConfig};
 use screen_capture::{capture_screen_rect, image_to_base64_data_url, CaptureRegion};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -188,9 +188,10 @@ async fn run_oneocr_scan(
     regions: Vec<CaptureRegion>,
     scale_percent: u32,
     custom_path: Option<String>,
+    stability_config: Option<OcrStabilityConfig>,
 ) -> Result<OcrScanResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        scan_screen_regions(regions, scale_percent, custom_path)
+        scan_screen_regions(regions, scale_percent, custom_path, stability_config)
     })
     .await
     .map_err(|e| e.to_string())?

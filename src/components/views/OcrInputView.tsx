@@ -15,6 +15,8 @@ import {
   Play,
   Square,
   Monitor,
+  Zap,
+  Clock,
 } from "lucide-react";
 import { OcrRegion, OcrEngineStatus, OcrRegionRole, MonitorInfo } from "../../types";
 import { OcrService } from "../../services/ocrService";
@@ -82,9 +84,27 @@ export const OcrInputView: React.FC = () => {
 
   // Auto-Scan Loop & Interval
   const [isOcrActive, setIsOcrActive] = useState<boolean>(false);
-  const [scanInterval, setScanInterval] = useState<number>(500);
+  const [scanInterval, setScanInterval] = useState<number>(350);
   const [autoForwardToOverlay, setAutoForwardToOverlay] = useState<boolean>(true);
   const [ignoreDuplicates, setIgnoreDuplicates] = useState<boolean>(true);
+
+  // Motion & Typewriter Settle Stability Settings
+  const [enableMotionDetection, setEnableMotionDetection] = useState<boolean>(() => {
+    const saved = localStorage.getItem("vn_ocr_enable_motion");
+    return saved !== null ? saved === "true" : true;
+  });
+  const [settleTimeMs, setSettleTimeMs] = useState<number>(() => {
+    const saved = localStorage.getItem("vn_ocr_settle_time_ms");
+    return saved ? Number(saved) : 250;
+  });
+  const [motionSensitivity, setMotionSensitivity] = useState<number>(() => {
+    const saved = localStorage.getItem("vn_ocr_motion_sensitivity");
+    return saved ? Number(saved) : 3;
+  });
+  const [ignoreBlinkingPrompt, setIgnoreBlinkingPrompt] = useState<boolean>(() => {
+    const saved = localStorage.getItem("vn_ocr_ignore_blinking");
+    return saved !== null ? saved === "true" : true;
+  });
 
   // Inactive Mode Snapshot Previews
   const [regionSnapshots, setRegionSnapshots] = useState<{ [regionId: string]: string }>({});
@@ -95,6 +115,7 @@ export const OcrInputView: React.FC = () => {
   const [latestMessage, setLatestMessage] = useState<string>("");
   const [latestRawText, setLatestRawText] = useState<string>("");
   const [latencyMs, setLatencyMs] = useState<number>(0);
+  const [isSettled, setIsSettled] = useState<boolean>(true);
   const [scanError, setScanError] = useState<string | null>(null);
 
   // Single-Slot Overwriting Queue Refs
@@ -104,6 +125,10 @@ export const OcrInputView: React.FC = () => {
   const customPathRef = useRef<string>(customPath);
   const ignoreDuplicatesRef = useRef<boolean>(ignoreDuplicates);
   const autoForwardRef = useRef<boolean>(autoForwardToOverlay);
+  const enableMotionRef = useRef<boolean>(enableMotionDetection);
+  const settleTimeMsRef = useRef<number>(settleTimeMs);
+  const motionSensRef = useRef<number>(motionSensitivity);
+  const ignoreBlinkingRef = useRef<boolean>(ignoreBlinkingPrompt);
   const lastRecognizedTextRef = useRef<{ speaker: string; message: string }>({ speaker: "", message: "" });
   const scanLoopTimerRef = useRef<any>(null);
 
@@ -116,6 +141,10 @@ export const OcrInputView: React.FC = () => {
   customPathRef.current = customPath;
   ignoreDuplicatesRef.current = ignoreDuplicates;
   autoForwardRef.current = autoForwardToOverlay;
+  enableMotionRef.current = enableMotionDetection;
+  settleTimeMsRef.current = settleTimeMs;
+  motionSensRef.current = motionSensitivity;
+  ignoreBlinkingRef.current = ignoreBlinkingPrompt;
 
   // Persist settings
   useEffect(() => {
@@ -133,6 +162,22 @@ export const OcrInputView: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("vn_ocr_target_monitor", targetMonitor);
   }, [targetMonitor]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_ocr_enable_motion", String(enableMotionDetection));
+  }, [enableMotionDetection]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_ocr_settle_time_ms", String(settleTimeMs));
+  }, [settleTimeMs]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_ocr_motion_sensitivity", String(motionSensitivity));
+  }, [motionSensitivity]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_ocr_ignore_blinking", String(ignoreBlinkingPrompt));
+  }, [ignoreBlinkingPrompt]);
 
   // Load monitors from Tauri backend
   useEffect(() => {
@@ -198,12 +243,9 @@ export const OcrInputView: React.FC = () => {
       prev.map((r) => {
         if (r.id === id) {
           const nextRole: OcrRegionRole = r.role === "dialogue" ? "speaker" : "dialogue";
-          return {
-            ...r,
-            role: nextRole,
-            name: nextRole === "dialogue" ? "Dialogue Region" : "Speaker Region",
-            color: nextRole === "dialogue" ? "#4e73df" : "#f6c23e",
-          };
+          const nextName = nextRole === "dialogue" ? "Region 1 (Dialogue)" : "Region 2 (Speaker)";
+          const nextColor = nextRole === "dialogue" ? "#4e73df" : "#f6c23e";
+          return { ...r, role: nextRole, name: nextName, color: nextColor };
         }
         return r;
       })
@@ -215,7 +257,7 @@ export const OcrInputView: React.FC = () => {
     setRegions((prev) => prev.filter((r) => r.id !== id));
   };
 
-  // Single OCR Scan Step Execution
+  // Single Core OCR Scan Execution Step
   const executeScanStep = async () => {
     if (!isOcrActiveRef.current || regionsRef.current.length === 0) return;
 
@@ -223,11 +265,21 @@ export const OcrInputView: React.FC = () => {
       const result = await OcrService.runOneOcrScan(
         regionsRef.current,
         scalePercentRef.current,
-        customPathRef.current || undefined
+        customPathRef.current || undefined,
+        {
+          enableMotionDetection: enableMotionRef.current,
+          settleTimeMs: settleTimeMsRef.current,
+          motionSensitivity: motionSensRef.current,
+          ignoreBlinkingPrompt: ignoreBlinkingRef.current,
+        }
       );
 
       if (result.latencyMs !== undefined) {
         setLatencyMs(result.latencyMs);
+      }
+
+      if (result.isSettled !== undefined) {
+        setIsSettled(result.isSettled);
       }
 
       // Preprocess text lines with OCR source filter
@@ -649,19 +701,133 @@ export const OcrInputView: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Dual-State Live Preview Section */}
+      {/* 4. Text Motion & Stability Detection (Anti-Typewriter / Debounce Window) */}
+      <div className="card" style={{ margin: 0, minWidth: 0 }}>
+        <div className="card-header" style={{ flexWrap: "wrap", gap: "10px" }}>
+          <div>
+            <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Zap size={16} color="var(--accent-gold)" /> Text Motion & Stability Detection (Anti-Typewriter)
+            </span>
+            <span className="card-subtitle">
+              Pauses OCR while dialogue is actively typing or animating, then scans once text has settled.
+            </span>
+          </div>
+
+          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={enableMotionDetection}
+              onChange={(e) => setEnableMotionDetection(e.target.checked)}
+            />
+            <span style={{ fontWeight: 600, color: enableMotionDetection ? "var(--accent-success)" : "var(--text-muted)" }}>
+              {enableMotionDetection ? "Smart Motion Detection: Active" : "Disabled (Direct Scan)"}
+            </span>
+          </label>
+        </div>
+
+        {enableMotionDetection && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "4px" }}>
+            {/* Settle Duration Slider */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <Clock size={12} /> Settle Window Duration: <strong style={{ color: "var(--text-primary)" }}>{settleTimeMs}ms</strong>
+                </span>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                  (Duration text strokes must remain still before triggering OCR)
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                <input
+                  type="range"
+                  min={100}
+                  max={800}
+                  step={25}
+                  value={settleTimeMs}
+                  onChange={(e) => setSettleTimeMs(Number(e.target.value))}
+                  style={{ flex: 1 }}
+                />
+                <div style={{ display: "flex", gap: "4px" }}>
+                  {[150, 250, 400, 600].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setSettleTimeMs(t)}
+                      className={settleTimeMs === t ? "btn-primary" : "btn-secondary"}
+                      style={{ padding: "2px 8px", fontSize: "10.5px" }}
+                    >
+                      {t}ms
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Stroke Sensitivity & Blinking Cursor Filter */}
+            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "16px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
+              {/* Stroke Sensitivity */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                  <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+                    Stroke Edge Sensitivity: <strong style={{ color: "var(--text-primary)" }}>{motionSensitivity} / 10</strong>
+                  </span>
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
+                    (Ignores smooth background video/Live2D)
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={motionSensitivity}
+                  onChange={(e) => setMotionSensitivity(Number(e.target.value))}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              {/* Blinking Cursor Prompt Filter */}
+              <div style={{ display: "flex", alignItems: "center" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={ignoreBlinkingPrompt}
+                    onChange={(e) => setIgnoreBlinkingPrompt(e.target.checked)}
+                  />
+                  <span style={{ fontWeight: 600 }}>
+                    Ignore Blinking Dialogue Cursor (▼ / ▷)
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 5. Dual-State Live Preview Section */}
       <div className="card" style={{ margin: 0, minWidth: 0, width: "100%", boxSizing: "border-box" }}>
         <div className="card-header">
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <Activity size={16} color={isOcrActive ? "var(--accent-success)" : "var(--accent-primary)"} />
               {isOcrActive ? "Live OCR Stream Inspector (Active Output)" : "Screen Region Preview (Inactive Mode)"}
             </span>
 
             {isOcrActive && (
-              <span className="badge badge-success" style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
-                ⚡ {latencyMs > 0 ? `${latencyMs}ms Latency` : "Scanning..."} (Single-Slot Queue)
-              </span>
+              <>
+                <span className="badge badge-success" style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
+                  ⚡ {latencyMs > 0 ? `${latencyMs}ms Latency` : "Scanning..."}
+                </span>
+
+                {enableMotionDetection && (
+                  <span
+                    className={isSettled ? "badge badge-success" : "badge badge-warning"}
+                    style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px", fontWeight: 600 }}
+                  >
+                    {isSettled ? "✨ Text Stable" : "⏳ Typewriter Animating..."}
+                  </span>
+                )}
+              </>
             )}
           </div>
 

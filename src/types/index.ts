@@ -189,6 +189,13 @@ export interface OcrRegion {
   targetMonitor?: string;
 }
 
+export interface OcrStabilityConfig {
+  enableMotionDetection: boolean;
+  settleTimeMs: number; // e.g. 100 - 800ms, default 250ms
+  motionSensitivity: number; // 1 - 10, default 3
+  ignoreBlinkingPrompt: boolean; // default true
+}
+
 export interface OcrScanResult {
   speaker: string;
   message: string;
@@ -196,6 +203,7 @@ export interface OcrScanResult {
   regionsText: { regionId: string; role: OcrRegionRole; text: string }[];
   timestamp: string;
   latencyMs: number;
+  isSettled?: boolean;
 }
 
 export interface OcrEngineStatus {

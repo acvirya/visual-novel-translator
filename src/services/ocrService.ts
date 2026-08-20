@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { OcrEngineStatus, OcrRegion, OcrScanResult } from "../types";
+import { OcrEngineStatus, OcrRegion, OcrScanResult, OcrStabilityConfig } from "../types";
 
 export class OcrService {
   /**
@@ -54,12 +54,13 @@ export class OcrService {
   }
 
   /**
-   * Run a single OneOCR scan on the specified regions
+   * Run a single OneOCR scan on the specified regions with optional motion stability detection
    */
   static async runOneOcrScan(
     regions: OcrRegion[],
     scalePercent: number = 100,
-    customPath?: string
+    customPath?: string,
+    stabilityConfig?: OcrStabilityConfig
   ): Promise<OcrScanResult> {
     try {
       const result = await invoke<OcrScanResult>("run_oneocr_scan", {
@@ -78,6 +79,7 @@ export class OcrService {
         })),
         scalePercent: Math.max(10, Math.min(300, scalePercent)),
         customPath: customPath || null,
+        stabilityConfig: stabilityConfig || null,
       });
       return result;
     } catch (err: any) {
