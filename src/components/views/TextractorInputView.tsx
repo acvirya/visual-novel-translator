@@ -94,10 +94,16 @@ export const TextractorInputView: React.FC = () => {
   const [attachedPid, setAttachedPid] = useState<number | null>(null);
 
   // Hook Discovery Duration & Debounce Settings
-  const [discoveryDuration, setDiscoveryDuration] = useState<number>(10); // in seconds, 0 = continuous
+  const [discoveryDuration, setDiscoveryDuration] = useState<number>(() => {
+    const saved = localStorage.getItem("vn_textractor_discovery_duration");
+    return saved ? Number(saved) : 10;
+  });
   const [discoverySecondsLeft, setDiscoverySecondsLeft] = useState<number>(0);
   const [isDiscoveryActive, setIsDiscoveryActive] = useState<boolean>(false);
-  const [debounceMs, setDebounceMs] = useState<number>(250);
+  const [debounceMs, setDebounceMs] = useState<number>(() => {
+    const saved = localStorage.getItem("vn_textractor_debounce_ms");
+    return saved ? Number(saved) : 250;
+  });
   const [specificTextFilter, setSpecificTextFilter] = useState<string>("");
 
   // Custom Hook Codes & Presets
@@ -112,7 +118,10 @@ export const TextractorInputView: React.FC = () => {
 
   // Inspected Thread & Per-Thread Logs
   const [inspectedThreadId, setInspectedThreadId] = useState<number | null>(null);
-  const [maxLogLines, setMaxLogLines] = useState<number>(100);
+  const [maxLogLines, setMaxLogLines] = useState<number>(() => {
+    const saved = localStorage.getItem("vn_textractor_max_log_lines");
+    return saved ? Number(saved) : 100;
+  });
   const [threadLogs, setThreadLogs] = useState<Map<number, TextractorMessage[]>>(new Map());
 
   // Duplicate Line Suppression Filter State
@@ -124,11 +133,24 @@ export const TextractorInputView: React.FC = () => {
     localStorage.setItem("vn_ignore_duplicate_lines", String(ignoreDuplicateLines));
   }, [ignoreDuplicateLines]);
 
+  useEffect(() => {
+    localStorage.setItem("vn_textractor_debounce_ms", String(debounceMs));
+    localStorage.setItem("vn_textractor_max_log_lines", String(maxLogLines));
+    localStorage.setItem("vn_textractor_discovery_duration", String(discoveryDuration));
+  }, [debounceMs, maxLogLines, discoveryDuration]);
+
   // Synchronized Dialogue State for Live Stream Inspector
   const [latestSpeaker, setLatestSpeaker] = useState<string>("");
   const [latestMessage, setLatestMessage] = useState<string>("");
   const [latestRawMessage, setLatestRawMessage] = useState<string>("");
-  const [autoForwardToOverlay, setAutoForwardToOverlay] = useState<boolean>(true);
+  const [autoForwardToOverlay, setAutoForwardToOverlay] = useState<boolean>(() => {
+    const saved = localStorage.getItem("vn_textractor_auto_forward");
+    return saved !== null ? saved === "true" : true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("vn_textractor_auto_forward", String(autoForwardToOverlay));
+  }, [autoForwardToOverlay]);
 
   // Sync state into persistent Refs to prevent listener re-subscription race conditions
   const combinedThreadIdRef = useRef<number | null>(null);

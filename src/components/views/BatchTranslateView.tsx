@@ -106,7 +106,9 @@ export const BatchTranslateView: React.FC = () => {
   const [targetMessageKey, setTargetMessageKey] = useState<string>("translated_message");
 
   // Engine Settings
-  const [selectedEngine, setSelectedEngine] = useState<string>("openrouter_claude");
+  const [selectedEngine, setSelectedEngine] = useState<string>(() => {
+    return localStorage.getItem("vn_selected_model") || "anthropic/claude-3.5-sonnet";
+  });
   const [concurrency, setConcurrency] = useState<number>(3);
   const [delayMs, setDelayMs] = useState<number>(300);
 

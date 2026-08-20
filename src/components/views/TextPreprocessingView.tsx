@@ -44,7 +44,7 @@ export const TextPreprocessingView: React.FC = () => {
   const [copied, setCopied] = useState<boolean>(false);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
 
-  // Save pipeline changes to localStorage
+  // Save pipeline changes to localStorage and settingsManager
   useEffect(() => {
     localStorage.setItem("vn_preprocessing_pipeline", JSON.stringify(pipeline));
   }, [pipeline]);

@@ -8,7 +8,12 @@ import {
   OVERLAY_PRESETS,
   compileOverlayTemplate,
   TemplatePreset,
+  loadUserCustomPresets,
+  saveUserCustomPresets,
+  getAllOverlayPresets,
+  isBuiltInPreset,
 } from "../../utils/overlayTemplateEngine";
+import { settingsManager } from "../../services/settingsManager";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Monitor,
@@ -26,6 +31,10 @@ import {
   Sparkles,
   Palette,
   FileCode,
+  Plus,
+  Save,
+  Trash2,
+  X,
 } from "lucide-react";
 
 interface MonitorInfo {
@@ -90,13 +99,17 @@ function hexToRgba(hex: string, opacity: number): string {
 
 export const OverlaySettingsView: React.FC = () => {
   const [config, setConfig] = useState<OverlayConfig>(() => {
-    const saved = overlayChannel.getSavedConfig();
+    const saved = settingsManager.getOverlay().config || overlayChannel.getSavedConfig();
     return {
       ...INITIAL_OVERLAY_CONFIG,
       ...(saved || {}),
       customTemplateHtml: saved?.customTemplateHtml || OVERLAY_PRESETS[0].html,
       customTemplateCss: saved?.customTemplateCss || OVERLAY_PRESETS[0].css,
     };
+  });
+
+  const [customPresets, setCustomPresets] = useState<TemplatePreset[]>(() => {
+    return loadUserCustomPresets();
   });
 
   const [monitors, setMonitors] = useState<MonitorInfo[]>([
@@ -106,6 +119,15 @@ export const OverlaySettingsView: React.FC = () => {
   const [isEditingPosition, setIsEditingPosition] = useState<boolean>(false);
   const [sampleTextType, setSampleTextType] = useState<"standard" | "long">("standard");
   const [activeCodeTab, setActiveCodeTab] = useState<"html" | "css">("html");
+
+  // New Preset Modal/Prompt State
+  const [isCreatingNewPreset, setIsCreatingNewPreset] = useState<boolean>(false);
+  const [newPresetName, setNewPresetName] = useState<string>("");
+  const [saveNotification, setSaveNotification] = useState<string | null>(null);
+
+  const allPresets = getAllOverlayPresets(customPresets);
+  const activePresetId = config.templatePreset || "classic";
+  const isCurrentBuiltIn = isBuiltInPreset(activePresetId);
 
   // Load monitors from Tauri backend
   useEffect(() => {
@@ -131,13 +153,17 @@ export const OverlaySettingsView: React.FC = () => {
   useEffect(() => {
     const unsubscribe = overlayChannel.subscribe((event: OverlayEvent) => {
       if (event.type === "POSITION_SAVED") {
-        setConfig((prev) => ({
-          ...prev,
-          x: event.x,
-          y: event.y,
-          width: event.width,
-          height: event.height,
-        }));
+        setConfig((prev) => {
+          const updated = {
+            ...prev,
+            x: event.x,
+            y: event.y,
+            width: event.width,
+            height: event.height,
+          };
+          settingsManager.updateOverlayConfig(updated);
+          return updated;
+        });
         setIsEditingPosition(false);
       } else if (event.type === "SET_EDIT_MODE") {
         setIsEditingPosition(event.isEditing);
@@ -153,17 +179,78 @@ export const OverlaySettingsView: React.FC = () => {
     setConfig((prev) => {
       const updated = { ...prev, ...patch };
       overlayChannel.send({ type: "CONFIG_UPDATE", config: updated });
+      settingsManager.updateOverlayConfig(updated);
       return updated;
     });
   };
 
-  // Apply a Built-in Preset
+  // Apply a Built-in or Custom Preset
   const handleApplyPreset = (preset: TemplatePreset) => {
     updateConfig({
       templatePreset: preset.id,
       customTemplateHtml: preset.html,
       customTemplateCss: preset.css,
     });
+  };
+
+  // Create & Save a New Custom Preset
+  const handleSaveAsNewPreset = () => {
+    if (!newPresetName.trim()) return;
+    const newId = `user_preset_${Date.now()}`;
+    const newPreset: TemplatePreset = {
+      id: newId,
+      name: newPresetName.trim(),
+      description: "User customized overlay template",
+      html: config.customTemplateHtml || OVERLAY_PRESETS[0].html,
+      css: config.customTemplateCss || OVERLAY_PRESETS[0].css,
+    };
+
+    const updatedList = [...customPresets, newPreset];
+    setCustomPresets(updatedList);
+    saveUserCustomPresets(updatedList);
+    settingsManager.updateOverlay({ userCustomPresets: updatedList });
+
+    updateConfig({ templatePreset: newId });
+    setIsCreatingNewPreset(false);
+    setNewPresetName("");
+    showFeedbackNotification(`Created preset: "${newPreset.name}"`);
+  };
+
+  // Save / Update Current Custom Preset
+  const handleUpdateCurrentPreset = () => {
+    if (isCurrentBuiltIn) return;
+    const updatedList = customPresets.map((p) => {
+      if (p.id === activePresetId) {
+        return {
+          ...p,
+          html: config.customTemplateHtml || "",
+          css: config.customTemplateCss || "",
+        };
+      }
+      return p;
+    });
+    setCustomPresets(updatedList);
+    saveUserCustomPresets(updatedList);
+    settingsManager.updateOverlay({ userCustomPresets: updatedList });
+    showFeedbackNotification("Preset changes saved successfully!");
+  };
+
+  // Delete Current Custom Preset
+  const handleDeleteCurrentPreset = () => {
+    if (isCurrentBuiltIn) return;
+    const updatedList = customPresets.filter((p) => p.id !== activePresetId);
+    setCustomPresets(updatedList);
+    saveUserCustomPresets(updatedList);
+    settingsManager.updateOverlay({ userCustomPresets: updatedList });
+
+    // Fallback to classic preset
+    handleApplyPreset(OVERLAY_PRESETS[0]);
+    showFeedbackNotification("Custom preset deleted.");
+  };
+
+  const showFeedbackNotification = (msg: string) => {
+    setSaveNotification(msg);
+    setTimeout(() => setSaveNotification(null), 3000);
   };
 
   // Toggle Overlay Master State
@@ -311,6 +398,27 @@ export const OverlaySettingsView: React.FC = () => {
           </label>
         </div>
       </div>
+
+      {/* Notification Toast */}
+      {saveNotification && (
+        <div
+          style={{
+            backgroundColor: "rgba(63, 185, 80, 0.15)",
+            border: "1px solid var(--accent-success)",
+            color: "var(--accent-success)",
+            borderRadius: "var(--radius-sm)",
+            padding: "8px 14px",
+            fontSize: "12.5px",
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <Check size={15} />
+          <span>{saveNotification}</span>
+        </div>
+      )}
 
       {/* Mode Switcher Banner */}
       <div
@@ -507,12 +615,13 @@ export const OverlaySettingsView: React.FC = () => {
                   </span>
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                {/* Preset Actions & Dropdown */}
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
                   <Sparkles size={13} color="var(--accent-gold)" />
                   <select
-                    value={config.templatePreset || "classic"}
+                    value={activePresetId}
                     onChange={(e) => {
-                      const found = OVERLAY_PRESETS.find((p) => p.id === e.target.value);
+                      const found = allPresets.find((p) => p.id === e.target.value);
                       if (found) handleApplyPreset(found);
                     }}
                     style={{
@@ -523,16 +632,114 @@ export const OverlaySettingsView: React.FC = () => {
                       borderRadius: "var(--radius-sm)",
                       color: "var(--text-primary)",
                       cursor: "pointer",
+                      maxWidth: "200px",
                     }}
                   >
-                    {OVERLAY_PRESETS.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        Preset: {p.name}
-                      </option>
-                    ))}
+                    <optgroup label="Built-in Presets">
+                      {OVERLAY_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    {customPresets.length > 0 && (
+                      <optgroup label="User Custom Presets">
+                        {customPresets.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            ⭐ {p.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
+
+                  {/* Preset Action Buttons: Add New, Save Update, Delete */}
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingNewPreset(true)}
+                    className="btn-secondary"
+                    style={{ padding: "4px 8px", fontSize: "11px" }}
+                    title="Save current code as a new custom preset"
+                  >
+                    <Plus size={12} />
+                    <span>New Preset</span>
+                  </button>
+
+                  {!isCurrentBuiltIn && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleUpdateCurrentPreset}
+                        className="btn-primary"
+                        style={{ padding: "4px 8px", fontSize: "11px", backgroundColor: "var(--accent-success)", borderColor: "#2ea043" }}
+                        title="Save changes to current custom preset"
+                      >
+                        <Save size={12} />
+                        <span>Save</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDeleteCurrentPreset}
+                        className="btn-secondary"
+                        style={{ padding: "4px 8px", fontSize: "11px", color: "var(--accent-danger)" }}
+                        title="Delete this custom preset"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
+
+              {/* Inline Modal: Create New Preset */}
+              {isCreatingNewPreset && (
+                <div
+                  style={{
+                    backgroundColor: "var(--bg-app)",
+                    border: "1px solid var(--border-active)",
+                    borderRadius: "var(--radius-sm)",
+                    padding: "10px 14px",
+                    marginBottom: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                  }}
+                >
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                    Preset Name:
+                  </span>
+                  <input
+                    type="text"
+                    value={newPresetName}
+                    onChange={(e) => setNewPresetName(e.target.value)}
+                    placeholder="e.g. My Anime Subtitles"
+                    style={{ flex: 1, fontSize: "12px", padding: "4px 8px" }}
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveAsNewPreset}
+                    disabled={!newPresetName.trim()}
+                    className="btn-primary"
+                    style={{ padding: "4px 12px", fontSize: "11.5px" }}
+                  >
+                    <Save size={12} />
+                    <span>Create</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCreatingNewPreset(false);
+                      setNewPresetName("");
+                    }}
+                    className="btn-secondary"
+                    style={{ padding: "4px 8px", fontSize: "11.5px" }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
 
               <div style={{ marginBottom: "12px" }}>
                 <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "5px" }}>

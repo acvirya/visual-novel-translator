@@ -819,3 +819,36 @@ function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
+
+const USER_PRESETS_STORAGE_KEY = "vn_overlay_user_presets_v1";
+
+export function loadUserCustomPresets(): TemplatePreset[] {
+  try {
+    const raw = localStorage.getItem(USER_PRESETS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn("Failed to load custom user presets:", e);
+  }
+  return [];
+}
+
+export function saveUserCustomPresets(presets: TemplatePreset[]) {
+  try {
+    localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(presets));
+  } catch (e) {
+    console.error("Failed to save custom user presets:", e);
+  }
+}
+
+export function getAllOverlayPresets(customPresets?: TemplatePreset[]): TemplatePreset[] {
+  const userList = customPresets || loadUserCustomPresets();
+  return [...OVERLAY_PRESETS, ...userList];
+}
+
+export function isBuiltInPreset(presetId: string): boolean {
+  return OVERLAY_PRESETS.some((p) => p.id === presetId);
+}
+

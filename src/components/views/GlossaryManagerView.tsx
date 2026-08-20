@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { GlossaryEntry } from "../../types";
 import {
   Plus,
@@ -38,11 +38,57 @@ const DUMMY_GLOSSARY: GlossaryEntry[] = [
   { id: "g_7", original: "生徒会", translation: "Student Council", category: "Organization", notes: "High school student government" },
 ];
 
+import { settingsManager } from "../../services/settingsManager";
+
 export const GlossaryManagerView: React.FC = () => {
-  const [entries, setEntries] = useState<GlossaryEntry[]>(DUMMY_GLOSSARY);
-  const [categories, setCategories] = useState<GlossaryCategory[]>(INITIAL_CATEGORIES);
+  const [entries, setEntries] = useState<GlossaryEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem("vn_glossary_entries_v1");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.warn("Failed to load glossary entries:", e);
+    }
+    return DUMMY_GLOSSARY;
+  });
+
+  const [categories, setCategories] = useState<GlossaryCategory[]>(() => {
+    try {
+      const saved = localStorage.getItem("vn_glossary_categories_v1");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.warn("Failed to load glossary categories:", e);
+    }
+    return INITIAL_CATEGORIES;
+  });
+
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Auto-Save Effect
+  useEffect(() => {
+    try {
+      localStorage.setItem("vn_glossary_entries_v1", JSON.stringify(entries));
+      localStorage.setItem("vn_glossary_categories_v1", JSON.stringify(categories));
+      settingsManager.updateGlossary({
+        terms: entries.map((e) => ({
+          id: e.id,
+          original: e.original,
+          translation: e.translation,
+          category: e.category,
+          notes: e.notes,
+          isEnabled: true,
+        })),
+      });
+    } catch (e) {
+      console.error("Failed to auto-save glossary:", e);
+    }
+  }, [entries, categories]);
 
   // Quick Add Term Form State
   const [newOriginal, setNewOriginal] = useState<string>("");

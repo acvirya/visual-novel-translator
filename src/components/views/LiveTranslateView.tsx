@@ -73,10 +73,18 @@ const INITIAL_DUMMY_LOGS: TranslationLogItem[] = [
   },
 ];
 
+import { settingsManager } from "../../services/settingsManager";
+
 export const LiveTranslateView: React.FC = () => {
   const [logs, setLogs] = useState<TranslationLogItem[]>(INITIAL_DUMMY_LOGS);
   const [isAutoActive, setIsAutoActive] = useState<boolean>(true);
-  const [selectedProvider, setSelectedProvider] = useState<string>("openrouter_claude");
+  const [selectedProvider, setSelectedProvider] = useState<string>(() => {
+    return (
+      localStorage.getItem("vn_selected_model") ||
+      settingsManager.getTranslation().liveModel ||
+      "anthropic/claude-3.5-sonnet"
+    );
+  });
   const [useScriptOnly, setUseScriptOnly] = useState<boolean>(false);
 
   const handleClearLogs = () => {

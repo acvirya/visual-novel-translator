@@ -84,9 +84,18 @@ export const OcrInputView: React.FC = () => {
 
   // Auto-Scan Loop & Interval
   const [isOcrActive, setIsOcrActive] = useState<boolean>(false);
-  const [scanInterval, setScanInterval] = useState<number>(350);
-  const [autoForwardToOverlay, setAutoForwardToOverlay] = useState<boolean>(true);
-  const [ignoreDuplicates, setIgnoreDuplicates] = useState<boolean>(true);
+  const [scanInterval, setScanInterval] = useState<number>(() => {
+    const saved = localStorage.getItem("vn_ocr_scan_interval");
+    return saved ? Number(saved) : 350;
+  });
+  const [autoForwardToOverlay, setAutoForwardToOverlay] = useState<boolean>(() => {
+    const saved = localStorage.getItem("vn_ocr_auto_forward");
+    return saved !== null ? saved === "true" : true;
+  });
+  const [ignoreDuplicates, setIgnoreDuplicates] = useState<boolean>(() => {
+    const saved = localStorage.getItem("vn_ocr_ignore_duplicates");
+    return saved !== null ? saved === "true" : true;
+  });
 
   // Motion & Typewriter Settle Stability Settings
   const [enableMotionDetection, setEnableMotionDetection] = useState<boolean>(() => {
@@ -178,6 +187,18 @@ export const OcrInputView: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("vn_ocr_ignore_blinking", String(ignoreBlinkingPrompt));
   }, [ignoreBlinkingPrompt]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_ocr_scan_interval", String(scanInterval));
+  }, [scanInterval]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_ocr_auto_forward", String(autoForwardToOverlay));
+  }, [autoForwardToOverlay]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_ocr_ignore_duplicates", String(ignoreDuplicates));
+  }, [ignoreDuplicates]);
 
   // Load monitors from Tauri backend
   useEffect(() => {

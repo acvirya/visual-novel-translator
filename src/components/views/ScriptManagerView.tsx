@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { ScriptLineItem, NGramSettings } from "../../types";
 import {
   Database,
@@ -13,6 +13,7 @@ import {
   Plus,
   BookOpen,
 } from "lucide-react";
+import { settingsManager } from "../../services/settingsManager";
 
 // TODO: Replace with real script database loaded from .jsonl file via Tauri Rust
 const DUMMY_SCRIPT_LINES: ScriptLineItem[] = [
@@ -55,10 +56,28 @@ const DUMMY_SCRIPT_LINES: ScriptLineItem[] = [
 ];
 
 export const ScriptManagerView: React.FC = () => {
-  const [activeFileName, setActiveFileName] = useState<string>("clannad_route_tomoyo.jsonl");
-  const [scriptLines, setScriptLines] = useState<ScriptLineItem[]>(DUMMY_SCRIPT_LINES);
+  const [activeFileName, setActiveFileName] = useState<string>(() => {
+    return localStorage.getItem("vn_script_active_file") || "clannad_route_tomoyo.jsonl";
+  });
+
+  const [scriptLines, setScriptLines] = useState<ScriptLineItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("vn_script_lines_v1");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.warn("Failed to load saved script lines:", e);
+    }
+    return DUMMY_SCRIPT_LINES;
+  });
+
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [autoAppendNewLines, setAutoAppendNewLines] = useState<boolean>(true);
+  const [autoAppendNewLines, setAutoAppendNewLines] = useState<boolean>(() => {
+    const saved = localStorage.getItem("vn_script_auto_append");
+    return saved !== null ? saved === "true" : true;
+  });
 
   // Quick Add State
   const [newSpeaker, setNewSpeaker] = useState<string>("");
@@ -74,13 +93,37 @@ export const ScriptManagerView: React.FC = () => {
   const [editTranslatedMessage, setEditTranslatedMessage] = useState<string>("");
 
   // N-gram Matching Criteria Settings
-  const [ngramSettings, setNgramSettings] = useState<NGramSettings>({
-    nValue: 2,
-    similarityThreshold: 0.8,
-    normalizeWhitespace: true,
-    removePunctuation: true,
-    ignoreCase: true,
+  const [ngramSettings, setNgramSettings] = useState<NGramSettings>(() => {
+    try {
+      const saved = localStorage.getItem("vn_script_ngram_settings");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn("Failed to load ngram settings:", e);
+    }
+    return {
+      nValue: 2,
+      similarityThreshold: 0.8,
+      normalizeWhitespace: true,
+      removePunctuation: true,
+      ignoreCase: true,
+    };
   });
+
+  // Auto-save script manager state
+  useEffect(() => {
+    try {
+      localStorage.setItem("vn_script_active_file", activeFileName);
+      localStorage.setItem("vn_script_lines_v1", JSON.stringify(scriptLines));
+      localStorage.setItem("vn_script_auto_append", String(autoAppendNewLines));
+      localStorage.setItem("vn_script_ngram_settings", JSON.stringify(ngramSettings));
+      settingsManager.updateScriptManager({
+        activeScriptPath: activeFileName,
+        fuzzyThreshold: ngramSettings.similarityThreshold,
+      });
+    } catch (e) {
+      console.error("Failed to auto-save script manager:", e);
+    }
+  }, [activeFileName, scriptLines, autoAppendNewLines, ngramSettings]);
 
   const filteredLines = scriptLines.filter(
     (l) =>

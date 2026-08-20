@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Trash2, Search, Filter } from "lucide-react";
 
 interface LogEntry {
@@ -21,8 +21,14 @@ const DUMMY_SYSTEM_LOGS: LogEntry[] = [
 
 export const LogsView: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>(DUMMY_SYSTEM_LOGS);
-  const [filterLevel, setFilterLevel] = useState<string>("ALL");
+  const [filterLevel, setFilterLevel] = useState<string>(() => {
+    return localStorage.getItem("vn_logs_filter_level") || "ALL";
+  });
   const [search, setSearch] = useState<string>("");
+
+  useEffect(() => {
+    localStorage.setItem("vn_logs_filter_level", filterLevel);
+  }, [filterLevel]);
 
   const filteredLogs = logs.filter((l) => {
     if (filterLevel !== "ALL" && l.level !== filterLevel) return false;
