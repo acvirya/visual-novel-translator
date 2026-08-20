@@ -30,6 +30,20 @@
         "contentProtected": true,
         "resizable": true,
         "skipTaskbar": true
+      },
+      {
+        "label": "region-selector",
+        "title": "OCR Screen Region Selector",
+        "url": "index.html?regionSelector=true",
+        "fullscreen": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "shadow": false,
+        "visible": false,
+        "contentProtected": true,
+        "resizable": true,
+        "skipTaskbar": true
       }
     ],
     "security": {

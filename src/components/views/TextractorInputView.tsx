@@ -212,7 +212,7 @@ export const TextractorInputView: React.FC = () => {
     if (nextCombined !== null) {
       const thread = threads.get(nextCombined);
       if (thread && thread.lastText) {
-        const clean = executePreprocessingPipeline(thread.lastText);
+        const clean = executePreprocessingPipeline(thread.lastText, "textractor");
         const { speaker, message } = extractSpeakerAndDialogue(clean);
         setLatestSpeaker(speaker);
         setLatestMessage(message);
@@ -230,7 +230,7 @@ export const TextractorInputView: React.FC = () => {
     if (nextSpeaker !== null) {
       const spkThread = threads.get(nextSpeaker);
       if (spkThread && spkThread.lastText) {
-        const cleanSpk = executePreprocessingPipeline(spkThread.lastText).trim();
+        const cleanSpk = executePreprocessingPipeline(spkThread.lastText, "textractor").trim();
         setLatestSpeaker(cleanSpk);
       } else {
         setLatestSpeaker("");
@@ -243,7 +243,7 @@ export const TextractorInputView: React.FC = () => {
     if (nextMsg !== null) {
       const msgThread = threads.get(nextMsg);
       if (msgThread && msgThread.lastText) {
-        const cleanMsg = executePreprocessingPipeline(msgThread.lastText);
+        const cleanMsg = executePreprocessingPipeline(msgThread.lastText, "textractor");
         setLatestMessage(cleanMsg);
         setLatestRawMessage(msgThread.lastText);
       } else {
@@ -356,7 +356,7 @@ export const TextractorInputView: React.FC = () => {
 
         // 3. CASE A: COMBINED STREAM (Auto-Split Speaker + Message from single thread)
         if (currentCombined !== null && msg.handle === currentCombined) {
-          const cleanText = executePreprocessingPipeline(msg.text);
+          const cleanText = executePreprocessingPipeline(msg.text, "textractor");
           if (cleanText.trim().length > 0 && !msg.text.startsWith("Attached to process")) {
             const now = Date.now();
             const acc = dialogueAccumulatorRef.current;
@@ -386,7 +386,7 @@ export const TextractorInputView: React.FC = () => {
             if (acc.timer) clearTimeout(acc.timer);
 
             acc.timer = setTimeout(() => {
-              const finalClean = executePreprocessingPipeline(acc.buffer);
+              const finalClean = executePreprocessingPipeline(acc.buffer, "textractor");
               const extracted = extractSpeakerAndDialogue(finalClean);
 
               setLatestSpeaker(extracted.speaker);
@@ -423,7 +423,7 @@ export const TextractorInputView: React.FC = () => {
 
         // 4. CASE B: DEDICATED SPEAKER THREAD (Separate stream)
         else if (currentSpeakerThread !== null && msg.handle === currentSpeakerThread) {
-          const cleanSpeaker = executePreprocessingPipeline(msg.text).trim();
+          const cleanSpeaker = executePreprocessingPipeline(msg.text, "textractor").trim();
           if (cleanSpeaker) {
             setLatestSpeaker(cleanSpeaker);
           }
@@ -431,7 +431,7 @@ export const TextractorInputView: React.FC = () => {
 
         // 5. CASE C: DEDICATED DIALOGUE THREAD (Separate stream)
         else if (currentMsgThread !== null && msg.handle === currentMsgThread) {
-          const cleanText = executePreprocessingPipeline(msg.text);
+          const cleanText = executePreprocessingPipeline(msg.text, "textractor");
           if (cleanText.trim().length > 0 && !msg.text.startsWith("Attached to process")) {
             const now = Date.now();
             const acc = dialogueAccumulatorRef.current;
@@ -460,7 +460,7 @@ export const TextractorInputView: React.FC = () => {
 
             // Debounced forward to Overlay & Live Translation
             acc.timer = setTimeout(() => {
-              const finalClean = executePreprocessingPipeline(acc.buffer);
+              const finalClean = executePreprocessingPipeline(acc.buffer, "textractor");
               setLatestMessage(finalClean);
 
               const currentSpeaker = latestSpeakerRef.current;

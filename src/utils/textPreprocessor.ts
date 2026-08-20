@@ -1,4 +1,6 @@
-import { PreprocessingStep } from "../types";
+import { PreprocessingStep, PreprocessingSource } from "../types";
+
+export const DEFAULT_PREPROCESSING_SOURCES: PreprocessingSource[] = ["manual", "textractor", "ocr"];
 
 export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
   {
@@ -7,6 +9,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Furigana / Ruby Annotation Stripper",
     description: "Strips pronunciation readings like 私(わたし), 漢字[かんじ], and <ruby> tags",
     isEnabled: true,
+    applicableSources: ["manual", "textractor"],
     options: {
       stripRubyParentheses: true,
       stripRubyBrackets: true,
@@ -19,6 +22,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Control Characters & Engine Tags",
     description: "Removes VN engine format tags (e.g. \\c[2], \\v[1]), null bytes, and cleans escape sequences",
     isEnabled: true,
+    applicableSources: ["manual", "textractor"],
     options: {
       isRegex: true,
     },
@@ -29,6 +33,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Unicode NFKC Normalization",
     description: "Converts half-width katakana (ｶﾀｶﾅ → カタカナ) and normalizes character representations",
     isEnabled: true,
+    applicableSources: ["manual", "textractor", "ocr"],
   },
   {
     id: "step_phrase_deduplicator",
@@ -36,6 +41,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Repeated Phrase & Loop Deduplicator",
     description: "Collapses repeating sentence loops and duplicate phrase bursts caused by outline/shadow text hooks (e.g. 遥月遥月... → 遥月)",
     isEnabled: true,
+    applicableSources: ["textractor"],
   },
   {
     id: "step_stutter",
@@ -43,6 +49,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Stutter & Repeated Character Reducer",
     description: "Normalizes excessive repetitions and stutters (e.g. あ、、あの → あ、あの, ！！！！ → ！)",
     isEnabled: true,
+    applicableSources: ["manual", "textractor", "ocr"],
     options: {
       collapseLimit: 1,
     },
@@ -53,6 +60,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Japanese Punctuation Normalizer",
     description: "Standardizes ellipses (…… → …), quotes (「」『』), and strips decorative symbols (♪, ♥, ★)",
     isEnabled: true,
+    applicableSources: ["manual", "textractor", "ocr"],
     options: {
       normalizeQuotes: false,
       removeDecorativeSymbols: true,
@@ -64,6 +72,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Whitespace & Line Break Normalizer",
     description: "Converts full-width spaces (　) and multiple spaces into single space, trims edges",
     isEnabled: true,
+    applicableSources: ["manual", "textractor", "ocr"],
   },
 ];
 
@@ -71,9 +80,20 @@ export interface StepTraceResult {
   stepId: string;
   stepName: string;
   isEnabled: boolean;
+  isApplicable: boolean;
+  applicableSources: PreprocessingSource[];
   inputText: string;
   outputText: string;
   wasModified: boolean;
+}
+
+export function isStepApplicableForSource(
+  step: PreprocessingStep,
+  source?: PreprocessingSource
+): boolean {
+  if (!source) return true;
+  const sources = step.applicableSources ?? DEFAULT_PREPROCESSING_SOURCES;
+  return sources.includes(source);
 }
 
 /**
@@ -230,22 +250,28 @@ export function applyPreprocessingStep(text: string, step: PreprocessingStep): s
  */
 export function executePipelineWithTrace(
   rawText: string,
-  pipeline: PreprocessingStep[]
+  pipeline: PreprocessingStep[],
+  source?: PreprocessingSource
 ): { finalOutput: string; traces: StepTraceResult[] } {
   let current = rawText;
   const traces: StepTraceResult[] = [];
 
   for (const step of pipeline) {
     const inputBefore = current;
-    const outputAfter = applyPreprocessingStep(current, step);
+    const isApplicable = isStepApplicableForSource(step, source);
+    const outputAfter = step.isEnabled && isApplicable ? applyPreprocessingStep(current, step) : current;
+
     traces.push({
       stepId: step.id,
       stepName: step.name,
       isEnabled: step.isEnabled,
+      isApplicable,
+      applicableSources: step.applicableSources ?? DEFAULT_PREPROCESSING_SOURCES,
       inputText: inputBefore,
       outputText: outputAfter,
-      wasModified: step.isEnabled && inputBefore !== outputAfter,
+      wasModified: step.isEnabled && isApplicable && inputBefore !== outputAfter,
     });
+
     current = outputAfter;
   }
 
@@ -253,16 +279,19 @@ export function executePipelineWithTrace(
 }
 
 /**
- * Convenience helper to execute active stored pipeline on raw input text
+ * Convenience helper to execute active stored pipeline on raw input text for a given source
  */
-export function executePreprocessingPipeline(rawText: string): string {
+export function executePreprocessingPipeline(
+  rawText: string,
+  source?: PreprocessingSource
+): string {
   try {
     let pipeline = DEFAULT_PREPROCESSING_PIPELINE;
     const stored = localStorage.getItem("vn_preprocessing_pipeline");
     if (stored) {
       pipeline = JSON.parse(stored);
     }
-    const { finalOutput } = executePipelineWithTrace(rawText, pipeline);
+    const { finalOutput } = executePipelineWithTrace(rawText, pipeline, source);
     return finalOutput;
   } catch {
     return rawText;

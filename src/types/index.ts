@@ -26,6 +26,8 @@ export type PreprocessingType =
   | "unicode_nfkc"
   | "custom_regex";
 
+export type PreprocessingSource = "manual" | "textractor" | "ocr";
+
 export interface PreprocessingStep {
   id: string;
   type: PreprocessingType;
@@ -33,6 +35,7 @@ export interface PreprocessingStep {
   description: string;
   isEnabled: boolean;
   isCustom?: boolean;
+  applicableSources?: PreprocessingSource[];
   options?: {
     pattern?: string;
     replacement?: string;
@@ -151,3 +154,48 @@ export interface NGramSettings {
   removePunctuation: boolean;
   ignoreCase: boolean;
 }
+
+export interface MonitorInfo {
+  name: string;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  scale_factor: number;
+  is_primary: boolean;
+}
+
+export type OcrRegionRole = "dialogue" | "speaker";
+
+export interface OcrRegion {
+  id: string;
+  name: string;
+  role: OcrRegionRole;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color?: string;
+  physicalX?: number;
+  physicalY?: number;
+  physicalWidth?: number;
+  physicalHeight?: number;
+  targetMonitor?: string;
+}
+
+export interface OcrScanResult {
+  speaker: string;
+  message: string;
+  rawText: string;
+  regionsText: { regionId: string; role: OcrRegionRole; text: string }[];
+  timestamp: string;
+  latencyMs: number;
+}
+
+export interface OcrEngineStatus {
+  isAvailable: boolean;
+  dllPath: string;
+  modelPath: string;
+  error?: string;
+}
+

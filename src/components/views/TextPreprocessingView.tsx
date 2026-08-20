@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { PreprocessingStep } from "../../types";
+import { PreprocessingStep, PreprocessingSource } from "../../types";
 import {
   DEFAULT_PREPROCESSING_PIPELINE,
+  DEFAULT_PREPROCESSING_SOURCES,
   executePipelineWithTrace,
 } from "../../utils/textPreprocessor";
 import {
@@ -35,7 +36,8 @@ export const TextPreprocessingView: React.FC = () => {
     }
   });
 
-  // Test Sandbox State
+  // Test Sandbox State & Source Filter
+  const [testSource, setTestSource] = useState<PreprocessingSource | "all">("all");
   const [sampleInput, setSampleInput] = useState<string>(
     "\\c[2]坂上　智代\\c[0]「……あ、、あのっ……！　私(わたし)は……遅刻(ちこく)したくないの！！♪♥」"
   );
@@ -47,8 +49,29 @@ export const TextPreprocessingView: React.FC = () => {
     localStorage.setItem("vn_preprocessing_pipeline", JSON.stringify(pipeline));
   }, [pipeline]);
 
-  // Compute live trace
-  const { finalOutput, traces } = executePipelineWithTrace(sampleInput, pipeline);
+  // Compute live trace with active test source
+  const { finalOutput, traces } = executePipelineWithTrace(
+    sampleInput,
+    pipeline,
+    testSource === "all" ? undefined : testSource
+  );
+
+  // Toggle applicable source for a step
+  const handleToggleSource = (stepId: string, source: PreprocessingSource) => {
+    setPipeline((prev) =>
+      prev.map((step) => {
+        if (step.id !== stepId) return step;
+        const currentSources = step.applicableSources ?? DEFAULT_PREPROCESSING_SOURCES;
+        const nextSources = currentSources.includes(source)
+          ? currentSources.filter((s) => s !== source)
+          : [...currentSources, source];
+        return {
+          ...step,
+          applicableSources: nextSources.length > 0 ? nextSources : [source],
+        };
+      })
+    );
+  };
 
   // Pointer-based Drag & Drop Reordering
   const handlePointerDown = (index: number, e: React.PointerEvent) => {
@@ -116,6 +139,7 @@ export const TextPreprocessingView: React.FC = () => {
       description: "Custom user-defined search and replace pattern",
       isEnabled: true,
       isCustom: true,
+      applicableSources: ["manual", "textractor", "ocr"],
       options: {
         pattern: "",
         replacement: "",
@@ -164,7 +188,7 @@ export const TextPreprocessingView: React.FC = () => {
               <Sparkles size={16} color="var(--accent-primary)" /> Centralized Text Preprocessing Pipeline
             </span>
             <span className="card-subtitle">
-              All raw in-game text from Textractor, OCR, and Batch input will be cleaned through this pipeline in sequential order.
+              Configure cleanup rules and specify which input source (Manual, Textractor, OCR) each step applies to.
             </span>
           </div>
 
@@ -311,6 +335,57 @@ export const TextPreprocessingView: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Applicable Input Sources Checklist (Clean without emojis) */}
+                <div
+                  onMouseDown={(e) => e.stopPropagation()}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "16px",
+                    marginTop: "8px",
+                    paddingTop: "8px",
+                    borderTop: "1px dashed var(--border-subtle)",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 600 }}>
+                    Applies to:
+                  </span>
+
+                  {(["manual", "textractor", "ocr"] as PreprocessingSource[]).map((src) => {
+                    const activeSources = step.applicableSources ?? DEFAULT_PREPROCESSING_SOURCES;
+                    const isSelected = activeSources.includes(src);
+                    const label = src === "manual" ? "Manual Input" : src === "textractor" ? "Textractor" : "OCR";
+
+                    return (
+                      <label
+                        key={src}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          fontSize: "11px",
+                          color: isSelected ? "var(--text-primary)" : "var(--text-muted)",
+                          cursor: "pointer",
+                          userSelect: "none",
+                          fontWeight: isSelected ? 500 : 400,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSource(step.id, src)}
+                          style={{
+                            cursor: "pointer",
+                            accentColor: "var(--accent-primary)",
+                          }}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
                 {/* Specific Step Options / Custom Regex Inputs */}
                 {step.type === "custom_regex" && (
                   <div
@@ -351,7 +426,7 @@ export const TextPreprocessingView: React.FC = () => {
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", gap: "14px" }}>
+                    <div style={{ display: "flex", gap: "16px" }}>
                       <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", cursor: "pointer" }}>
                         <input
                           type="checkbox"
@@ -385,6 +460,52 @@ export const TextPreprocessingView: React.FC = () => {
                 <Code size={16} /> Live Pipeline Sandbox
               </span>
               <span className="card-subtitle">Real-time transformation tester</span>
+            </div>
+
+            {/* Test Input Source Segmented Tabs */}
+            <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+              <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 600 }}>
+                Preview Source:
+              </span>
+              <div
+                style={{
+                  display: "inline-flex",
+                  backgroundColor: "var(--bg-app)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "2px",
+                  gap: "2px",
+                }}
+              >
+                {[
+                  { id: "all", label: "All Sources" },
+                  { id: "manual", label: "Manual" },
+                  { id: "textractor", label: "Textractor" },
+                  { id: "ocr", label: "OCR" },
+                ].map((tab) => {
+                  const isActive = testSource === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setTestSource(tab.id as any)}
+                      style={{
+                        padding: "3px 10px",
+                        fontSize: "11px",
+                        fontWeight: isActive ? 600 : 400,
+                        backgroundColor: isActive ? "var(--accent-primary)" : "transparent",
+                        color: isActive ? "#ffffff" : "var(--text-secondary)",
+                        border: "none",
+                        borderRadius: "calc(var(--radius-sm) - 2px)",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Quick Sample Presets */}
@@ -516,37 +637,7 @@ export const TextPreprocessingView: React.FC = () => {
                     <span style={{ fontWeight: 600, color: "var(--text-secondary)" }}>
                       Step #{idx + 1}: {trace.stepName}
                     </span>
-                    {trace.isEnabled ? (
-                      trace.wasModified ? (
-                        <span
-                          style={{
-                            backgroundColor: "rgba(63, 185, 80, 0.15)",
-                            color: "var(--accent-success)",
-                            padding: "1px 6px",
-                            borderRadius: "var(--radius-sm)",
-                            fontSize: "10.5px",
-                            fontWeight: 600,
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "3px",
-                          }}
-                        >
-                          <CheckCircle2 size={10} /> Modified
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            backgroundColor: "var(--bg-surface)",
-                            color: "var(--text-muted)",
-                            padding: "1px 6px",
-                            borderRadius: "var(--radius-sm)",
-                            fontSize: "10.5px",
-                          }}
-                        >
-                          Passed (No Change)
-                        </span>
-                      )
-                    ) : (
+                    {!trace.isEnabled ? (
                       <span
                         style={{
                           backgroundColor: "rgba(248, 81, 73, 0.1)",
@@ -557,6 +648,46 @@ export const TextPreprocessingView: React.FC = () => {
                         }}
                       >
                         Disabled
+                      </span>
+                    ) : !trace.isApplicable ? (
+                      <span
+                        style={{
+                          backgroundColor: "rgba(246, 194, 62, 0.1)",
+                          color: "var(--accent-warning)",
+                          padding: "1px 6px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "10.5px",
+                        }}
+                      >
+                        Skipped (Not for {testSource.toUpperCase()})
+                      </span>
+                    ) : trace.wasModified ? (
+                      <span
+                        style={{
+                          backgroundColor: "rgba(63, 185, 80, 0.15)",
+                          color: "var(--accent-success)",
+                          padding: "1px 6px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "10.5px",
+                          fontWeight: 600,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "3px",
+                        }}
+                      >
+                        <CheckCircle2 size={10} /> Modified
+                      </span>
+                    ) : (
+                      <span
+                        style={{
+                          backgroundColor: "var(--bg-surface)",
+                          color: "var(--text-muted)",
+                          padding: "1px 6px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "10.5px",
+                        }}
+                      >
+                        Passed (No Change)
                       </span>
                     )}
                   </div>
