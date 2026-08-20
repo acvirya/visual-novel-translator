@@ -5,6 +5,7 @@ import {
   OverlayDialogueMessage,
   OverlayEvent,
 } from "../../utils/overlayChannel";
+import { compileOverlayTemplate } from "../../utils/overlayTemplateEngine";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, X, Move } from "lucide-react";
 
@@ -368,15 +369,19 @@ export const OverlayWindow: React.FC = () => {
           width: `${currentW}px`,
           minHeight: `${currentH}px`,
           maxHeight: isEditing ? `${currentH}px` : `${currentH * config.maxExpandRatio}px`,
-          backgroundColor: hexToRgba(config.backgroundColor, config.backgroundOpacity),
+          backgroundColor: config.useCustomTemplate ? "transparent" : hexToRgba(config.backgroundColor, config.backgroundOpacity),
           borderRadius: `${config.borderRadius}px`,
-          padding: "12px 18px",
+          padding: config.useCustomTemplate ? "0" : "12px 18px",
           color: config.fontColor,
           border: isEditing
             ? "2px solid var(--accent-gold)"
+            : config.useCustomTemplate
+            ? "none"
             : `${config.outlineWidth}px solid ${config.outlineColor}`,
           boxShadow: isEditing
             ? "0 0 0 4px rgba(227, 179, 65, 0.3), 0 12px 36px rgba(0,0,0,0.8)"
+            : config.useCustomTemplate
+            ? "none"
             : "0 8px 24px rgba(0,0,0,0.6)",
           display: "flex",
           flexDirection: "column",
@@ -386,68 +391,85 @@ export const OverlayWindow: React.FC = () => {
           boxSizing: "border-box",
         }}
       >
-        {/* Speaker Name Row (JP & Translated) */}
-        {(config.showSpeaker || config.showTranslatedSpeaker) && (
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            {config.showSpeaker && dialogue.speaker && (
-              <span
-                style={{
-                  backgroundColor: "rgba(227, 179, 65, 0.2)",
-                  color: "var(--accent-gold)",
-                  padding: "1px 8px",
-                  borderRadius: "var(--radius-sm)",
-                  fontWeight: 700,
-                  fontSize: `${config.fontSize * 0.72}px`,
-                  fontFamily: "var(--font-jp)",
-                }}
-              >
-                {dialogue.speaker}
-              </span>
+        {/* Custom HTML/CSS Template Mode */}
+        {config.useCustomTemplate && config.customTemplateHtml ? (
+          <div style={{ width: "100%", height: "100%" }}>
+            {config.customTemplateCss && (
+              <style dangerouslySetInnerHTML={{ __html: config.customTemplateCss }} />
+            )}
+            <div
+              dangerouslySetInnerHTML={{
+                __html: compileOverlayTemplate(config.customTemplateHtml, dialogue, config),
+              }}
+            />
+          </div>
+        ) : (
+          /* Standard Configurable Subtitle Box */
+          <>
+            {/* Speaker Name Row (JP & Translated) */}
+            {(config.showSpeaker || config.showTranslatedSpeaker) && (
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                {config.showSpeaker && dialogue.speaker && (
+                  <span
+                    style={{
+                      backgroundColor: "rgba(227, 179, 65, 0.2)",
+                      color: "var(--accent-gold)",
+                      padding: "1px 8px",
+                      borderRadius: "var(--radius-sm)",
+                      fontWeight: 700,
+                      fontSize: `${config.fontSize * 0.72}px`,
+                      fontFamily: "var(--font-jp)",
+                    }}
+                  >
+                    {dialogue.speaker}
+                  </span>
+                )}
+
+                {config.showTranslatedSpeaker && dialogue.translatedSpeaker && (
+                  <span
+                    style={{
+                      fontSize: `${config.fontSize * 0.75}px`,
+                      fontWeight: 600,
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {dialogue.translatedSpeaker}
+                  </span>
+                )}
+              </div>
             )}
 
-            {config.showTranslatedSpeaker && dialogue.translatedSpeaker && (
-              <span
+            {/* Message (JP Source) */}
+            {config.showMessage && dialogue.message && (
+              <div
                 style={{
                   fontSize: `${config.fontSize * 0.75}px`,
-                  fontWeight: 600,
-                  color: "var(--text-primary)",
+                  fontFamily: "var(--font-jp)",
+                  color: "var(--text-jp)",
+                  lineHeight: 1.5,
+                  borderLeft: "2px solid var(--border-active)",
+                  paddingLeft: "8px",
                 }}
               >
-                {dialogue.translatedSpeaker}
-              </span>
+                {dialogue.message}
+              </div>
             )}
-          </div>
-        )}
 
-        {/* Message (JP Source) */}
-        {config.showMessage && dialogue.message && (
-          <div
-            style={{
-              fontSize: `${config.fontSize * 0.75}px`,
-              fontFamily: "var(--font-jp)",
-              color: "var(--text-jp)",
-              lineHeight: 1.5,
-              borderLeft: "2px solid var(--border-active)",
-              paddingLeft: "8px",
-            }}
-          >
-            {dialogue.message}
-          </div>
-        )}
-
-        {/* Translated Message */}
-        {config.showTranslatedMessage && dialogue.translatedMessage && (
-          <div
-            style={{
-              fontSize: `${config.fontSize}px`,
-              fontWeight: 600,
-              lineHeight: 1.4,
-              color: config.fontColor,
-              textShadow: `${config.outlineWidth}px ${config.outlineWidth}px 0px ${config.outlineColor}`,
-            }}
-          >
-            {dialogue.translatedMessage}
-          </div>
+            {/* Translated Message */}
+            {config.showTranslatedMessage && dialogue.translatedMessage && (
+              <div
+                style={{
+                  fontSize: `${config.fontSize}px`,
+                  fontWeight: 600,
+                  lineHeight: 1.4,
+                  color: config.fontColor,
+                  textShadow: `${config.outlineWidth}px ${config.outlineWidth}px 0px ${config.outlineColor}`,
+                }}
+              >
+                {dialogue.translatedMessage}
+              </div>
+            )}
+          </>
         )}
 
         {/* 8-Way Resize Handles in Edit Mode */}

@@ -145,6 +145,12 @@ export interface OverlayConfig {
   showTranslatedSpeaker: boolean;
   showMessage: boolean;
   showTranslatedMessage: boolean;
+
+  // Custom Component / HTML & CSS Template Mode
+  useCustomTemplate?: boolean;
+  templatePreset?: string; // "classic" | "glassmorphism" | "cyberpunk" | "cinematic" | "rpg" | "custom"
+  customTemplateHtml?: string;
+  customTemplateCss?: string;
 }
 
 export interface NGramSettings {
