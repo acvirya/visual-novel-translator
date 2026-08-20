@@ -92,6 +92,9 @@ export class OcrService {
    */
   static async openRegionSelector(monitorName?: string): Promise<void> {
     try {
+      const channel = new BroadcastChannel("vn_ocr_channel");
+      channel.postMessage({ type: "OPEN_SELECTOR" });
+      channel.close();
       await invoke("open_region_selector_overlay", {
         monitorName: monitorName || null,
       });

@@ -81,20 +81,34 @@ body.overlay-window-mode #root {
 /* Inputs & Form Elements */
 input, textarea, select, button {
   font-family: inherit;
-  font-size: inherit;
+  font-size: 12px;
 }
 
 input[type="text"],
 input[type="password"],
-input[type="number"],
+input[type="number"] {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  height: 32px;
+  padding: 0 10px;
+  outline: none;
+  font-size: 12px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  box-sizing: border-box;
+}
+
 textarea {
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  padding: 7px 10px;
+  padding: 8px 10px;
   outline: none;
+  font-size: 12px;
   transition: border-color 0.15s ease, background-color 0.15s ease;
+  box-sizing: border-box;
 }
 
 select {
@@ -106,7 +120,8 @@ select {
   background-repeat: no-repeat;
   background-position: right 10px center;
   background-size: 14px;
-  padding: 7px 32px 7px 10px;
+  height: 32px;
+  padding: 0 32px 0 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -116,7 +131,9 @@ select {
   white-space: nowrap;
   overflow: hidden;
   max-width: 100%;
+  font-size: 12px;
   transition: border-color 0.15s ease, background-color 0.15s ease;
+  box-sizing: border-box;
 }
 
 input[type="text"]:focus,
@@ -154,14 +171,18 @@ button {
   justify-content: center;
   gap: 6px;
   font-weight: 500;
+  font-size: 12px;
+  height: 32px;
+  padding: 0 12px;
   border-radius: var(--radius-sm);
   transition: all 0.15s ease;
+  box-sizing: border-box;
+  white-space: nowrap;
 }
 
 .btn-primary {
   background-color: var(--accent-primary);
   color: #ffffff;
-  padding: 7px 14px;
 }
 
 .btn-primary:hover {
@@ -172,7 +193,6 @@ button {
   background-color: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 6px 12px;
 }
 
 .btn-secondary:hover {
@@ -184,11 +204,16 @@ button {
   background-color: rgba(248, 81, 73, 0.15);
   border: 1px solid rgba(248, 81, 73, 0.3);
   color: var(--accent-danger);
-  padding: 6px 12px;
 }
 
 .btn-danger:hover {
   background-color: rgba(248, 81, 73, 0.25);
+}
+
+.btn-sm {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 .badge {

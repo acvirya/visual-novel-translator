@@ -42,7 +42,26 @@ export const RegionSelectionOverlay: React.FC = () => {
     ];
   });
 
-  // Load monitors
+  const initialRegionsRef = React.useRef<OcrRegion[]>([]);
+
+  const reloadSavedRegions = () => {
+    try {
+      const saved = localStorage.getItem("vn_ocr_regions");
+      if (saved) {
+        const parsed: OcrRegion[] = JSON.parse(saved);
+        setRegions(parsed);
+        initialRegionsRef.current = JSON.parse(JSON.stringify(parsed));
+        if (parsed.length > 0) {
+          setSelectedRegionId(parsed[0].id);
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn("Failed to reload OCR regions:", e);
+    }
+  };
+
+  // Load monitors and sync on focus/broadcast
   useEffect(() => {
     async function loadMonitors() {
       try {
@@ -55,6 +74,24 @@ export const RegionSelectionOverlay: React.FC = () => {
       }
     }
     loadMonitors();
+    reloadSavedRegions();
+
+    const handleFocus = () => {
+      reloadSavedRegions();
+    };
+
+    const channel = new BroadcastChannel("vn_ocr_channel");
+    channel.onmessage = (event) => {
+      if (event.data?.type === "OPEN_SELECTOR") {
+        reloadSavedRegions();
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      channel.close();
+    };
   }, []);
 
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>("region_1");
@@ -128,6 +165,10 @@ export const RegionSelectionOverlay: React.FC = () => {
   };
 
   const handleCancel = async () => {
+    // Revert regions in state back to the original snapshot
+    if (initialRegionsRef.current.length > 0) {
+      setRegions(JSON.parse(JSON.stringify(initialRegionsRef.current)));
+    }
     await OcrService.closeRegionSelector();
   };
 

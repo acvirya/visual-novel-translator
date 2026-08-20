@@ -8,21 +8,19 @@ import {
   FolderSearch,
   RefreshCw,
   Sliders,
-  MessageSquare,
-  User,
   Trash2,
   Camera,
   Play,
   Square,
   Monitor,
   Zap,
-  Clock,
+  ArrowLeftRight,
 } from "lucide-react";
 import { OcrRegion, OcrEngineStatus, OcrRegionRole, MonitorInfo } from "../../types";
 import { OcrService } from "../../services/ocrService";
 import { overlayChannel } from "../../utils/overlayChannel";
 import { executePreprocessingPipeline } from "../../utils/textPreprocessor";
-import { formatMonitorLabel } from "../../utils/monitorUtils";
+import { formatMonitorLabel, formatMonitorName } from "../../utils/monitorUtils";
 import { invoke } from "@tauri-apps/api/core";
 
 export const OcrInputView: React.FC = () => {
@@ -93,10 +91,7 @@ export const OcrInputView: React.FC = () => {
     const saved = localStorage.getItem("vn_ocr_auto_forward");
     return saved !== null ? saved === "true" : true;
   });
-  const [ignoreDuplicates, setIgnoreDuplicates] = useState<boolean>(() => {
-    const saved = localStorage.getItem("vn_ocr_ignore_duplicates");
-    return saved !== null ? saved === "true" : true;
-  });
+  const ignoreDuplicates = true; // Always active for maximum performance
 
   // Motion & Typewriter Settle Stability Settings
   const [enableMotionDetection, setEnableMotionDetection] = useState<boolean>(() => {
@@ -236,8 +231,12 @@ export const OcrInputView: React.FC = () => {
   // Initial engine check & snapshot load
   const checkEngine = async (path?: string) => {
     setIsCheckingEngine(true);
-    const status = await OcrService.detectOneOcrPath(path || customPath);
+    const targetPath = path !== undefined ? path : customPath;
+    const status = await OcrService.detectOneOcrPath(targetPath);
     setEngineStatus(status);
+    if (path !== undefined && status.isAvailable) {
+      localStorage.setItem("vn_ocr_custom_path", path);
+    }
     setIsCheckingEngine(false);
   };
 
@@ -259,19 +258,28 @@ export const OcrInputView: React.FC = () => {
     await OcrService.openRegionSelector(targetMonitor);
   };
 
-  // Toggle OCR Region Role
+  // Swap / Toggle OCR Region Role
   const handleToggleRegionRole = (id: string) => {
-    setRegions((prev) =>
-      prev.map((r) => {
-        if (r.id === id) {
+    setRegions((prev) => {
+      if (prev.length === 2) {
+        return prev.map((r) => {
           const nextRole: OcrRegionRole = r.role === "dialogue" ? "speaker" : "dialogue";
-          const nextName = nextRole === "dialogue" ? "Region 1 (Dialogue)" : "Region 2 (Speaker)";
+          const nextName = nextRole === "dialogue" ? "Dialogue Region" : "Speaker Region";
           const nextColor = nextRole === "dialogue" ? "#4e73df" : "#f6c23e";
           return { ...r, role: nextRole, name: nextName, color: nextColor };
-        }
-        return r;
-      })
-    );
+        });
+      } else {
+        return prev.map((r) => {
+          if (r.id === id) {
+            const nextRole: OcrRegionRole = r.role === "dialogue" ? "speaker" : "dialogue";
+            const nextName = nextRole === "dialogue" ? "Dialogue Region" : "Speaker Region";
+            const nextColor = nextRole === "dialogue" ? "#4e73df" : "#f6c23e";
+            return { ...r, role: nextRole, name: nextName, color: nextColor };
+          }
+          return r;
+        });
+      }
+    });
   };
 
   // Delete Region
@@ -418,12 +426,12 @@ export const OcrInputView: React.FC = () => {
 
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {engineStatus.isAvailable ? (
-              <span className="badge badge-success" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                <CheckCircle2 size={12} /> OneOCR Ready
+              <span className="badge badge-success" style={{ height: "32px", padding: "0 10px", fontSize: "12px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                <CheckCircle2 size={13} /> Ready
               </span>
             ) : (
-              <span className="badge badge-danger" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                <AlertCircle size={12} /> OneOCR Missing
+              <span className="badge badge-danger" style={{ height: "32px", padding: "0 10px", fontSize: "12px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                <AlertCircle size={13} /> Missing
               </span>
             )}
 
@@ -431,7 +439,7 @@ export const OcrInputView: React.FC = () => {
               onClick={() => checkEngine()}
               disabled={isCheckingEngine}
               className="btn-secondary"
-              style={{ padding: "4px 10px", fontSize: "11px" }}
+              style={{ height: "32px", padding: "0 12px", fontSize: "12px" }}
               title="Rescan Snipping Tool directory"
             >
               <RefreshCw size={12} className={isCheckingEngine ? "spin" : ""} />
@@ -444,7 +452,7 @@ export const OcrInputView: React.FC = () => {
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "10px", alignItems: "center" }}>
           <div>
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              OneOCR Installation Path (Auto-detected from WindowsApps or Custom Folder)
+              OneOCR Installation Path
             </label>
             <input
               type="text"
@@ -464,7 +472,7 @@ export const OcrInputView: React.FC = () => {
             <button
               onClick={() => checkEngine(customPath)}
               className="btn-secondary"
-              style={{ padding: "7px 12px", fontSize: "12px", whiteSpace: "nowrap" }}
+              style={{ height: "32px", padding: "0 12px", fontSize: "12px", whiteSpace: "nowrap" }}
             >
               <FolderSearch size={13} />
               <span>Apply Custom Path</span>
@@ -477,362 +485,48 @@ export const OcrInputView: React.FC = () => {
             <strong>Detection Error:</strong> {engineStatus.error}
           </div>
         )}
-      </div>
 
-      {/* 2. Screen Region Selection & Scaling Settings (Max 2 Regions) */}
-      <div className="card" style={{ margin: 0, minWidth: 0 }}>
-        <div className="card-header" style={{ flexWrap: "wrap", gap: "10px" }}>
-          <div>
-            <span className="card-title">
-              <Crosshair size={16} /> Screen Region Selection ({regions.length}/2 Active Boxes)
-            </span>
-            <span className="card-subtitle">
-              Configure coordinates on screen for Speaker Name and Dialogue text
-            </span>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <Monitor size={14} color="var(--text-muted)" />
-              <select
-                value={targetMonitor}
-                onChange={(e) => setTargetMonitor(e.target.value)}
-                style={{
-                  padding: "4px 8px",
-                  fontSize: "12px",
-                  backgroundColor: "var(--bg-app)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-sm)",
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                }}
-                title="Select target monitor where your game window is placed"
-              >
-                {monitors.map((m) => (
-                  <option key={m.name} value={m.name}>
-                    {formatMonitorLabel(m)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button onClick={handleOpenSelector} className="btn-primary" style={{ padding: "5px 14px", fontSize: "12px" }}>
-              <Crosshair size={13} />
-              <span>Select Screen Area (Draw Box)</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Regions List Grid */}
-        <div style={{ display: "grid", gridTemplateColumns: regions.length === 2 ? "1fr 1fr" : "1fr", gap: "12px", marginBottom: "14px" }}>
-          {regions.length === 0 ? (
-            <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: "12.5px", border: "1px dashed var(--border-subtle)", borderRadius: "var(--radius-sm)" }}>
-              No screen regions configured. Click <strong>"Select Screen Area"</strong> above to draw up to 2 bounding boxes over your game window.
-            </div>
-          ) : (
-            regions.map((r, idx) => {
-              const isDialogue = r.role === "dialogue";
-              return (
-                <div
-                  key={r.id}
-                  style={{
-                    padding: "10px 14px",
-                    backgroundColor: "var(--bg-app)",
-                    border: `1px solid ${isDialogue ? "rgba(78, 115, 223, 0.4)" : "rgba(246, 194, 62, 0.4)"}`,
-                    borderRadius: "var(--radius-sm)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <span style={{ fontWeight: 600, fontSize: "12.5px" }}>
-                        Region #{idx + 1}:
-                      </span>
-                      <span className={isDialogue ? "badge badge-primary" : "badge badge-warning"} style={{ fontSize: "10.5px" }}>
-                        {isDialogue ? "💬 Dialogue Message" : "👤 Speaker Name"}
-                      </span>
-                    </div>
-
-                    <div style={{ display: "flex", gap: "6px" }}>
-                      <button
-                        onClick={() => handleToggleRegionRole(r.id)}
-                        className="btn-secondary"
-                        style={{ padding: "2px 8px", fontSize: "11px" }}
-                        title="Toggle role between Dialogue and Speaker"
-                      >
-                        {isDialogue ? <User size={11} /> : <MessageSquare size={11} />}
-                        <span>Set to {isDialogue ? "Speaker" : "Dialogue"}</span>
-                      </button>
-
-                      <button
-                        onClick={() => handleDeleteRegion(r.id)}
-                        className="btn-secondary"
-                        style={{ padding: "2px 6px", fontSize: "11px", color: "var(--accent-danger)" }}
-                        title="Delete region"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px", fontSize: "11px", color: "var(--text-muted)" }}>
-                    <div>X: <strong style={{ color: "var(--text-primary)" }}>{Math.round(r.x)}px</strong></div>
-                    <div>Y: <strong style={{ color: "var(--text-primary)" }}>{Math.round(r.y)}px</strong></div>
-                    <div>Width: <strong style={{ color: "var(--text-primary)" }}>{Math.round(r.width)}px</strong></div>
-                    <div>Height: <strong style={{ color: "var(--text-primary)" }}>{Math.round(r.height)}px</strong></div>
-                  </div>
-
-                  {r.physicalX !== undefined && (
-                    <div style={{ fontSize: "10px", color: "var(--accent-primary)", borderTop: "1px dashed var(--border-subtle)", paddingTop: "4px" }}>
-                      🎯 Physical Capture: ({r.physicalX}, {r.physicalY}) - {r.physicalWidth}×{r.physicalHeight}px ({r.targetMonitor || targetMonitor})
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        {/* Resolution Scaling Slider */}
-        <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div>
-              <span style={{ fontWeight: 600, fontSize: "12.5px", display: "flex", alignItems: "center", gap: "6px" }}>
-                <Sliders size={14} /> Resolution Scale Optimization
-              </span>
-              <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
-                Adjust image scaling size sent to OCR (Lower = Faster processing, Higher = Sharp text clarity)
-              </span>
-            </div>
-            <span className="badge badge-neutral" style={{ fontSize: "12px", fontWeight: 700 }}>
-              {scalePercent}% {scalePercent === 100 ? "(Default Native)" : scalePercent < 100 ? "(High Speed)" : "(High Sharpness)"}
-            </span>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-            <input
-              type="range"
-              min={25}
-              max={200}
-              step={25}
-              value={scalePercent}
-              onChange={(e) => setScalePercent(Number(e.target.value))}
-              style={{ flex: 1 }}
-            />
-            <div style={{ display: "flex", gap: "6px" }}>
-              {[50, 75, 100, 150].map((preset) => (
-                <button
-                  key={preset}
-                  onClick={() => setScalePercent(preset)}
-                  className={scalePercent === preset ? "btn-primary" : "btn-secondary"}
-                  style={{ padding: "2px 8px", fontSize: "10.5px" }}
-                >
-                  {preset}%
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. OCR Active/Inactive Toggle & Auto-Scan Interval Controls */}
-      <div className="card" style={{ margin: 0, minWidth: 0 }}>
-        <div className="card-header">
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <button
-              onClick={() => setIsOcrActive(!isOcrActive)}
-              className={isOcrActive ? "btn-danger" : "btn-primary"}
-              style={{
-                padding: "8px 18px",
-                fontSize: "13px",
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                backgroundColor: isOcrActive ? "#da3633" : "var(--accent-success)",
-                borderColor: isOcrActive ? "#f85149" : "#2ea043",
-                color: "#ffffff",
-              }}
-              disabled={!engineStatus.isAvailable || regions.length === 0}
-            >
-              {isOcrActive ? <Square size={14} fill="#fff" /> : <Play size={14} fill="#fff" />}
-              <span>{isOcrActive ? "Stop OCR Scanning" : "Start OCR Scanning (Active)"}</span>
-            </button>
-
-            {isOcrActive ? (
-              <span className="badge badge-success" style={{ fontSize: "11.5px", display: "flex", alignItems: "center", gap: "5px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#3fb950", display: "inline-block" }} />
-                OCR Active (Scanning every {scanInterval}ms)
-              </span>
-            ) : (
-              <span className="badge badge-neutral" style={{ fontSize: "11.5px" }}>
-                ⚡ Inactive Mode (Idle & Zero CPU Usage)
-              </span>
-            )}
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={autoForwardToOverlay}
-                onChange={(e) => setAutoForwardToOverlay(e.target.checked)}
-              />
-              <span style={{ fontWeight: 600 }}>Auto-Forward to Live Translation & Overlay</span>
-            </label>
-
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={ignoreDuplicates}
-                onChange={(e) => setIgnoreDuplicates(e.target.checked)}
-              />
-              <span style={{ fontWeight: 600 }}>Discard Identical Duplicate Text</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Scan Interval Slider */}
-        <div style={{ display: "flex", alignItems: "center", gap: "16px", marginTop: "6px" }}>
-          <label style={{ fontSize: "11.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-            Scan Interval: <strong style={{ color: "var(--text-primary)" }}>{scanInterval}ms</strong>
-          </label>
-          <input
-            type="range"
-            min={100}
-            max={2000}
-            step={50}
-            value={scanInterval}
-            onChange={(e) => setScanInterval(Number(e.target.value))}
-            style={{ flex: 1 }}
-          />
-          <div style={{ display: "flex", gap: "4px" }}>
-            {[200, 350, 500, 1000].map((intVal) => (
-              <button
-                key={intVal}
-                onClick={() => setScanInterval(intVal)}
-                className={scanInterval === intVal ? "btn-primary" : "btn-secondary"}
-                style={{ padding: "2px 8px", fontSize: "10.5px" }}
-              >
-                {intVal}ms
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 4. Text Motion & Stability Detection (Anti-Typewriter / Debounce Window) */}
-      <div className="card" style={{ margin: 0, minWidth: 0 }}>
-        <div className="card-header" style={{ flexWrap: "wrap", gap: "10px" }}>
-          <div>
-            <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <Zap size={16} color="var(--accent-gold)" /> Text Motion & Stability Detection (Anti-Typewriter)
-            </span>
-            <span className="card-subtitle">
-              Pauses OCR while dialogue is actively typing or animating, then scans once text has settled.
-            </span>
-          </div>
+        {/* Start / Stop OCR Button & Auto-forward Toggle (placed directly adjacent) */}
+        <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px", display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+          <button
+            onClick={() => setIsOcrActive(!isOcrActive)}
+            className={isOcrActive ? "btn-danger" : "btn-primary"}
+            style={{
+              height: "34px",
+              padding: "0 18px",
+              fontSize: "12.5px",
+              fontWeight: 700,
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              backgroundColor: isOcrActive ? "#da3633" : "var(--accent-success)",
+              borderColor: isOcrActive ? "#f85149" : "#2ea043",
+              color: "#ffffff",
+            }}
+            disabled={!engineStatus.isAvailable || regions.length === 0}
+          >
+            {isOcrActive ? <Square size={14} fill="#fff" /> : <Play size={14} fill="#fff" />}
+            <span>{isOcrActive ? "Stop OCR" : "Start OCR"}</span>
+          </button>
 
           <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer" }}>
             <input
               type="checkbox"
-              checked={enableMotionDetection}
-              onChange={(e) => setEnableMotionDetection(e.target.checked)}
+              checked={autoForwardToOverlay}
+              onChange={(e) => setAutoForwardToOverlay(e.target.checked)}
             />
-            <span style={{ fontWeight: 600, color: enableMotionDetection ? "var(--accent-success)" : "var(--text-muted)" }}>
-              {enableMotionDetection ? "Smart Motion Detection: Active" : "Disabled (Direct Scan)"}
-            </span>
+            <span style={{ fontWeight: 600 }}>Auto-Forward to Live Translation & Overlay</span>
           </label>
         </div>
-
-        {enableMotionDetection && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "4px" }}>
-            {/* Settle Duration Slider */}
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>
-                  <Clock size={12} /> Settle Window Duration: <strong style={{ color: "var(--text-primary)" }}>{settleTimeMs}ms</strong>
-                </span>
-                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                  (Duration text strokes must remain still before triggering OCR)
-                </span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-                <input
-                  type="range"
-                  min={100}
-                  max={800}
-                  step={25}
-                  value={settleTimeMs}
-                  onChange={(e) => setSettleTimeMs(Number(e.target.value))}
-                  style={{ flex: 1 }}
-                />
-                <div style={{ display: "flex", gap: "4px" }}>
-                  {[150, 250, 400, 600].map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setSettleTimeMs(t)}
-                      className={settleTimeMs === t ? "btn-primary" : "btn-secondary"}
-                      style={{ padding: "2px 8px", fontSize: "10.5px" }}
-                    >
-                      {t}ms
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Stroke Sensitivity & Blinking Cursor Filter */}
-            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "16px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
-              {/* Stroke Sensitivity */}
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                  <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
-                    Stroke Edge Sensitivity: <strong style={{ color: "var(--text-primary)" }}>{motionSensitivity} / 10</strong>
-                  </span>
-                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
-                    (Ignores smooth background video/Live2D)
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  step={1}
-                  value={motionSensitivity}
-                  onChange={(e) => setMotionSensitivity(Number(e.target.value))}
-                  style={{ width: "100%" }}
-                />
-              </div>
-
-              {/* Blinking Cursor Prompt Filter */}
-              <div style={{ display: "flex", alignItems: "center" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={ignoreBlinkingPrompt}
-                    onChange={(e) => setIgnoreBlinkingPrompt(e.target.checked)}
-                  />
-                  <span style={{ fontWeight: 600 }}>
-                    Ignore Blinking Dialogue Cursor (▼ / ▷)
-                  </span>
-                </label>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* 5. Dual-State Live Preview Section */}
+      {/* 2. Dual-State Live Preview Section (Placed right beneath OneOCR Engine) */}
       <div className="card" style={{ margin: 0, minWidth: 0, width: "100%", boxSizing: "border-box" }}>
         <div className="card-header">
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <Activity size={16} color={isOcrActive ? "var(--accent-success)" : "var(--accent-primary)"} />
-              {isOcrActive ? "Live OCR Stream Inspector (Active Output)" : "Screen Region Preview (Inactive Mode)"}
+              {isOcrActive ? "Live OCR Stream Inspector" : "Screen Region Preview"}
             </span>
 
             {isOcrActive && (
@@ -859,7 +553,7 @@ export const OcrInputView: React.FC = () => {
                 onClick={() => refreshSnapshots()}
                 disabled={isLoadingSnapshot}
                 className="btn-secondary"
-                style={{ padding: "3px 10px", fontSize: "11px" }}
+                style={{ height: "28px", padding: "0 10px", fontSize: "11px" }}
                 title="Refresh cropped snapshot of selected regions"
               >
                 <Camera size={11} />
@@ -874,7 +568,7 @@ export const OcrInputView: React.FC = () => {
                   lastRecognizedTextRef.current = { speaker: "", message: "" };
                 }}
                 className="btn-secondary"
-                style={{ padding: "3px 10px", fontSize: "11px" }}
+                style={{ height: "28px", padding: "0 10px", fontSize: "11px" }}
                 title="Clear live output"
               >
                 <Trash2 size={11} />
@@ -893,7 +587,7 @@ export const OcrInputView: React.FC = () => {
 
             {regions.length === 0 ? (
               <div style={{ padding: "24px", textAlign: "center", color: "var(--text-muted)", fontSize: "12.5px" }}>
-                No regions configured. Click "Select Screen Area" to draw region boxes.
+                No regions configured. Click "Select Screen Area" below to draw region boxes.
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: regions.length === 2 ? "1fr 1fr" : "1fr", gap: "12px" }}>
@@ -1007,6 +701,261 @@ export const OcrInputView: React.FC = () => {
             )}
           </div>
         )}
+      </div>
+
+      {/* 3. Screen Region Selection (Max 2 Regions) */}
+      <div className="card" style={{ margin: 0, minWidth: 0 }}>
+        <div className="card-header" style={{ flexWrap: "wrap", gap: "10px" }}>
+          <div>
+            <span className="card-title">
+              <Crosshair size={16} /> Screen Region Selection
+            </span>
+            <span className="card-subtitle">
+              Configure screen bounding boxes for Speaker Name and Dialogue text
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Monitor size={14} color="var(--text-muted)" />
+              <select
+                value={targetMonitor}
+                onChange={(e) => setTargetMonitor(e.target.value)}
+                style={{
+                  height: "32px",
+                  padding: "0 28px 0 8px",
+                  fontSize: "12px",
+                  backgroundColor: "var(--bg-app)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                }}
+                title="Select target monitor where your game window is placed"
+              >
+                {monitors.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {formatMonitorLabel(m)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button onClick={handleOpenSelector} className="btn-primary" style={{ height: "32px", padding: "0 14px", fontSize: "12px" }}>
+              <Crosshair size={13} />
+              <span>Select Screen Area</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Regions List Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: regions.length === 2 ? "1fr 1fr" : "1fr", gap: "12px" }}>
+          {regions.length === 0 ? (
+            <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: "12.5px", border: "1px dashed var(--border-subtle)", borderRadius: "var(--radius-sm)" }}>
+              No screen regions configured. Click <strong>"Select Screen Area"</strong> above to draw up to 2 bounding boxes over your game window.
+            </div>
+          ) : (
+            regions.map((r, idx) => {
+              const isDialogue = r.role === "dialogue";
+              return (
+                <div
+                  key={r.id}
+                  style={{
+                    padding: "10px 14px",
+                    backgroundColor: "var(--bg-app)",
+                    border: `1px solid ${isDialogue ? "rgba(78, 115, 223, 0.4)" : "rgba(246, 194, 62, 0.4)"}`,
+                    borderRadius: "var(--radius-sm)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span style={{ fontWeight: 600, fontSize: "12.5px" }}>
+                        Region {idx + 1}:
+                      </span>
+                      <span className={isDialogue ? "badge badge-primary" : "badge badge-warning"} style={{ fontSize: "10.5px" }}>
+                        {isDialogue ? "💬 Dialogue Message" : "👤 Speaker Name"}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button
+                        onClick={() => handleToggleRegionRole(r.id)}
+                        className="btn-secondary"
+                        style={{ height: "26px", padding: "0 8px", fontSize: "11px" }}
+                        title="Switch Role (Speaker ⇄ Dialogue)"
+                      >
+                        <ArrowLeftRight size={12} />
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteRegion(r.id)}
+                        className="btn-secondary"
+                        style={{ height: "26px", padding: "0 8px", fontSize: "11px", color: "var(--accent-danger)" }}
+                        title="Delete region"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Physical coordinates & size */}
+                  <div style={{ fontSize: "11.5px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                    <span>Physical: <strong>X: {r.physicalX ?? Math.round(r.x)}, Y: {r.physicalY ?? Math.round(r.y)}</strong></span>
+                    <span>•</span>
+                    <span>Size: <strong>{r.physicalWidth ?? Math.round(r.width)} × {r.physicalHeight ?? Math.round(r.height)} px</strong></span>
+                    {r.targetMonitor && (
+                      <span style={{ color: "var(--text-muted)", fontSize: "10.5px" }}>({formatMonitorName(r.targetMonitor)})</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* 4. Settings & Optimization Card */}
+      <div className="card" style={{ margin: 0, minWidth: 0 }}>
+        <div className="card-header">
+          <div>
+            <span className="card-title">
+              <Sliders size={16} /> Settings & Optimization
+            </span>
+            <span className="card-subtitle">
+              Configure OCR image scaling, capture interval, and smart motion detection
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          {/* Resolution Scale & Scan Interval Side by Side */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+            {/* Resolution Scale */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                <label style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+                  Resolution Scale: <strong style={{ color: "var(--text-primary)" }}>{scalePercent}%</strong>
+                </label>
+                <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
+                  {scalePercent === 100 ? "Native" : scalePercent < 100 ? "High Speed" : "High Clarity"}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={25}
+                max={200}
+                step={25}
+                value={scalePercent}
+                onChange={(e) => setScalePercent(Number(e.target.value))}
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            {/* Scan Interval */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                <label style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+                  Scan Interval: <strong style={{ color: "var(--text-primary)" }}>{scanInterval}ms</strong>
+                </label>
+              </div>
+              <input
+                type="range"
+                min={100}
+                max={2000}
+                step={50}
+                value={scanInterval}
+                onChange={(e) => setScanInterval(Number(e.target.value))}
+                style={{ width: "100%" }}
+              />
+            </div>
+          </div>
+
+          {/* Smart Motion Detection Section */}
+          <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
+            <div>
+              <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12.5px" }}>
+                <Zap size={14} color="var(--accent-gold)" /> Smart Motion Detection
+              </span>
+              <span className="card-subtitle" style={{ fontSize: "11px" }}>
+                Pauses OCR while dialogue is actively typing or animating, then scans once text has settled.
+              </span>
+            </div>
+
+            {/* Checklist Toggle positioned right below title/description */}
+            <div style={{ marginTop: "8px", marginBottom: enableMotionDetection ? "12px" : "4px" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={enableMotionDetection}
+                  onChange={(e) => setEnableMotionDetection(e.target.checked)}
+                />
+                <span style={{ fontWeight: 600, color: enableMotionDetection ? "var(--accent-success)" : "var(--text-muted)" }}>
+                  {enableMotionDetection ? "Smart Motion Detection: Active" : "Smart Motion Detection: Disabled"}
+                </span>
+              </label>
+            </div>
+
+            {enableMotionDetection && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {/* Sliders in a 2-column layout */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+                  {/* Settle Window Duration */}
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                        Settle Window: <strong style={{ color: "var(--text-primary)" }}>{settleTimeMs}ms</strong>
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={100}
+                      max={800}
+                      step={25}
+                      value={settleTimeMs}
+                      onChange={(e) => setSettleTimeMs(Number(e.target.value))}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+
+                  {/* Stroke Sensitivity */}
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                        Stroke Sensitivity: <strong style={{ color: "var(--text-primary)" }}>{motionSensitivity}/10</strong>
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      step={1}
+                      value={motionSensitivity}
+                      onChange={(e) => setMotionSensitivity(Number(e.target.value))}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                </div>
+
+                {/* Ignore Blinking Prompt Checklist positioned underneath */}
+                <div style={{ borderTop: "1px dashed var(--border-subtle)", paddingTop: "8px" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11.5px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={ignoreBlinkingPrompt}
+                      onChange={(e) => setIgnoreBlinkingPrompt(e.target.checked)}
+                    />
+                    <span style={{ fontWeight: 600 }}>
+                      Ignore Blinking Prompt (▼ / ▷)
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

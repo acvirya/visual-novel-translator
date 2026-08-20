@@ -142,11 +142,9 @@ export async function testOpenRouterKey(apiKey: string): Promise<OpenRouterTestR
         rate_limit: data.rate_limit,
       };
 
-      const usageStr = `$${keyInfo.usage.toFixed(4)}`;
-      const limitStr = keyInfo.limit !== null ? ` / $${keyInfo.limit}` : " (No limit)";
       return {
         isValid: true,
-        message: `Key verified: "${keyInfo.label}" • Usage: ${usageStr}${limitStr}`,
+        message: "Key verified!",
         keyInfo,
       };
     } else if (response.status === 401) {

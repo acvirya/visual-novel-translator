@@ -18,3 +18,11 @@ export function formatMonitorLabel(m: MonitorInfo): string {
   const primaryTag = m.is_primary ? " (Primary)" : "";
   return `${displayName}${primaryTag} • ${m.width}×${m.height}`;
 }
+
+export function formatMonitorName(name?: string): string {
+  if (!name) return "";
+  const match = name.match(/DISPLAY(\d+)/i);
+  if (match) return `Display ${match[1]}`;
+  if (name.startsWith("\\\\.\\")) return name.replace(/^\\\\\.\\/, "");
+  return name;
+}

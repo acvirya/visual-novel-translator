@@ -29,6 +29,8 @@ import {
   Activity,
   Layers,
   Sparkles,
+  Check,
+  X,
 } from "lucide-react";
 
 // Smart merge helper for visual novel typewriter text fragments & multi-pass memory hooks
@@ -79,13 +81,28 @@ export const TextractorInputView: React.FC = () => {
   const [exePath, setExePath] = useState<string>(() => {
     return localStorage.getItem("vn_textractor_path") || DEFAULT_TEXTRACTOR_PATH;
   });
-  const [arch, setArch] = useState<"x86" | "x64">("x86");
+  const [arch, setArch] = useState<"x86" | "x64">(() => {
+    return (localStorage.getItem("vn_textractor_arch") as "x86" | "x64") || "x86";
+  });
 
   // Process Enumeration State
   const [processes, setProcesses] = useState<TextractorProcessInfo[]>([]);
   const [isLoadingProcesses, setIsLoadingProcesses] = useState<boolean>(false);
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [processSearchQuery, setProcessSearchQuery] = useState<string>("");
+  const [isProcessDropdownOpen, setIsProcessDropdownOpen] = useState<boolean>(false);
+  const processDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close process dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (processDropdownRef.current && !processDropdownRef.current.contains(e.target as Node)) {
+        setIsProcessDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Sidecar Hooking State
   const [isHooked, setIsHooked] = useState<boolean>(false);
@@ -601,15 +618,50 @@ export const TextractorInputView: React.FC = () => {
     setCustomHookCode("");
   };
 
-  // Switch architecture and update path preset
-  const handleSelectArch = (selectedArch: "x86" | "x64") => {
-    setArch(selectedArch);
-    if (selectedArch === "x86") {
-      setExePath("D:\\Program Files\\Textractor\\x86\\TextractorCLI.exe");
-    } else {
-      setExePath("D:\\Program Files\\Textractor\\x64\\TextractorCLI.exe");
+  // Switch architecture and reset process / inspector / threads state
+  const handleSelectArch = async (selectedArch: "x86" | "x64") => {
+    if (isHooked) {
+      await TextractorService.stopSidecar();
+      setIsHooked(false);
+      setAttachedPid(null);
     }
+    setArch(selectedArch);
+    const newPath = selectedArch === "x86"
+      ? "D:\\Program Files\\Textractor\\x86\\TextractorCLI.exe"
+      : "D:\\Program Files\\Textractor\\x64\\TextractorCLI.exe";
+    setExePath(newPath);
+    localStorage.setItem("vn_textractor_path", newPath);
+    localStorage.setItem("vn_textractor_arch", selectedArch);
+
+    // Reset process selection
+    setSelectedPid(null);
+    setProcessSearchQuery("");
+    setIsProcessDropdownOpen(false);
+
+    // Reset threads & logs
+    setThreads(new Map());
+    setThreadLogs(new Map());
+    setInspectedThreadId(null);
+    setCombinedThreadId(null);
+    setMessageThreadId(null);
+    setSpeakerThreadId(null);
+
+    // Reset Live Inspector
+    setLatestSpeaker("");
+    setLatestMessage("");
+    setLatestRawMessage("");
+    dialogueAccumulatorRef.current = { buffer: "", rawBuffer: "", lastTimestamp: 0, timer: null };
+
+    // Reset discovery timer
+    setIsDiscoveryActive(false);
+    setDiscoverySecondsLeft(0);
+
+    // Reload processes for new architecture
+    loadProcesses();
   };
+
+  // Selected process object
+  const selectedProcess = processes.find((p) => p.pid === selectedPid) || null;
 
   // Filter processes by search query
   const filteredProcesses = processes.filter((p) => {
@@ -747,69 +799,141 @@ export const TextractorInputView: React.FC = () => {
               Select running Visual Novel window to attach text hooking engine
             </span>
           </div>
+        </div>
 
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "10px", alignItems: "center" }}>
+          {/* Searchable Process Combobox */}
+          <div ref={processDropdownRef} style={{ position: "relative" }}>
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <Search size={14} style={{ position: "absolute", left: "10px", color: "var(--text-muted)", pointerEvents: "none" }} />
+              <input
+                type="text"
+                placeholder={selectedProcess ? `"${selectedProcess.window_title}" (${selectedProcess.name} - PID: ${selectedProcess.pid})` : "Type or click to search game process by title, exe, or PID..."}
+                value={isProcessDropdownOpen ? processSearchQuery : (selectedProcess ? `"${selectedProcess.window_title}" — ${selectedProcess.name} (PID: ${selectedProcess.pid})` : "")}
+                onChange={(e) => {
+                  setProcessSearchQuery(e.target.value);
+                  setIsProcessDropdownOpen(true);
+                }}
+                onFocus={() => {
+                  if (!isHooked) {
+                    setIsProcessDropdownOpen(true);
+                    setProcessSearchQuery("");
+                  }
+                }}
+                disabled={isHooked}
+                style={{ width: "100%", paddingLeft: "32px", fontSize: "12px", height: "32px" }}
+              />
+              {selectedPid && !isHooked && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedPid(null);
+                    setProcessSearchQuery("");
+                  }}
+                  style={{ position: "absolute", right: "8px", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "2px" }}
+                  title="Clear selected process"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* Dropdown Menu */}
+            {isProcessDropdownOpen && !isHooked && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  marginTop: "4px",
+                  backgroundColor: "var(--bg-surface-elevated)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+                  maxHeight: "220px",
+                  overflowY: "auto",
+                  zIndex: 100,
+                }}
+              >
+                {filteredProcesses.length === 0 ? (
+                  <div style={{ padding: "10px 12px", color: "var(--text-muted)", fontSize: "12px" }}>
+                    No running game processes found matching "{processSearchQuery}"
+                  </div>
+                ) : (
+                  filteredProcesses.map((p) => {
+                    const isSelected = p.pid === selectedPid;
+                    return (
+                      <div
+                        key={p.pid}
+                        onClick={() => {
+                          setSelectedPid(p.pid);
+                          setIsProcessDropdownOpen(false);
+                          setProcessSearchQuery("");
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          fontSize: "12px",
+                          cursor: "pointer",
+                          backgroundColor: isSelected ? "var(--bg-surface-hover)" : "transparent",
+                          borderBottom: "1px solid rgba(255,255,255,0.04)",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--bg-surface-hover)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isSelected ? "var(--bg-surface-hover)" : "transparent")}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+                          <span style={{ fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            "{p.window_title}"
+                          </span>
+                          <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                            {p.name} (PID: {p.pid})
+                          </span>
+                        </div>
+                        {isSelected && <Check size={14} color="var(--accent-primary)" />}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Refresh Processes Button (on the left side of Attach Hook) */}
           <button
             onClick={loadProcesses}
-            disabled={isLoadingProcesses}
+            disabled={isLoadingProcesses || isHooked}
             className="btn-secondary"
-            style={{ padding: "4px 10px", fontSize: "12px" }}
+            style={{ height: "32px", padding: "0 12px", fontSize: "12px", whiteSpace: "nowrap" }}
             title="Refresh running Windows processes"
           >
             <RefreshCw size={12} className={isLoadingProcesses ? "spin" : ""} />
             <span>{isLoadingProcesses ? "Scanning..." : "Refresh Processes"}</span>
           </button>
-        </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          {/* Search Filter & Process Selector */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr auto", gap: "10px", alignItems: "center" }}>
-            <input
-              type="text"
-              placeholder="Search process by title, exe, or PID..."
-              value={processSearchQuery}
-              onChange={(e) => setProcessSearchQuery(e.target.value)}
-              disabled={isHooked}
-              style={{ fontSize: "12.5px" }}
-            />
-            <select
-              value={selectedPid || ""}
-              onChange={(e) => setSelectedPid(Number(e.target.value))}
-              disabled={isHooked}
-              style={{ width: "100%", fontSize: "13px" }}
+          {/* Attach / Detach Button */}
+          {!isHooked ? (
+            <button
+              onClick={handleAttach}
+              disabled={isAttaching || !selectedPid}
+              className="btn-primary"
+              style={{ height: "32px", padding: "0 18px", whiteSpace: "nowrap", fontWeight: 600 }}
             >
-              {filteredProcesses.length === 0 ? (
-                <option value="">No running GUI game processes found</option>
-              ) : (
-                filteredProcesses.map((p) => (
-                  <option key={p.pid} value={p.pid}>
-                    "{p.window_title}" — {p.name} (PID: {p.pid})
-                  </option>
-                ))
-              )}
-            </select>
-
-            {/* Attach / Detach Button */}
-            {!isHooked ? (
-              <button
-                onClick={handleAttach}
-                disabled={isAttaching || !selectedPid}
-                className="btn-primary"
-                style={{ padding: "7px 22px", whiteSpace: "nowrap" }}
-              >
-                {isAttaching ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
-                <span>{isAttaching ? "Attaching..." : "Attach Hook"}</span>
-              </button>
-            ) : (
-              <button
-                onClick={handleDetach}
-                className="btn-danger"
-                style={{ padding: "7px 22px", whiteSpace: "nowrap" }}
-              >
-                <Square size={14} />
-                <span>Detach Hook</span>
-              </button>
-            )}
-          </div>
+              {isAttaching ? <RefreshCw size={13} className="spin" /> : <Play size={13} />}
+              <span>{isAttaching ? "Attaching..." : "Attach Hook"}</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleDetach}
+              className="btn-danger"
+              style={{ height: "32px", padding: "0 18px", whiteSpace: "nowrap", fontWeight: 600 }}
+            >
+              <Square size={13} />
+              <span>Detach Hook</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -987,51 +1111,43 @@ export const TextractorInputView: React.FC = () => {
       {/* 5. Live Stream Inspector (Full-Width Top Panel) */}
       <div className="card" style={{ margin: 0, minWidth: 0, width: "100%", boxSizing: "border-box" }}>
         <div className="card-header">
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div>
             <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <Activity size={16} color="var(--accent-success)" /> Live Stream Inspector
             </span>
-            {isLiveStreamActive ? (
-              <span className="badge badge-success" style={{ fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}>
-                <CheckCircle2 size={11} /> Stream Active (
-                {combinedThreadId !== null
-                  ? `✨ Combined Auto-Split: #${combinedThreadId}`
-                  : `💬 Dialogue: #${messageThreadId ?? "None"}${speakerThreadId !== null ? ` | 👤 Speaker: #${speakerThreadId}` : ""}`}
-                )
-              </span>
-            ) : (
-              <span className="badge badge-neutral" style={{ fontSize: "11px" }}>
-                Idle (No Thread Assigned)
-              </span>
-            )}
+            <span className="card-subtitle">
+              Live text stream intercepted from selected game thread
+            </span>
           </div>
+        </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={autoForwardToOverlay}
-                onChange={(e) => setAutoForwardToOverlay(e.target.checked)}
-                disabled={!isLiveStreamActive}
-              />
-              <span style={{ fontWeight: 600 }}>Auto-Forward to Live Translation & Overlay</span>
-            </label>
+        {/* Toolbar: Auto-Forward & Clear Stream directly above preview */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "10px" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={autoForwardToOverlay}
+              onChange={(e) => setAutoForwardToOverlay(e.target.checked)}
+              disabled={!isLiveStreamActive}
+            />
+            <span style={{ fontWeight: 600 }}>Auto-Forward to Live Translation & Overlay</span>
+          </label>
 
-            <button
-              onClick={() => {
-                setLatestSpeaker("");
-                setLatestMessage("");
-                setLatestRawMessage("");
-                dialogueAccumulatorRef.current = { buffer: "", rawBuffer: "", lastTimestamp: 0, timer: null };
-              }}
-              className="btn-secondary"
-              style={{ padding: "3px 10px", fontSize: "11px" }}
-              title="Clear live stream output"
-            >
-              <Trash2 size={11} />
-              <span>Clear Stream</span>
-            </button>
-          </div>
+          <button
+            onClick={() => {
+              setLatestSpeaker("");
+              setLatestMessage("");
+              setLatestRawMessage("");
+              dialogueAccumulatorRef.current = { buffer: "", rawBuffer: "", lastTimestamp: 0, timer: null };
+            }}
+            disabled={!isLiveStreamActive}
+            className="btn-secondary"
+            style={{ height: "26px", padding: "0 10px", fontSize: "11px" }}
+            title="Clear live stream output"
+          >
+            <Trash2 size={11} />
+            <span>Clear Stream</span>
+          </button>
         </div>
 
         {/* Live Stream Output Box */}
@@ -1295,40 +1411,43 @@ export const TextractorInputView: React.FC = () => {
                   : "Select a thread on the left to view detailed line logs"}
               </span>
             </div>
+          </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              {/* Max Lines Selector */}
+          {/* Sub-header Toolbar: Max Lines & Clear Log */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", gap: "8px", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Max Lines:</span>
               <select
                 value={maxLogLines}
                 onChange={(e) => setMaxLogLines(Number(e.target.value))}
-                style={{ fontSize: "11px", padding: "2px 6px" }}
+                style={{ fontSize: "11px", height: "26px", padding: "0 24px 0 6px" }}
                 title="Max log lines to retain"
               >
                 <option value={50}>50 Lines</option>
-                <option value={100}>100 Lines (Default)</option>
+                <option value={100}>100 Lines</option>
                 <option value={200}>200 Lines</option>
                 <option value={500}>500 Lines</option>
               </select>
-
-              <button
-                onClick={() => {
-                  if (inspectedThreadId !== null) {
-                    setThreadLogs((prev) => {
-                      const next = new Map(prev);
-                      next.set(inspectedThreadId, []);
-                      return next;
-                    });
-                  }
-                }}
-                disabled={!currentInspectedThread || currentThreadLogs.length === 0}
-                className="btn-secondary"
-                style={{ padding: "2px 8px", fontSize: "11px" }}
-                title="Clear log history for this thread"
-              >
-                <Trash2 size={11} />
-                <span>Clear</span>
-              </button>
             </div>
+
+            <button
+              onClick={() => {
+                if (inspectedThreadId !== null) {
+                  setThreadLogs((prev) => {
+                    const next = new Map(prev);
+                    next.set(inspectedThreadId, []);
+                    return next;
+                  });
+                }
+              }}
+              disabled={!currentInspectedThread || currentThreadLogs.length === 0}
+              className="btn-secondary"
+              style={{ height: "26px", padding: "0 10px", fontSize: "11px" }}
+              title="Clear log history for this thread"
+            >
+              <Trash2 size={11} />
+              <span>Clear Log</span>
+            </button>
           </div>
 
           {/* Thread Log Entries List */}

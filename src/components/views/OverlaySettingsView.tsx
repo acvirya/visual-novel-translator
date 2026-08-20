@@ -19,8 +19,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Monitor,
   Power,
-  Lock,
-  Unlock,
   Move,
   Check,
   Eye,
@@ -335,7 +333,7 @@ export const OverlaySettingsView: React.FC = () => {
             }}
           >
             <Power size={15} />
-            <span>{config.isEnabled ? "Overlay: Active (Running)" : "Overlay: Inactive (Disabled)"}</span>
+            <span>{config.isEnabled ? "Overlay Running" : "Overlay Disabled"}</span>
           </button>
 
           {/* Edit / Position Box Action */}
@@ -356,26 +354,6 @@ export const OverlaySettingsView: React.FC = () => {
             {isEditingPosition ? <Check size={15} /> : <Move size={15} />}
             <span>{isEditingPosition ? "Save & Lock Position (Enter)" : "Edit / Position Box"}</span>
           </button>
-
-          {/* Click-Through Status Indicator */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "12px",
-              color: isEditingPosition ? "var(--accent-gold)" : "var(--accent-success)",
-              backgroundColor: "var(--bg-app)",
-              padding: "6px 12px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid var(--border-subtle)",
-            }}
-          >
-            {isEditingPosition ? <Unlock size={13} /> : <Lock size={13} />}
-            <span>
-              {isEditingPosition ? "Interactive Drag Mode (Click-through disabled)" : "Click-Through: Active (Passes input to game)"}
-            </span>
-          </div>
         </div>
 
         {/* Right Side: Screenshot/OCR Protection Badge */}

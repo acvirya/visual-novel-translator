@@ -28,7 +28,7 @@
         "shadow": false,
         "visible": false,
         "contentProtected": true,
-        "resizable": true,
+        "resizable": false,
         "skipTaskbar": true
       },
       {
@@ -42,7 +42,7 @@
         "shadow": false,
         "visible": false,
         "contentProtected": true,
-        "resizable": true,
+        "resizable": false,
         "skipTaskbar": true
       }
     ],

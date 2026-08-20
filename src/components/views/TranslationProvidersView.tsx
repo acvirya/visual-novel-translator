@@ -70,10 +70,33 @@ export const TranslationProvidersView: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>(() => {
     return localStorage.getItem("vn_openrouter_api_key") || "";
   });
-  const [keyStatus, setKeyStatus] = useState<"invalid" | "active">("invalid");
-  const [keyInfo, setKeyInfo] = useState<OpenRouterKeyInfo | null>(null);
+  const [keyStatus, setKeyStatus] = useState<"invalid" | "active">(() => {
+    const savedStatus = localStorage.getItem("vn_openrouter_key_status");
+    const savedKey = (localStorage.getItem("vn_openrouter_api_key") || "").trim();
+    const verifiedKey = (localStorage.getItem("vn_openrouter_verified_key") || "").trim();
+    if (savedStatus === "active" && savedKey && savedKey === verifiedKey) {
+      return "active";
+    }
+    return "invalid";
+  });
+  const [keyInfo, setKeyInfo] = useState<OpenRouterKeyInfo | null>(() => {
+    try {
+      const saved = localStorage.getItem("vn_openrouter_key_info");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [isTesting, setIsTesting] = useState<boolean>(false);
-  const [testFeedback, setTestFeedback] = useState<{ isSuccess: boolean; message: string } | null>(null);
+  const [testFeedback, setTestFeedback] = useState<{ isSuccess: boolean; message: string } | null>(() => {
+    const savedStatus = localStorage.getItem("vn_openrouter_key_status");
+    const savedKey = (localStorage.getItem("vn_openrouter_api_key") || "").trim();
+    const verifiedKey = (localStorage.getItem("vn_openrouter_verified_key") || "").trim();
+    if (savedStatus === "active" && savedKey && savedKey === verifiedKey) {
+      return { isSuccess: true, message: "Key verified!" };
+    }
+    return null;
+  });
 
   // Starred Models State
   const [starredModelIds, setStarredModelIds] = useState<string[]>(() => {
@@ -162,10 +185,18 @@ export const TranslationProvidersView: React.FC = () => {
       setKeyStatus("active");
       setKeyInfo(result.keyInfo || null);
       setTestFeedback({ isSuccess: true, message: result.message });
+      localStorage.setItem("vn_openrouter_key_status", "active");
+      localStorage.setItem("vn_openrouter_verified_key", apiKey.trim());
+      if (result.keyInfo) {
+        localStorage.setItem("vn_openrouter_key_info", JSON.stringify(result.keyInfo));
+      }
     } else {
       setKeyStatus("invalid");
       setKeyInfo(null);
       setTestFeedback({ isSuccess: false, message: result.message });
+      localStorage.setItem("vn_openrouter_key_status", "invalid");
+      localStorage.removeItem("vn_openrouter_verified_key");
+      localStorage.removeItem("vn_openrouter_key_info");
     }
   };
 
@@ -220,8 +251,18 @@ export const TranslationProvidersView: React.FC = () => {
                 type="password"
                 value={apiKey}
                 onChange={(e) => {
-                  setApiKey(e.target.value);
-                  setKeyStatus("invalid");
+                  const newKey = e.target.value;
+                  setApiKey(newKey);
+                  const verifiedKey = localStorage.getItem("vn_openrouter_verified_key");
+                  if (verifiedKey && newKey.trim() === verifiedKey.trim()) {
+                    setKeyStatus("active");
+                    localStorage.setItem("vn_openrouter_key_status", "active");
+                    setTestFeedback({ isSuccess: true, message: "Key verified!" });
+                  } else {
+                    setKeyStatus("invalid");
+                    localStorage.setItem("vn_openrouter_key_status", "invalid");
+                    setTestFeedback(null);
+                  }
                 }}
                 placeholder="sk-or-v1-..."
                 style={{ flex: 1, fontFamily: "var(--font-mono)" }}
