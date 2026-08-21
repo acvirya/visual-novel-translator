@@ -46,48 +46,52 @@ class ScriptManagerService {
     this.loadPersistedState();
   }
 
+  public normalizeForIndex(t: string): string {
+    const res = t
+      .replace(/[\u3000\s\r\n\t]/g, "")
+      .replace(/[「」『』【】（）()〈〉《》""''“”]/g, "")
+      .replace(/[、，,]/g, "")
+      .replace(/[。．\.]+/g, "")
+      .replace(/[…‥・―ー\-~〜]/g, "")
+      .replace(/[！!]/g, "！")
+      .replace(/[？?]/g, "？")
+      .replace(/《[^》]+》/g, "")
+      .toLowerCase()
+      .trim();
+    return res || (t.trim().length > 0 ? "..." : "");
+  }
+
+  public insertEntryIntoIndexes(item: ScriptEntry) {
+    const trimmed = item.message.trim();
+    if (trimmed && !this.exactIndex.has(trimmed)) {
+      this.exactIndex.set(trimmed, item);
+    }
+    const norm = this.normalizeForIndex(trimmed);
+    if (norm && !this.normalizedIndex.has(norm)) {
+      this.normalizedIndex.set(norm, item);
+    }
+
+    // Build Inverted Bigram Index for instant candidate retrieval
+    if (norm.length >= 2) {
+      for (let i = 0; i < norm.length - 1; i++) {
+        const bg = norm.slice(i, i + 2);
+        let set = this.ngramIndex.get(bg);
+        if (!set) {
+          set = new Set();
+          this.ngramIndex.set(bg, set);
+        }
+        set.add(item);
+      }
+    }
+  }
+
   private rebuildIndexes() {
     this.exactIndex.clear();
     this.normalizedIndex.clear();
     this.ngramIndex.clear();
 
-    const normalizeText = (t: string) => {
-      let res = t
-        .replace(/[\u3000\s\r\n\t]/g, "")
-        .replace(/[「」『』【】（）()〈〉《》""''“”]/g, "")
-        .replace(/[、，,]/g, "")
-        .replace(/[。．\.]+/g, "")
-        .replace(/[…‥・―ー\-~〜]/g, "")
-        .replace(/[！!]/g, "！")
-        .replace(/[？?]/g, "？")
-        .replace(/《[^》]+》/g, "")
-        .toLowerCase()
-        .trim();
-      return res || (t.trim().length > 0 ? "..." : "");
-    };
-
     for (const item of this.entries) {
-      const trimmed = item.message.trim();
-      if (trimmed && !this.exactIndex.has(trimmed)) {
-        this.exactIndex.set(trimmed, item);
-      }
-      const norm = normalizeText(trimmed);
-      if (norm && !this.normalizedIndex.has(norm)) {
-        this.normalizedIndex.set(norm, item);
-      }
-
-      // Build Inverted Bigram Index for instant candidate retrieval
-      if (norm.length >= 2) {
-        for (let i = 0; i < norm.length - 1; i++) {
-          const bg = norm.slice(i, i + 2);
-          let set = this.ngramIndex.get(bg);
-          if (!set) {
-            set = new Set();
-            this.ngramIndex.set(bg, set);
-          }
-          set.add(item);
-        }
-      }
+      this.insertEntryIntoIndexes(item);
     }
   }
 
@@ -573,6 +577,7 @@ class ScriptManagerService {
     };
 
     this.entries = [newEntry, ...this.entries];
+    this.insertEntryIntoIndexes(newEntry);
     this.saveState();
     return true;
   }
@@ -600,26 +605,6 @@ class ScriptManagerService {
         .replace(/[\u3000\s【】「」『』()（）\[\]{}<>《》:：#@0-9]/g, "")
         .toLowerCase()
         .trim();
-
-    const normalizeText = (t: string) => {
-      let res = t
-        .replace(/[\u3000\s\r\n\t]/g, "")
-        .replace(/[「」『』【】（）()〈〉《》""''“”]/g, "")
-        .replace(/[、，,]/g, "")
-        .replace(/[。．\.]+/g, "")
-        .replace(/[…‥・―ー\-~〜]/g, "")
-        .replace(/[！!]/g, "！")
-        .replace(/[？?]/g, "？")
-        .replace(/《[^》]+》/g, "")
-        .toLowerCase()
-        .trim();
-
-      // If string was purely silence/dots (e.g. "……" or "..."), standardize to "..."
-      if (!res && t.trim().length > 0) {
-        return "...";
-      }
-      return res;
-    };
 
     const normCleanSpk = normalizeSpeaker(cleanSpk);
 
@@ -669,7 +654,7 @@ class ScriptManagerService {
     }
 
     // 2. Fast Index Normalized Match (O(1))
-    const normalizedQuery = normalizeText(cleanMsg);
+    const normalizedQuery = this.normalizeForIndex(cleanMsg);
     if (normalizedQuery.length > 0) {
       const normHit = this.normalizedIndex.get(normalizedQuery);
       if (normHit && threshold <= 0.98) {
@@ -686,7 +671,7 @@ class ScriptManagerService {
       if (threshold <= 0.90 && normalizedQuery.length >= 5) {
         let substrFallback: ScriptEntry | null = null;
         for (const item of this.entries) {
-          const normItem = normalizeText(item.message);
+          const normItem = this.normalizeForIndex(item.message);
           if (normItem.length >= 5) {
             if (normItem.includes(normalizedQuery) || normalizedQuery.includes(normItem)) {
               if (speakerMatches(normCleanSpk, item.speaker)) {
@@ -727,7 +712,7 @@ class ScriptManagerService {
       const candidateList = candidates.size > 0 ? Array.from(candidates) : this.entries;
 
       for (const item of candidateList) {
-        const normItem = normalizeText(item.message);
+        const normItem = this.normalizeForIndex(item.message);
         if (Math.abs(normItem.length - normalizedQuery.length) > 15) continue;
         const rawScore = calcBigramDice(normalizedQuery, normItem);
 

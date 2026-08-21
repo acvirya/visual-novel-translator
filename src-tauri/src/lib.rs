@@ -564,12 +564,27 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(TextractorState::new())
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if window.label() == "main" {
-                    let state = window.state::<TextractorState>();
-                    textractor::stop_textractor_internal(&state);
-                    window.app_handle().exit(0);
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    if window.label() == "main" {
+                        let state = window.state::<TextractorState>();
+                        textractor::stop_textractor_internal(&state);
+                        window.app_handle().exit(0);
+                    } else if window.label() == "overlay" || window.label() == "region-selector" {
+                        if let Some(main) = window.app_handle().get_webview_window("main") {
+                            let _ = main.show();
+                            let _ = main.set_focus();
+                        }
+                    }
                 }
+                tauri::WindowEvent::Destroyed => {
+                    if window.label() == "overlay" || window.label() == "region-selector" {
+                        if let Some(main) = window.app_handle().get_webview_window("main") {
+                            let _ = main.show();
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

@@ -451,18 +451,18 @@ class TranslationManager {
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
       translatedMessage = res.translatedMessage || cleanMsg;
     }
-    // C. OpenRouter LLM Translation with Multi-turn Context & Glossary Injection
+    // C. OpenRouter LLM Translation with Multi-turn Context, Dynamic Languages, Style Presets & Glossary Injection
     else {
       providerLabel = `OpenRouter (${providerId.split("/").pop() || providerId})`;
       const apiKey = settingsManager.getOpenRouterApiKey();
-      const systemPrompt = localStorage.getItem("vn_live_system_prompt") || undefined;
 
       const res = await translateWithOpenRouter({
         apiKey,
         modelId: providerId,
         speaker: cleanSpk,
         message: cleanMsg,
-        systemPrompt,
+        sourceLang,
+        targetLang,
         contextHistory: this.contextHistory,
       });
 

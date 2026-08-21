@@ -34,11 +34,202 @@ export interface OpenRouterTestResult {
   keyInfo?: OpenRouterKeyInfo;
 }
 
-export const DEFAULT_LIVE_SYSTEM_PROMPT =
-  `You are an expert Visual Novel localizer translating Japanese dialogue to natural English.\nTranslate accurately, preserving character personality, emotional nuance, tone, and Japanese honorifics (-san, -kun, -chan, -senpai, -sensei) where appropriate.\n\n### Structured Output Schema Requirements:\nYou MUST ALWAYS respond with a valid, clean JSON object matching this schema:\n{\n  "translated_speaker": "Character name in English (or null if no speaker in input)",\n  "translated_message": "Natural English translation of the dialogue"\n}\n\nDo not include commentary or markdown wrapper outside the JSON object.`;
+export interface PromptStylePreset {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  isBuiltIn?: boolean;
+}
 
-export const DEFAULT_BATCH_SYSTEM_PROMPT =
-  "You are an expert Visual Novel script translator processing multiple dialogue entries.\nTranslate each dialogue line accurately while maintaining strict character voice consistency and context continuity across lines.\nPreserve JSON schema keys and line structure identically without omitting or modifying structure.";
+export const BUILTIN_STYLE_PRESETS: PromptStylePreset[] = [
+  {
+    id: "natural_anime",
+    name: "Natural Anime & VN Localization (Default)",
+    description: "Natural dialogue flow, preserves character personality, emotional nuance, and Japanese honorifics",
+    instructions: "Translate accurately, preserving character personality, emotional nuance, tone, and Japanese honorifics (-san, -kun, -chan, -senpai, -sensei, -sama) where appropriate. Ensure dialogue flows smoothly and naturally without stiff phrasing.",
+    isBuiltIn: true,
+  },
+  {
+    id: "literal_accurate",
+    name: "Literal & Faithful",
+    description: "Strict sentence structure, high grammatical fidelity, ideal for language learners and close reading",
+    instructions: "Translate faithfully and accurately to the original sentence structure and meaning. Preserve grammatical nuances, idioms with direct equivalents, and avoid excessive localization or slang deviations.",
+    isBuiltIn: true,
+  },
+  {
+    id: "light_novel",
+    name: "Light Novel & Literary Prose",
+    description: "Polished, evocative narrative prose with rich descriptive flow for emotional & deep visual novels",
+    instructions: "Translate with polished literary flair suitable for high-quality light novels. Render narrative prose evocatively while keeping dialogue vivid, expressive, and true to character voices.",
+    isBuiltIn: true,
+  },
+  {
+    id: "rpg_fantasy",
+    name: "RPG & High Fantasy Lore",
+    description: "Heroic, dramatic styling with attention to titles, spells, factions, and worldbuilding terminology",
+    instructions: "Translate with atmospheric fantasy and adventure tone. Use fitting vocabulary for titles, magic spells, archaic speech, and world lore without sacrificing clarity.",
+    isBuiltIn: true,
+  },
+  {
+    id: "humorous_vibrant",
+    name: "Vibrant & Dynamic Slang",
+    description: "Expressive, witty localization for comedy, moe, and slice-of-life visual novels",
+    instructions: "Translate with witty, punchy, and modern colloquial dialogue fitting for comedy and slice-of-life visual novels. Make banter dynamic and humorous while respecting original character intent.",
+    isBuiltIn: true,
+  },
+];
+
+export const SUPPORTED_LANGUAGES: Record<string, string> = {
+  ja: "Japanese",
+  en: "English",
+  id: "Indonesian",
+  zh: "Chinese",
+  "zh-cn": "Simplified Chinese",
+  "zh-tw": "Traditional Chinese",
+  ko: "Korean",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+  ru: "Russian",
+  vi: "Vietnamese",
+  th: "Thai",
+  pt: "Portuguese",
+  it: "Italian",
+  pl: "Polish",
+  tr: "Turkish",
+  ar: "Arabic",
+  auto: "Original Language",
+};
+
+export function getLanguageDisplayName(code: string): string {
+  const clean = (code || "").trim();
+  if (!clean) return "English";
+  const lower = clean.toLowerCase();
+  if (SUPPORTED_LANGUAGES[lower]) return SUPPORTED_LANGUAGES[lower];
+  if (SUPPORTED_LANGUAGES[clean]) return SUPPORTED_LANGUAGES[clean];
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
+const USER_STYLE_PRESETS_STORAGE_KEY = "vn_user_style_presets_v1";
+
+export function loadUserStylePresets(): PromptStylePreset[] {
+  try {
+    const raw = localStorage.getItem(USER_STYLE_PRESETS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn("Failed to load custom style presets:", e);
+  }
+  return [];
+}
+
+export function saveUserStylePresets(presets: PromptStylePreset[]) {
+  try {
+    localStorage.setItem(USER_STYLE_PRESETS_STORAGE_KEY, JSON.stringify(presets));
+  } catch (e) {
+    console.error("Failed to save custom style presets:", e);
+  }
+}
+
+export function getAllStylePresets(customPresets?: PromptStylePreset[]): PromptStylePreset[] {
+  const custom = customPresets || loadUserStylePresets();
+  return [...BUILTIN_STYLE_PRESETS, ...custom];
+}
+
+export function getActiveStylePresetId(): string {
+  return localStorage.getItem("vn_active_style_preset_id") || "natural_anime";
+}
+
+export function getActiveStyleInstructions(): string {
+  const saved = localStorage.getItem("vn_active_style_instructions");
+  if (saved !== null && saved.trim()) return saved.trim();
+  const activeId = getActiveStylePresetId();
+  const found = getAllStylePresets().find((p) => p.id === activeId);
+  return found ? found.instructions : BUILTIN_STYLE_PRESETS[0].instructions;
+}
+
+export interface BuildSystemPromptOptions {
+  mode: "live" | "batch";
+  sourceLang?: string;
+  targetLang?: string;
+  styleInstructions?: string;
+  includeGlossary?: boolean;
+}
+
+/**
+ * Modular System Prompt Builder:
+ * Part 1: Translation Role & Languages (Auto-assembled)
+ * Part 2: Language Style / Guidelines (User-controlled via Presets & Textarea)
+ * Part 3: Glossary & Addressing Rules (Auto-injected)
+ * Part 4: Structured Output Schema Requirements (Auto-locked)
+ */
+export function buildCompleteSystemPrompt(options: BuildSystemPromptOptions): string {
+  const {
+    mode,
+    sourceLang = localStorage.getItem("vn_source_lang") || "ja",
+    targetLang = localStorage.getItem("vn_target_lang") || "en",
+    styleInstructions = getActiveStyleInstructions(),
+    includeGlossary = true,
+  } = options;
+
+  const srcName = getLanguageDisplayName(sourceLang);
+  const tgtName = getLanguageDisplayName(targetLang);
+
+  // 1. Part 1: Role & Language Declaration
+  const part1 = mode === "live"
+    ? `You are an expert Visual Novel localizer translating dialogue from ${srcName} to natural ${tgtName}.`
+    : `You are an expert Visual Novel script translator processing multiple dialogue entries from ${srcName} to natural ${tgtName}.\nTranslate each dialogue line accurately while maintaining strict character voice consistency and context continuity across lines.`;
+
+  // 2. Part 2: Translation Style & Tone
+  const cleanStyle = styleInstructions.trim();
+  const part2 = cleanStyle ? `\n\n### Translation Style & Character Voice Guidelines:\n${cleanStyle}` : "";
+
+  // 3. Part 3: Glossary & Addressing Rules
+  const part3 = includeGlossary ? buildGlossarySystemPrompt() : "";
+
+  // 4. Part 4: Structured Output Schema & Strict Preservation Rules
+  let part4 = "";
+  if (mode === "live") {
+    part4 = `\n\n### Structured Output Schema Requirements:
+You MUST ALWAYS respond with a valid, clean JSON object matching this schema:
+{
+  "translated_speaker": "Character name in ${tgtName} (or null if no speaker in input)",
+  "translated_message": "Natural ${tgtName} translation of the dialogue"
+}
+
+### CRITICAL PRESERVATION & TRANSLATION RULES (MANDATORY):
+1. **NEVER Skip Punctuation, Sound Effects, or Silence Lines**: If the input dialogue contains only ellipsis (e.g. 「......」, 「……」, "..."), exclamation marks, question marks, sound effects, or silence, NEVER skip or omit it—output the exact punctuation/silence as-is in "translated_message".
+2. **NEVER Skip Text Already in ${tgtName}**: If the speaker name or dialogue message is already in ${tgtName} (e.g. English loanwords, foreign character names, or phrases), DO NOT skip or omit it—preserve and output it as-is without dropping.
+3. **Strict JSON Only**: Do NOT include commentary, explanations, work logs, or markdown fences outside the JSON object.`;
+  } else {
+    part4 = `\n\n### Batch Output Schema:
+You MUST return a JSON object containing the "translations" array for all input items:
+{
+  "translations": [
+    {
+      "id": 1,
+      "translated_speaker": "Character name in ${tgtName} (or null)",
+      "translated_message": "${tgtName} dialogue translation"
+    }
+  ]
+}
+
+### CRITICAL PRESERVATION & BATCH RULES (MANDATORY):
+1. **NEVER Skip Any Line ID**: You MUST include and translate EVERY single input line with its exact matching "id" in the "translations" array. NEVER skip, omit, merge, drop, or reorder any line IDs under any circumstances.
+2. **NEVER Skip Punctuation, Sound Effects, or Silence Lines**: Even if a line has nothing that needs translation (such as 「......」, 「……」, "...", "!?"), NEVER skip it—output the exact punctuation/silence as-is with its exact matching "id".
+3. **NEVER Skip Text Already in ${tgtName}**: If a character name or dialogue line is already in ${tgtName} (e.g. English names, loanwords, or phrases), DO NOT skip or drop it—preserve and output it as-is with its exact matching "id".
+4. **Preserve Schema Structure**: Preserve JSON schema keys and line structure identically without omitting or modifying structure.
+5. **Strict JSON Only**: DO NOT return meta summaries, explanations, work logs, or markdown wrapper outside the JSON object.`;
+  }
+
+  return `${part1}${part2}${part3}${part4}`;
+}
+
+export const DEFAULT_LIVE_SYSTEM_PROMPT = buildCompleteSystemPrompt({ mode: "live" });
+export const DEFAULT_BATCH_SYSTEM_PROMPT = buildCompleteSystemPrompt({ mode: "batch" });
 
 /**
  * Format model input and output pricing per 1M tokens with up/down arrows
@@ -283,6 +474,9 @@ export async function translateWithOpenRouter(options: {
   modelId: string;
   speaker?: string;
   message: string;
+  sourceLang?: string;
+  targetLang?: string;
+  styleInstructions?: string;
   systemPrompt?: string;
   temperature?: number;
   contextHistory?: { user: string; assistant: string }[];
@@ -298,7 +492,10 @@ export async function translateWithOpenRouter(options: {
     modelId,
     speaker,
     message,
-    systemPrompt = DEFAULT_LIVE_SYSTEM_PROMPT,
+    sourceLang,
+    targetLang,
+    styleInstructions,
+    systemPrompt,
     temperature = 0.3,
     contextHistory = [],
   } = options;
@@ -315,9 +512,18 @@ export async function translateWithOpenRouter(options: {
     };
   }
 
-  // 1. Build Full System Prompt (Base + Glossary entries appended)
-  const glossaryAddendum = buildGlossarySystemPrompt();
-  const fullSystemPrompt = `${systemPrompt}${glossaryAddendum}`;
+  // 1. Build Modular System Prompt
+  const fullSystemPrompt = systemPrompt
+    ? (systemPrompt.includes("### Character & Translation Glossary")
+        ? systemPrompt
+        : `${systemPrompt}${buildGlossarySystemPrompt()}`)
+    : buildCompleteSystemPrompt({
+        mode: "live",
+        sourceLang,
+        targetLang,
+        styleInstructions,
+        includeGlossary: true,
+      });
 
   // 2. Format Structured JSON Prompt
   const promptText = formatStructuredDialogueInput(speaker, message);

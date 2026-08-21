@@ -352,13 +352,11 @@ pub fn stop_textractor_internal(state: &TextractorState) {
                 let detach_cmd = format!("detach -P{}\r\n", pid);
                 let _ = stdin.write_all(detach_cmd.as_bytes());
                 let _ = stdin.flush();
-                // Grace period to allow texthook.dll to unload cleanly from target process
-                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
     }
 
-    // 2. Close stdin handle
+    // 2. Close stdin handle to signal EOF
     {
         let mut s = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
         *s = None;

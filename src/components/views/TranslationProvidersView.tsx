@@ -5,8 +5,15 @@ import {
   formatModelPricing,
   OpenRouterModel,
   OpenRouterKeyInfo,
-  DEFAULT_LIVE_SYSTEM_PROMPT,
-  DEFAULT_BATCH_SYSTEM_PROMPT,
+  PromptStylePreset,
+  BUILTIN_STYLE_PRESETS,
+  loadUserStylePresets,
+  saveUserStylePresets,
+  getAllStylePresets,
+  getActiveStylePresetId,
+  getActiveStyleInstructions,
+  buildCompleteSystemPrompt,
+  getLanguageDisplayName,
 } from "../../services/openRouterService";
 import {
   Zap,
@@ -18,20 +25,19 @@ import {
   RotateCcw,
   Layers,
   Radio,
-  Star,
   ArrowUp,
   ArrowDown,
   Sliders,
+  Plus,
+  Trash2,
+  Eye,
+  EyeOff,
+  Check,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import { useToast } from "../common/ToastProvider";
-
-const INITIAL_STARRED_MODEL_IDS: string[] = [
-  "anthropic/claude-3.5-sonnet",
-  "deepseek/deepseek-chat",
-  "google/gemini-2.5-flash",
-  "openai/gpt-4o-mini",
-];
+import { useTranslationStore } from "../../stores/useTranslationStore";
+import { Modal } from "../common/Modal";
 
 const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
   {
@@ -68,6 +74,7 @@ const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
 
 export const TranslationProvidersView: React.FC = () => {
   const toast = useToast();
+
   // OpenRouter Auth State
   const [apiKey, setApiKey] = useState<string>(() => {
     return localStorage.getItem("vn_openrouter_api_key") || "";
@@ -100,16 +107,6 @@ export const TranslationProvidersView: React.FC = () => {
     return null;
   });
 
-  // Starred Models State
-  const [starredModelIds, setStarredModelIds] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem("vn_starred_models");
-      return saved ? JSON.parse(saved) : INITIAL_STARRED_MODEL_IDS;
-    } catch {
-      return INITIAL_STARRED_MODEL_IDS;
-    }
-  });
-
   // Models State
   const [models, setModels] = useState<OpenRouterModel[]>(FALLBACK_POPULAR_MODELS);
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(false);
@@ -117,18 +114,30 @@ export const TranslationProvidersView: React.FC = () => {
     return localStorage.getItem("vn_selected_model") || "anthropic/claude-3.5-sonnet";
   });
 
-  // Hyperparameters & Prompts
+  // Hyperparameters
   const [temperature, setTemperature] = useState<number>(0.3);
-  const [livePrompt, setLivePrompt] = useState<string>(() => {
-    return localStorage.getItem("vn_live_system_prompt") || DEFAULT_LIVE_SYSTEM_PROMPT;
-  });
-  const [batchPrompt, setBatchPrompt] = useState<string>(() => {
-    return localStorage.getItem("vn_batch_system_prompt") || DEFAULT_BATCH_SYSTEM_PROMPT;
-  });
+
+  // Translation Style & Presets State
+  const [userPresets, setUserPresets] = useState<PromptStylePreset[]>(() => loadUserStylePresets());
+  const [activePresetId, setActivePresetId] = useState<string>(() => getActiveStylePresetId());
+  const [styleInstructions, setStyleInstructions] = useState<string>(() => getActiveStyleInstructions());
+
+  // Custom Preset Modal State
+  const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [customName, setCustomName] = useState<string>("");
+  const [customDesc, setCustomDesc] = useState<string>("");
+  const [customInst, setCustomInst] = useState<string>("");
+
+  // Prompt Full Preview State
+  const [showFullPreview, setShowFullPreview] = useState<boolean>(false);
+  const [previewMode, setPreviewMode] = useState<"live" | "batch">("live");
 
   // Free MT Endpoints
   const [useGoogleTranslate, setUseGoogleTranslate] = useState<boolean>(true);
   const [useDeepLFree, setUseDeepLFree] = useState<boolean>(true);
+
+  const sourceLang = localStorage.getItem("vn_source_lang") || "ja";
+  const targetLang = localStorage.getItem("vn_target_lang") || "en";
 
   // Auto-fetch OpenRouter models on load
   const loadModels = async () => {
@@ -144,36 +153,19 @@ export const TranslationProvidersView: React.FC = () => {
     loadModels();
   }, []);
 
-  // Save changes to localStorage
   useEffect(() => {
     localStorage.setItem("vn_openrouter_api_key", apiKey);
   }, [apiKey]);
 
   useEffect(() => {
-    localStorage.setItem("vn_starred_models", JSON.stringify(starredModelIds));
-  }, [starredModelIds]);
-
-  useEffect(() => {
     localStorage.setItem("vn_selected_model", selectedModelId);
+    useTranslationStore.getState().setSelectedProvider(selectedModelId);
   }, [selectedModelId]);
 
   useEffect(() => {
-    localStorage.setItem("vn_live_system_prompt", livePrompt);
-  }, [livePrompt]);
-
-  useEffect(() => {
-    localStorage.setItem("vn_batch_system_prompt", batchPrompt);
-  }, [batchPrompt]);
-
-  // Star / Unstar Model
-  const handleToggleStar = (modelId: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    if (starredModelIds.includes(modelId)) {
-      setStarredModelIds(starredModelIds.filter((id) => id !== modelId));
-    } else {
-      setStarredModelIds([...starredModelIds, modelId]);
-    }
-  };
+    localStorage.setItem("vn_active_style_preset_id", activePresetId);
+    localStorage.setItem("vn_active_style_instructions", styleInstructions);
+  }, [activePresetId, styleInstructions]);
 
   // Test Connection
   const handleTestConnection = async () => {
@@ -200,238 +192,315 @@ export const TranslationProvidersView: React.FC = () => {
       localStorage.setItem("vn_openrouter_key_status", "invalid");
       localStorage.removeItem("vn_openrouter_verified_key");
       localStorage.removeItem("vn_openrouter_key_info");
-      toast.error(result.message || "Invalid OpenRouter API Key", "Verification Failed");
+      toast.error(result.message || "Failed to verify API Key.", "Validation Error");
     }
   };
 
-  // Filtered list of starred models for quick cards
-  const starredModelsList = models.filter((m) => starredModelIds.includes(m.id));
+  const allPresets = getAllStylePresets(userPresets);
+
+  // Handle Preset Selection
+  const handleSelectPreset = (preset: PromptStylePreset) => {
+    setActivePresetId(preset.id);
+    setStyleInstructions(preset.instructions);
+    localStorage.setItem("vn_active_style_preset_id", preset.id);
+    localStorage.setItem("vn_active_style_instructions", preset.instructions);
+    toast.info(`Switched to "${preset.name}" preset.`, "Style Updated");
+  };
+
+  // Handle Reset to Preset Default
+  const handleResetPreset = () => {
+    const found = allPresets.find((p) => p.id === activePresetId);
+    if (found) {
+      setStyleInstructions(found.instructions);
+      localStorage.setItem("vn_active_style_instructions", found.instructions);
+      toast.success(`Reset style instructions to "${found.name}" default.`, "Reset Success");
+    }
+  };
+
+  // Handle Create Custom Preset
+  const handleSaveCustom = () => {
+    if (!customName.trim() || !customInst.trim()) {
+      toast.warning("Preset Name and Instructions are required.", "Missing Information");
+      return;
+    }
+
+    const newPreset: PromptStylePreset = {
+      id: `custom_style_${Date.now()}`,
+      name: customName.trim(),
+      description: customDesc.trim() || "User-defined custom translation style",
+      instructions: customInst.trim(),
+      isBuiltIn: false,
+    };
+
+    const updated = [...userPresets, newPreset];
+    setUserPresets(updated);
+    saveUserStylePresets(updated);
+    setActivePresetId(newPreset.id);
+    setStyleInstructions(newPreset.instructions);
+    setShowAddModal(false);
+    setCustomName("");
+    setCustomDesc("");
+    setCustomInst("");
+    toast.success(`Custom style preset "${newPreset.name}" created and activated!`, "Preset Created");
+  };
+
+  // Handle Delete Custom Preset
+  const handleDeleteCustomPreset = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = userPresets.filter((p) => p.id !== id);
+    setUserPresets(updated);
+    saveUserStylePresets(updated);
+    if (activePresetId === id) {
+      const defaultPreset = BUILTIN_STYLE_PRESETS[0];
+      setActivePresetId(defaultPreset.id);
+      setStyleInstructions(defaultPreset.instructions);
+    }
+    toast.info("Custom style preset deleted.", "Preset Removed");
+  };
+
+  const selectedModel = models.find((m) => m.id === selectedModelId) || {
+    id: selectedModelId,
+    name: selectedModelId,
+    context_length: 0,
+    pricing: { prompt: "0", completion: "0" },
+  };
+
+  const pricingFormatted = formatModelPricing(selectedModel.pricing);
+
+  const assembledPrompt = buildCompleteSystemPrompt({
+    mode: previewMode,
+    sourceLang,
+    targetLang,
+    styleInstructions,
+    includeGlossary: true,
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%" }}>
-      {/* 1. OpenRouter API Key & Connection Status Card */}
+      {/* 1. OpenRouter API Key & Authentication */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Zap size={16} color="var(--accent-gold)" /> OpenRouter API Gateway
+              <Zap size={16} /> OpenRouter API Key & Authentication
             </span>
             <span className="card-subtitle">
-              Universal API connection for Claude 3.5 Sonnet, GPT-4o, DeepSeek V3, Gemini, and Qwen
+              Universal multi-model gateway (Claude 3.5 Sonnet, GPT-4o, Gemini 2.5, DeepSeek V3, Qwen)
             </span>
           </div>
 
-          {/* Status Badge (Initial: Invalid) */}
-          <span
-            className={keyStatus === "active" ? "badge badge-success" : "badge badge-danger"}
-            style={{
-              padding: "4px 10px",
-              fontWeight: 700,
-              fontSize: "12px",
-              display: "flex",
-              alignItems: "center",
-              gap: "5px",
-            }}
-          >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {keyStatus === "active" ? (
-              <>
-                <CheckCircle2 size={12} /> Active (Verified)
-              </>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  color: "#3fb950",
+                  backgroundColor: "rgba(63, 185, 80, 0.12)",
+                  border: "1px solid rgba(63, 185, 80, 0.3)",
+                  padding: "4px 10px",
+                  borderRadius: "20px",
+                }}
+              >
+                <CheckCircle2 size={14} /> Active & Verified
+              </span>
             ) : (
-              <>
-                <AlertCircle size={12} /> Invalid (Unverified)
-              </>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  color: "#f85149",
+                  backgroundColor: "rgba(248, 81, 73, 0.12)",
+                  border: "1px solid rgba(248, 81, 73, 0.3)",
+                  padding: "4px 10px",
+                  borderRadius: "20px",
+                }}
+              >
+                <AlertCircle size={14} /> Unverified
+              </span>
             )}
-          </span>
+          </div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              OpenRouter API Key
-            </label>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => {
-                  const newKey = e.target.value;
-                  setApiKey(newKey);
-                  const verifiedKey = localStorage.getItem("vn_openrouter_verified_key");
-                  if (verifiedKey && newKey.trim() === verifiedKey.trim()) {
-                    setKeyStatus("active");
-                    localStorage.setItem("vn_openrouter_key_status", "active");
-                    setTestFeedback({ isSuccess: true, message: "Key verified!" });
-                  } else {
-                    setKeyStatus("invalid");
-                    localStorage.setItem("vn_openrouter_key_status", "invalid");
-                    setTestFeedback(null);
-                  }
-                }}
-                placeholder="sk-or-v1-..."
-                style={{ flex: 1, fontFamily: "var(--font-mono)" }}
-              />
-              <button
-                onClick={handleTestConnection}
-                disabled={isTesting || !apiKey.trim()}
-                className="btn-primary"
-                style={{ padding: "7px 18px", whiteSpace: "nowrap" }}
-              >
-                {isTesting ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}
-                <span>{isTesting ? "Validating..." : "Test Connection"}</span>
-              </button>
-            </div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <input
+              type="password"
+              placeholder="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setKeyStatus("invalid");
+              }}
+              style={{ flex: 1, fontFamily: "monospace", fontSize: "13px" }}
+            />
 
-            {/* Test Connection Feedback Banner */}
-            {testFeedback && (
-              <div
-                style={{
-                  marginTop: "8px",
-                  padding: "8px 12px",
-                  borderRadius: "var(--radius-sm)",
-                  fontSize: "12px",
-                  backgroundColor: testFeedback.isSuccess ? "rgba(63, 185, 80, 0.12)" : "rgba(248, 81, 73, 0.12)",
-                  border: testFeedback.isSuccess ? "1px solid var(--accent-success)" : "1px solid var(--accent-danger)",
-                  color: testFeedback.isSuccess ? "var(--accent-success)" : "var(--accent-danger)",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "4px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  {testFeedback.isSuccess ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-                  <span style={{ fontWeight: 600 }}>{testFeedback.message}</span>
-                </div>
-                {keyInfo && keyInfo.rate_limit && (
-                  <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginLeft: "22px" }}>
-                    Rate Limit: {keyInfo.rate_limit.requests} requests per {keyInfo.rate_limit.interval}
-                  </div>
-                )}
-              </div>
-            )}
+            <button
+              onClick={handleTestConnection}
+              disabled={isTesting || !apiKey.trim()}
+              className="btn-primary"
+              style={{ minWidth: "140px" }}
+            >
+              {isTesting ? (
+                <>
+                  <RefreshCw size={14} className="spin" />
+                  <span>Testing...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={14} />
+                  <span>Verify Key</span>
+                </>
+              )}
+            </button>
           </div>
+
+          {testFeedback && (
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "12px",
+                backgroundColor: testFeedback.isSuccess ? "rgba(63, 185, 80, 0.1)" : "rgba(248, 81, 73, 0.1)",
+                border: `1px solid ${testFeedback.isSuccess ? "rgba(63, 185, 80, 0.3)" : "rgba(248, 81, 73, 0.3)"}`,
+                color: testFeedback.isSuccess ? "#3fb950" : "#f85149",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              {testFeedback.isSuccess ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+              <span>{testFeedback.message}</span>
+            </div>
+          )}
+
+          {keyInfo && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: "10px",
+                backgroundColor: "var(--bg-app)",
+                padding: "10px 14px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border-subtle)",
+                fontSize: "12px",
+              }}
+            >
+              <div>
+                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Key Label</span>
+                <span style={{ fontWeight: 600 }}>{keyInfo.label || "Default"}</span>
+              </div>
+              <div>
+                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Credit Usage</span>
+                <span style={{ fontWeight: 600, color: "var(--accent-primary)" }}>
+                  ${keyInfo.usage?.toFixed(4) || "0.0000"}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Credit Limit</span>
+                <span style={{ fontWeight: 600 }}>
+                  {keyInfo.limit !== null ? `$${keyInfo.limit}` : "Unlimited"}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Tier Status</span>
+                <span style={{ fontWeight: 600, color: keyInfo.is_free_tier ? "var(--accent-yellow)" : "var(--accent-green)" }}>
+                  {keyInfo.is_free_tier ? "Free Tier" : "Paid Pay-As-You-Go"}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* 2. DEDICATED SECTION: Translation Models & Starred Favorites */}
+      {/* 2. Primary Translation Model Selection */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Star size={16} color="var(--accent-gold)" fill="var(--accent-gold)" /> Translation Models & Starred Favorites
+              <Sparkles size={16} /> Active Translation Model
             </span>
             <span className="card-subtitle">
-              Quickly select or star your preferred translation models • {models.length} live OpenRouter models loaded
+              Select which LLM powers real-time live subtitle streaming and script translations
             </span>
           </div>
 
           <button
-            onClick={loadModels}
+            onClick={() => loadModels()}
             disabled={isLoadingModels}
             className="btn-secondary"
-            style={{ padding: "4px 10px", fontSize: "12px" }}
-            title="Re-fetch latest models list from OpenRouter"
+            style={{ fontSize: "11px", padding: "4px 8px" }}
           >
             <RefreshCw size={12} className={isLoadingModels ? "spin" : ""} />
-            <span>{isLoadingModels ? "Fetching..." : "Refresh Models"}</span>
+            <span>Refresh Models</span>
           </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          {/* Active Model Selector with Hierarchical Dropdown */}
-          <div
-            style={{
-              backgroundColor: "var(--bg-app)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              padding: "12px 14px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "8px",
-            }}
-          >
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
-              Active Translation Model (Used by Live, Overlay, & Batch Translate)
-            </span>
-
-            {/* Hierarchical Combobox Component */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+          <div>
+            <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "6px" }}>
+              Selected LLM Provider & Model:
+            </label>
             <ModelSelectorCombobox
               selectedModelId={selectedModelId}
-              onSelectModel={(id) => {
-                setSelectedModelId(id);
-                localStorage.setItem("vn_selected_model", id);
-              }}
+              onSelectModel={(id) => setSelectedModelId(id)}
+              disabled={isLoadingModels}
             />
           </div>
 
-          {/* Starred Favorites Grid Cards */}
-          <div>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "8px" }}>
-              Quick Starred Favorites ({starredModelsList.length} pinned):
-            </span>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "10px" }}>
-              {starredModelsList.map((m) => {
-                const isSelected = m.id === selectedModelId;
-                const pricing = formatModelPricing(m.pricing);
-                return (
-                  <div
-                    key={m.id}
-                    onClick={() => setSelectedModelId(m.id)}
-                    style={{
-                      backgroundColor: isSelected ? "rgba(78, 115, 223, 0.15)" : "var(--bg-app)",
-                      border: isSelected ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
-                      borderRadius: "var(--radius-sm)",
-                      padding: "10px 12px",
-                      cursor: "pointer",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "6px",
-                      transition: "all 0.15s ease",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ fontWeight: 600, fontSize: "12.5px", color: "var(--text-primary)" }}>
-                        {m.name}
-                      </span>
-                      <button
-                        onClick={(e) => handleToggleStar(m.id, e)}
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px", color: "var(--accent-gold)" }}
-                        title="Remove from starred"
-                      >
-                        <Star size={14} fill="var(--accent-gold)" />
-                      </button>
-                    </div>
+          {/* Model Pricing & Context Info Badge */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              backgroundColor: "var(--bg-app)",
+              padding: "10px 14px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border-subtle)",
+              fontSize: "12px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{selectedModel.name}</span>
+              <span style={{ color: "var(--text-muted)", fontSize: "11.5px" }}>
+                Context: {selectedModel.context_length ? `${(selectedModel.context_length / 1000).toFixed(0)}k tokens` : "Unknown"}
+              </span>
+            </div>
 
-                    <span style={{ fontSize: "11px", fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>
-                      {m.id}
-                    </span>
-
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "2px" }}>
-                      {m.context_length > 0 && (
-                        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
-                          {Math.round(m.context_length / 1000)}k ctx
-                        </span>
-                      )}
-                      <div style={{ display: "flex", gap: "6px", fontSize: "11px" }}>
-                        <span style={{ color: "var(--accent-cyan)", display: "flex", alignItems: "center", gap: "2px" }}>
-                          <ArrowUp size={10} /> {pricing.inputPerMillion}/M
-                        </span>
-                        <span style={{ color: "var(--accent-gold)", display: "flex", alignItems: "center", gap: "2px" }}>
-                          <ArrowDown size={10} /> {pricing.outputPerMillion}/M
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              {pricingFormatted.isFree ? (
+                <span style={{ color: "var(--accent-green)", fontWeight: 600 }}>100% Free Tier</span>
+              ) : (
+                <>
+                  <span style={{ display: "flex", alignItems: "center", gap: "2px", color: "var(--text-muted)" }}>
+                    <ArrowDown size={12} color="#3fb950" /> {pricingFormatted.inputPerMillion}/M in
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: "2px", color: "var(--text-muted)" }}>
+                    <ArrowUp size={12} color="#f85149" /> {pricingFormatted.outputPerMillion}/M out
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
-          {/* Temperature / Creativity Slider */}
-          <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Temperature / Creativity: <strong>{temperature}</strong>
-            </label>
+          {/* Temperature Slider */}
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <label style={{ fontSize: "12px", fontWeight: 600 }}>
+                Creativity & Temperature: <span style={{ color: "var(--accent-primary)" }}>{temperature}</span>
+              </label>
+              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                {temperature <= 0.2 ? "Strict & Literal" : temperature <= 0.5 ? "Balanced VN Dialogue (Recommended)" : "High Creativity"}
+              </span>
+            </div>
             <input
               type="range"
               min={0}
@@ -439,105 +508,197 @@ export const TranslationProvidersView: React.FC = () => {
               step={0.05}
               value={temperature}
               onChange={(e) => setTemperature(Number(e.target.value))}
-              style={{ width: "100%", marginTop: "4px" }}
+              style={{ width: "100%", marginTop: "6px" }}
             />
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10.5px", color: "var(--text-muted)", marginTop: "2px" }}>
-              <span>0.0 (Strict & Literal VN Translation)</span>
-              <span>1.0 (Creative & Natural Dialogue Flow)</span>
-            </div>
           </div>
         </div>
       </div>
 
-      {/* 3. System Prompts Section (Dual Boxes) */}
+      {/* 3. Translation Style & Tone Presets (Modular Prompting) */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Sliders size={16} /> Translation System Prompts
+              <Sliders size={16} /> Translation Style & Tone Presets
             </span>
             <span className="card-subtitle">
-              Configure specialized instructions for live streaming vs multi-line batch scripts
+              Adjust character personality and translation tone without worrying about JSON schemas or language tags
             </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <button
+              onClick={() => {
+                setCustomInst(styleInstructions);
+                setShowAddModal(true);
+              }}
+              className="btn-secondary"
+              style={{ fontSize: "11.5px", padding: "4px 10px", display: "flex", alignItems: "center", gap: "5px" }}
+            >
+              <Plus size={13} />
+              <span>Add Custom Style</span>
+            </button>
+
+            <button
+              onClick={handleResetPreset}
+              className="btn-secondary"
+              style={{ fontSize: "11.5px", padding: "4px 8px" }}
+              title="Reset active style to preset default instructions"
+            >
+              <RotateCcw size={13} />
+              <span>Reset Style</span>
+            </button>
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-          {/* Box 1: Live / Individual Translation Prompt */}
-          <div
-            style={{
-              backgroundColor: "var(--bg-app)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              padding: "12px 14px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "8px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontWeight: 600, fontSize: "12.5px", color: "var(--accent-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
-                <Radio size={14} /> 1. Live & Individual Translation Prompt
-              </span>
-              <button
-                onClick={() => setLivePrompt(DEFAULT_LIVE_SYSTEM_PROMPT)}
-                className="btn-secondary"
-                style={{ padding: "2px 6px", fontSize: "10.5px" }}
-                title="Reset to default live prompt"
+        {/* Preset Selector Cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px", marginBottom: "14px" }}>
+          {allPresets.map((preset) => {
+            const isSelected = activePresetId === preset.id;
+            return (
+              <div
+                key={preset.id}
+                onClick={() => handleSelectPreset(preset)}
+                style={{
+                  backgroundColor: isSelected ? "rgba(88, 166, 255, 0.1)" : "var(--bg-app)",
+                  border: `1.5px solid ${isSelected ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+                  borderRadius: "var(--radius-sm)",
+                  padding: "10px 12px",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                  position: "relative",
+                  transition: "all 0.15s ease",
+                }}
               >
-                <RotateCcw size={10} />
-                <span>Reset</span>
-              </button>
-            </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontWeight: 600, fontSize: "12.5px", color: isSelected ? "var(--accent-primary)" : "var(--text-primary)" }}>
+                    {preset.name}
+                  </span>
+                  {!preset.isBuiltIn && (
+                    <button
+                      onClick={(e) => handleDeleteCustomPreset(preset.id, e)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--accent-red)",
+                        cursor: "pointer",
+                        padding: "2px",
+                        opacity: 0.7,
+                      }}
+                      title="Delete custom preset"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", lineHeight: "1.35" }}>
+                  {preset.description}
+                </span>
+                {isSelected && (
+                  <div style={{ marginTop: "4px", display: "flex", alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--accent-primary)", fontWeight: 600 }}>
+                    <Check size={12} /> Active Style
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Interactive Style Instructions Editor */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <label style={{ fontSize: "12px", fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
+              <Sparkles size={14} color="var(--accent-primary)" />
+              Active Translation Style Guidelines (Part 2):
+            </label>
             <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-              Applied during real-time hooked dialogues, manual inputs, and transparent in-game overlay mode.
+              {styleInstructions.length} characters
             </span>
-            <textarea
-              rows={5}
-              value={livePrompt}
-              onChange={(e) => setLivePrompt(e.target.value)}
-              style={{ width: "100%", fontSize: "12px", lineHeight: "1.5", resize: "vertical" }}
-              placeholder="Enter system prompt for single-line live translation..."
-            />
           </div>
 
-          {/* Box 2: Batch Translation Prompt */}
-          <div
+          <textarea
+            rows={4}
+            value={styleInstructions}
+            onChange={(e) => {
+              setStyleInstructions(e.target.value);
+              localStorage.setItem("vn_active_style_instructions", e.target.value);
+            }}
             style={{
+              width: "100%",
+              fontSize: "12px",
+              lineHeight: "1.5",
+              resize: "vertical",
+              fontFamily: "inherit",
               backgroundColor: "var(--bg-app)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              padding: "12px 14px",
+              borderColor: "var(--border-subtle)",
+            }}
+            placeholder="Type custom instructions for translation style, personality, honorifics, or tone..."
+          />
+
+          <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+            💡 <strong>Automatic Modular Assembly</strong>: Source language (<code>{getLanguageDisplayName(sourceLang)}</code>), target language (<code>{getLanguageDisplayName(targetLang)}</code>), character glossary, and strict JSON output schemas are assembled automatically by the system.
+          </span>
+        </div>
+
+        {/* Collapsible Full Assembled Prompt Preview */}
+        <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
+          <div
+            onClick={() => setShowFullPreview(!showFullPreview)}
+            style={{
               display: "flex",
-              flexDirection: "column",
-              gap: "8px",
+              alignItems: "center",
+              justifyContent: "space-between",
+              cursor: "pointer",
+              userSelect: "none",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontWeight: 600, fontSize: "12.5px", color: "var(--accent-cyan)", display: "flex", alignItems: "center", gap: "6px" }}>
-                <Layers size={14} /> 2. Batch Script Translation Prompt
-              </span>
-              <button
-                onClick={() => setBatchPrompt(DEFAULT_BATCH_SYSTEM_PROMPT)}
-                className="btn-secondary"
-                style={{ padding: "2px 6px", fontSize: "10.5px" }}
-                title="Reset to default batch prompt"
-              >
-                <RotateCcw size={10} />
-                <span>Reset</span>
-              </button>
-            </div>
-            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-              Applied during multi-file script batch processing for JSON format adherence and context consistency.
+            <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
+              {showFullPreview ? <EyeOff size={14} /> : <Eye size={14} />}
+              {showFullPreview ? "Hide" : "Inspect"} Full Assembled System Prompt (Parts 1–4)
             </span>
-            <textarea
-              rows={5}
-              value={batchPrompt}
-              onChange={(e) => setBatchPrompt(e.target.value)}
-              style={{ width: "100%", fontSize: "12px", lineHeight: "1.5", resize: "vertical" }}
-              placeholder="Enter system prompt for batch script translation..."
-            />
+
+            {showFullPreview && (
+              <div style={{ display: "flex", gap: "6px" }} onClick={(e) => e.stopPropagation()}>
+                <button
+                  onClick={() => setPreviewMode("live")}
+                  className={`btn-${previewMode === "live" ? "primary" : "secondary"}`}
+                  style={{ padding: "2px 8px", fontSize: "10.5px" }}
+                >
+                  <Radio size={11} /> Live Mode
+                </button>
+                <button
+                  onClick={() => setPreviewMode("batch")}
+                  className={`btn-${previewMode === "batch" ? "primary" : "secondary"}`}
+                  style={{ padding: "2px 8px", fontSize: "10.5px" }}
+                >
+                  <Layers size={11} /> Batch Mode
+                </button>
+              </div>
+            )}
           </div>
+
+          {showFullPreview && (
+            <div
+              style={{
+                marginTop: "10px",
+                backgroundColor: "var(--bg-app)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius-sm)",
+                padding: "12px",
+                fontSize: "11.5px",
+                fontFamily: "monospace",
+                whiteSpace: "pre-wrap",
+                color: "var(--text-primary)",
+                maxHeight: "260px",
+                overflowY: "auto",
+                lineHeight: "1.45",
+              }}
+            >
+              {assembledPrompt}
+            </div>
+          )}
         </div>
       </div>
 
@@ -586,6 +747,65 @@ export const TranslationProvidersView: React.FC = () => {
           </label>
         </div>
       </div>
+
+      {/* Modal: Add Custom Style Preset */}
+      {showAddModal && (
+        <Modal
+          title="Create Custom Translation Style Preset"
+          isOpen={showAddModal}
+          onClose={() => setShowAddModal(false)}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px", minWidth: "380px" }}>
+            <div>
+              <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
+                Preset Name:
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Indonesian Visual Novel Gaul, Cyberpunk Lore..."
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
+                Short Description:
+              </label>
+              <input
+                type="text"
+                placeholder="Brief summary of when to use this style..."
+                value={customDesc}
+                onChange={(e) => setCustomDesc(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
+                Style Instructions (Part 2):
+              </label>
+              <textarea
+                rows={5}
+                placeholder="Translate with natural colloquial flow, preserving slang..."
+                value={customInst}
+                onChange={(e) => setCustomInst(e.target.value)}
+                style={{ width: "100%", fontSize: "12px", lineHeight: "1.45", resize: "vertical" }}
+              />
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" }}>
+              <button onClick={() => setShowAddModal(false)} className="btn-secondary">
+                Cancel
+              </button>
+              <button onClick={handleSaveCustom} className="btn-primary">
+                Save & Activate Preset
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

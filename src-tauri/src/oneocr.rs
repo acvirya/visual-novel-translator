@@ -125,6 +125,9 @@ fn run_ocr_pipeline_on_image(
         }
     };
 
+    // Immediately remove temporary crop image from disk
+    let _ = std::fs::remove_file(&temp_file);
+
     if let Some(ocr_res) = ocr_res_opt {
         let mut lines = Vec::new();
         for line in &ocr_res.lines {

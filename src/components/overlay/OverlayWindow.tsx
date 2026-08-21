@@ -119,6 +119,23 @@ export const OverlayWindow: React.FC = () => {
     });
   }, [config.x, config.y, config.width, config.height]);
 
+  // Global Escape key listener to safely exit edit mode
+  useEffect(() => {
+    if (!isEditing) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handleCancelPosition();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isEditing, config]);
+
   // Handle Save
   const handleSavePosition = async () => {
     setIsEditing(false);

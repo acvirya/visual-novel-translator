@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { translateWithFreeMt } from "./freeMtService";
-import { buildGlossarySystemPrompt, ChatMessage } from "./openRouterService";
+import { buildCompleteSystemPrompt, ChatMessage } from "./openRouterService";
 import { extractSpeakerAndDialogue, executePreprocessingPipeline } from "../utils/textPreprocessor";
 import { logger } from "./loggerService";
 import { useBatchStore } from "../stores/useBatchStore";
@@ -749,9 +749,10 @@ class BatchTranslateService {
       throw new Error("OpenRouter API Key is missing. Please configure and verify your API key in Translation Providers.");
     }
 
-    const glossaryAddendum = buildGlossarySystemPrompt();
-    const systemPrompt =
-      `You are an expert Visual Novel script localizer translating dialogue lines from Japanese to English.\nTranslate each line naturally, preserving character personalities, tone, emotional nuances, and Japanese honorifics (-san, -kun, -chan, -senpai, -sensei).\n\n### Batch Output Schema:\nYou MUST return a JSON object containing the "translations" array for all input items:\n{\n  "translations": [\n    {\n      "id": 1,\n      "translated_speaker": "English Name (or null)",\n      "translated_message": "English Dialogue"\n    }\n  ]\n}\n\n### CRITICAL RULES:\n1. You MUST translate and include EVERY input line with its matching "id".\n2. NEVER skip or omit lines containing only punctuation (e.g. "...", "……", "!?") or already in English (e.g. "OK", "Yes"). Preserve them in the "translations" array with their exact "id".\n3. DO NOT return meta summaries, explanations, work logs, or "changes_made" objects.\n4. Return ONLY the valid JSON structure above containing the actual translated dialogue lines.${glossaryAddendum}`;
+    const systemPrompt = buildCompleteSystemPrompt({
+      mode: "batch",
+      includeGlossary: true,
+    });
 
     const inputBatchJson = items.map((it) => {
       const cleanMsg = executePreprocessingPipeline(it.originalMessage, "batch");
@@ -1101,6 +1102,8 @@ class BatchTranslateService {
     if (this.abortController) {
       this.abortController.abort();
     }
+    this.saveDebounceTimers.forEach((t) => clearTimeout(t));
+    this.saveDebounceTimers.clear();
     this.isRunning = false;
     this.isPaused = false;
     useBatchStore.getState().setIsRunning(false);
