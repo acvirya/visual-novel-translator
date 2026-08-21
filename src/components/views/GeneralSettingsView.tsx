@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Keyboard, Globe, RotateCcw, AlertTriangle, Check, ShieldAlert, BookOpen, Database, Scan, Palette, Code } from "lucide-react";
+import { Keyboard, Globe, RotateCcw, ShieldAlert, BookOpen, Database, Scan, Palette, Code } from "lucide-react";
 import { settingsManager } from "../../services/settingsManager";
+import { useToast } from "../common/ToastProvider";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 
 export const GeneralSettingsView: React.FC = () => {
+  const toast = useToast();
   const [sourceLang, setSourceLang] = useState<string>(() => {
     return localStorage.getItem("vn_source_lang") || "ja";
   });
@@ -23,7 +26,6 @@ export const GeneralSettingsView: React.FC = () => {
   // Reset Confirmation Modal State
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
   const [resetCategory, setResetCategory] = useState<string>("all");
-  const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
   // Auto-Save Effect
   useEffect(() => {
@@ -48,14 +50,8 @@ export const GeneralSettingsView: React.FC = () => {
     hotkeyOcrScan,
   ]);
 
-  const showToast = (msg: string) => {
-    setFeedbackToast(msg);
-    setTimeout(() => setFeedbackToast(null), 3500);
-  };
-
   const handleExecuteReset = () => {
     if (resetCategory === "all") {
-      // Clear localStorage keys
       const keysToClear = [
         "vn_source_lang",
         "vn_target_lang",
@@ -104,14 +100,13 @@ export const GeneralSettingsView: React.FC = () => {
       keysToClear.forEach((k) => localStorage.removeItem(k));
       settingsManager.resetSettings();
 
-      // Reset local state
       setSourceLang("ja");
       setTargetLang("en");
       setHotkeyLockOverlay("Ctrl+Shift+L");
       setHotkeyTogglePause("Ctrl+Shift+P");
       setHotkeyOcrScan("F9");
 
-      showToast("All settings reset to default. Please reload or reopen tabs.");
+      toast.success("All settings reset to default. Please reload or reopen tabs.", "Reset Complete");
     } else if (resetCategory === "general") {
       setSourceLang("ja");
       setTargetLang("en");
@@ -119,17 +114,17 @@ export const GeneralSettingsView: React.FC = () => {
       setHotkeyTogglePause("Ctrl+Shift+P");
       setHotkeyOcrScan("F9");
       settingsManager.resetSettings("general");
-      showToast("General settings reset to defaults.");
+      toast.success("General settings reset to defaults.", "Reset Success");
     } else if (resetCategory === "glossary") {
       localStorage.removeItem("vn_glossary_entries_v1");
       localStorage.removeItem("vn_glossary_categories_v1");
       settingsManager.resetSettings("glossary");
-      showToast("Glossary reset to default sample terms.");
+      toast.success("Glossary reset to default sample terms.", "Reset Success");
     } else if (resetCategory === "script") {
       localStorage.removeItem("vn_script_lines_v1");
       localStorage.removeItem("vn_script_ngram_settings");
       settingsManager.resetSettings("scriptManager");
-      showToast("Script manager reset to defaults.");
+      toast.success("Script manager reset to defaults.", "Reset Success");
     } else if (resetCategory === "ocr") {
       localStorage.removeItem("vn_ocr_regions");
       localStorage.removeItem("vn_ocr_scale_percent");
@@ -139,15 +134,15 @@ export const GeneralSettingsView: React.FC = () => {
       localStorage.removeItem("vn_ocr_motion_sensitivity");
       localStorage.removeItem("vn_ocr_ignore_blinking");
       settingsManager.resetSettings("ocr");
-      showToast("OCR regions and motion parameters reset to defaults.");
+      toast.success("OCR regions and motion parameters reset to defaults.", "Reset Success");
     } else if (resetCategory === "overlay") {
       localStorage.removeItem("vn_overlay_config_v1");
       settingsManager.resetSettings("overlay");
-      showToast("Overlay box geometry and style reset to defaults.");
+      toast.success("Overlay box geometry and style reset to defaults.", "Reset Success");
     } else if (resetCategory === "preprocessing") {
       localStorage.removeItem("vn_preprocessing_pipeline");
       settingsManager.resetSettings("textPreprocessing");
-      showToast("Text preprocessing pipeline reset to default rules.");
+      toast.success("Text preprocessing pipeline reset to default rules.", "Reset Success");
     }
 
     setShowResetModal(false);
@@ -155,26 +150,6 @@ export const GeneralSettingsView: React.FC = () => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%" }}>
-      {/* Toast Notification */}
-      {feedbackToast && (
-        <div
-          style={{
-            backgroundColor: "rgba(63, 185, 80, 0.15)",
-            border: "1px solid var(--accent-success)",
-            color: "var(--accent-success)",
-            borderRadius: "var(--radius-sm)",
-            padding: "8px 14px",
-            fontSize: "12.5px",
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <Check size={15} />
-          <span>{feedbackToast}</span>
-        </div>
-      )}
 
       {/* Languages & Translation Defaults */}
       <div className="card" style={{ margin: 0 }}>
@@ -323,75 +298,19 @@ export const GeneralSettingsView: React.FC = () => {
       </div>
 
       {/* Confirmation Modal */}
-      {showResetModal && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.75)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 9999,
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: "var(--bg-surface)",
-              border: "1px solid var(--border-active)",
-              borderRadius: "var(--radius-md)",
-              padding: "20px 24px",
-              maxWidth: "440px",
-              width: "90%",
-              display: "flex",
-              flexDirection: "column",
-              gap: "14px",
-              boxShadow: "0 12px 36px rgba(0,0,0,0.6)",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--accent-danger)" }}>
-              <AlertTriangle size={22} />
-              <span style={{ fontSize: "15px", fontWeight: 700 }}>
-                {resetCategory === "all" ? "Confirm Factory Reset" : "Confirm Reset Category"}
-              </span>
-            </div>
-
-            <div style={{ fontSize: "12.5px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
-              {resetCategory === "all" ? (
-                <span>
-                  Are you sure you want to reset <strong>all application settings</strong>, custom overlay presets, OCR regions, and saved terms to factory defaults? This action cannot be undone.
-                </span>
-              ) : (
-                <span>
-                  Are you sure you want to reset <strong>{resetCategory}</strong> settings to defaults?
-                </span>
-              )}
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "6px" }}>
-              <button
-                type="button"
-                onClick={() => setShowResetModal(false)}
-                className="btn-secondary"
-                style={{ padding: "6px 14px", fontSize: "12px" }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleExecuteReset}
-                className="btn-danger"
-                style={{ padding: "6px 16px", fontSize: "12px", fontWeight: 700 }}
-              >
-                Confirm & Reset
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        isOpen={showResetModal}
+        onClose={() => setShowResetModal(false)}
+        onConfirm={handleExecuteReset}
+        title={resetCategory === "all" ? "Confirm Factory Reset" : "Confirm Reset Category"}
+        variant="danger"
+        confirmText="Confirm & Reset"
+        message={
+          resetCategory === "all"
+            ? "Are you sure you want to reset all application settings, custom overlay presets, OCR regions, and saved terms to factory defaults? This action cannot be undone."
+            : `Are you sure you want to reset ${resetCategory} settings to defaults?`
+        }
+      />
     </div>
   );
 };

@@ -3,8 +3,8 @@ import { OverlayConfig } from "../types";
 export interface OverlayDialogueMessage {
   speaker?: string;
   translatedSpeaker?: string;
-  message: string;
-  translatedMessage: string;
+  message?: string;
+  translatedMessage?: string;
 }
 
 export type OverlayEvent =

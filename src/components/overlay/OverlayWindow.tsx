@@ -32,11 +32,18 @@ const DEFAULT_CONFIG: OverlayConfig = {
   showTranslatedMessage: true,
 };
 
-const DEFAULT_SAMPLE_DIALOGUE: OverlayDialogueMessage = {
-  speaker: "坂上 智代",
-  translatedSpeaker: "Tomoyo Sakagami",
-  message: "「…別に、何でもないわ。早く教室に行きましょう。」",
-  translatedMessage: "\"...It's nothing really. Let's hurry to the classroom.\"",
+const EMPTY_DIALOGUE: OverlayDialogueMessage = {
+  speaker: "",
+  translatedSpeaker: "",
+  message: "",
+  translatedMessage: "",
+};
+
+const SAMPLE_EDIT_DIALOGUE: OverlayDialogueMessage = {
+  speaker: "Speaker Name",
+  translatedSpeaker: "",
+  message: "Original dialogue text will appear here...",
+  translatedMessage: "",
 };
 
 function hexToRgba(hex: string, opacity: number): string {
@@ -59,7 +66,7 @@ export const OverlayWindow: React.FC = () => {
     return overlayChannel.getSavedConfig() || DEFAULT_CONFIG;
   });
 
-  const [dialogue, setDialogue] = useState<OverlayDialogueMessage>(DEFAULT_SAMPLE_DIALOGUE);
+  const [dialogue, setDialogue] = useState<OverlayDialogueMessage>(EMPTY_DIALOGUE);
   const [isEditing, setIsEditing] = useState<boolean>(false);
 
   // Box geometry in edit mode
@@ -273,6 +280,14 @@ export const OverlayWindow: React.FC = () => {
   const currentW = isEditing ? boxRect.width : config.width;
   const currentH = isEditing ? boxRect.height : config.height;
 
+  const activeDialogue = isEditing ? SAMPLE_EDIT_DIALOGUE : dialogue;
+  const hasText = Boolean(
+    activeDialogue.speaker ||
+    activeDialogue.translatedSpeaker ||
+    activeDialogue.message ||
+    activeDialogue.translatedMessage
+  );
+
   return (
     <div
       onMouseMove={handleMouseMove}
@@ -290,6 +305,7 @@ export const OverlayWindow: React.FC = () => {
         cursor: isEditing ? (interactionMode === "drawing" ? "crosshair" : "default") : "default",
         transition: "background-color 0.2s ease",
         zIndex: 999999,
+        pointerEvents: isEditing ? "auto" : "none",
       }}
     >
       {/* Top Floating Bar in Edit Mode */}
@@ -310,6 +326,7 @@ export const OverlayWindow: React.FC = () => {
             gap: "16px",
             boxShadow: "0 10px 30px rgba(0,0,0,0.8)",
             zIndex: 1000000,
+            pointerEvents: "auto",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -360,137 +377,142 @@ export const OverlayWindow: React.FC = () => {
       )}
 
       {/* The Single Subtitle Dialogue Box */}
-      <div
-        onMouseDown={isEditing ? handleBoxMouseDown : undefined}
-        style={{
-          position: "absolute",
-          left: `${currentX}px`,
-          top: `${currentY}px`,
-          width: `${currentW}px`,
-          minHeight: `${currentH}px`,
-          maxHeight: isEditing ? `${currentH}px` : `${currentH * config.maxExpandRatio}px`,
-          backgroundColor: config.useCustomTemplate ? "transparent" : hexToRgba(config.backgroundColor, config.backgroundOpacity),
-          borderRadius: `${config.borderRadius}px`,
-          padding: config.useCustomTemplate ? "0" : "12px 18px",
-          color: config.fontColor,
-          border: isEditing
-            ? "2px solid var(--accent-gold)"
-            : config.useCustomTemplate
-            ? "none"
-            : `${config.outlineWidth}px solid ${config.outlineColor}`,
-          boxShadow: isEditing
-            ? "0 0 0 4px rgba(227, 179, 65, 0.3), 0 12px 36px rgba(0,0,0,0.8)"
-            : config.useCustomTemplate
-            ? "none"
-            : "0 8px 24px rgba(0,0,0,0.6)",
-          display: "flex",
-          flexDirection: "column",
-          gap: "6px",
-          overflowY: isEditing ? "hidden" : "auto",
-          cursor: isEditing ? "move" : "default",
-          boxSizing: "border-box",
-        }}
-      >
-        {config.useCustomTemplate ? (
-          /* Custom Component Template Engine Mode */
-          <div
-            style={{
-              width: "100%",
-              height: "100%",
-              // @ts-ignore
-              "--speaker-font-size": `${config.speakerFontSize || 16}px`,
-              // @ts-ignore
-              "--message-font-size": `${config.messageFontSize || 20}px`,
-              // @ts-ignore
-              "--overlay-font-size": `${config.fontSize || 20}px`,
-            }}
-          >
-            {/* Inject Scoped CSS */}
-            {config.customTemplateCss && (
-              <style
+      {(isEditing || hasText) && (
+        <div
+          onMouseDown={isEditing ? handleBoxMouseDown : undefined}
+          style={{
+            position: "absolute",
+            left: `${currentX}px`,
+            top: `${currentY}px`,
+            width: `${currentW}px`,
+            minHeight: `${currentH}px`,
+            maxHeight: isEditing ? `${currentH}px` : `${currentH * config.maxExpandRatio}px`,
+            backgroundColor: config.useCustomTemplate ? "transparent" : hexToRgba(config.backgroundColor, config.backgroundOpacity),
+            borderRadius: `${config.borderRadius}px`,
+            padding: config.useCustomTemplate ? "0" : "12px 18px",
+            color: config.fontColor,
+            border: isEditing
+              ? "2px solid var(--accent-gold)"
+              : config.useCustomTemplate
+              ? "none"
+              : `${config.outlineWidth}px solid ${config.outlineColor}`,
+            boxShadow: isEditing
+              ? "0 0 0 4px rgba(227, 179, 65, 0.3), 0 12px 36px rgba(0,0,0,0.8)"
+              : config.useCustomTemplate
+              ? "none"
+              : "0 8px 24px rgba(0,0,0,0.6)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "6px",
+            overflowY: isEditing ? "hidden" : "auto",
+            cursor: isEditing ? "move" : "default",
+            boxSizing: "border-box",
+            pointerEvents: isEditing ? "auto" : "none",
+          }}
+        >
+          {config.useCustomTemplate ? (
+            /* Custom Component Template Engine Mode */
+            <div
+              id="vn-overlay-scope-root"
+              className="vn-overlay-scope-root"
+              style={{
+                width: "100%",
+                height: "100%",
+                // @ts-ignore
+                "--speaker-font-size": `${config.speakerFontSize || 16}px`,
+                // @ts-ignore
+                "--message-font-size": `${config.messageFontSize || 20}px`,
+                // @ts-ignore
+                "--overlay-font-size": `${config.fontSize || 20}px`,
+              }}
+            >
+              {/* Inject Scoped CSS */}
+              {config.customTemplateCss && (
+                <style
+                  dangerouslySetInnerHTML={{
+                    __html: config.customTemplateCss,
+                  }}
+                />
+              )}
+              {/* Render Compiled Template HTML with reactive config */}
+              <div
                 dangerouslySetInnerHTML={{
-                  __html: config.customTemplateCss,
+                  __html: compileOverlayTemplate(config.customTemplateHtml, activeDialogue, config),
                 }}
               />
-            )}
-            {/* Render Compiled Template HTML with reactive config */}
-            <div
-              dangerouslySetInnerHTML={{
-                __html: compileOverlayTemplate(config.customTemplateHtml, dialogue, config),
-              }}
-            />
-          </div>
-        ) : (
-          /* Standard Configurable Subtitle Box */
-          <>
-            {/* Speaker Name Row (JP & Translated) */}
-            {(config.showSpeaker || config.showTranslatedSpeaker) && (
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                {config.showSpeaker && dialogue.speaker && (
-                  <span
-                    style={{
-                      backgroundColor: "rgba(227, 179, 65, 0.2)",
-                      color: "var(--accent-gold)",
-                      padding: "1px 8px",
-                      borderRadius: "var(--radius-sm)",
-                      fontWeight: 700,
-                      fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
-                      fontFamily: "var(--font-jp)",
-                    }}
-                  >
-                    {dialogue.speaker}
-                  </span>
-                )}
+            </div>
+          ) : (
+            /* Standard Configurable Subtitle Box */
+            <>
+              {/* Speaker Name Row (JP & Translated) */}
+              {(config.showSpeaker || config.showTranslatedSpeaker) && (activeDialogue.speaker || activeDialogue.translatedSpeaker) && (
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                  {config.showSpeaker && activeDialogue.speaker && (
+                    <span
+                      style={{
+                        backgroundColor: "rgba(227, 179, 65, 0.2)",
+                        color: "var(--accent-gold)",
+                        padding: "1px 8px",
+                        borderRadius: "var(--radius-sm)",
+                        fontWeight: 700,
+                        fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
+                        fontFamily: "var(--font-jp)",
+                      }}
+                    >
+                      {activeDialogue.speaker}
+                    </span>
+                  )}
 
-                {config.showTranslatedSpeaker && dialogue.translatedSpeaker && (
-                  <span
-                    style={{
-                      fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
-                      fontWeight: 600,
-                      color: "var(--text-primary)",
-                    }}
-                  >
-                    {dialogue.translatedSpeaker}
-                  </span>
-                )}
-              </div>
-            )}
+                  {config.showTranslatedSpeaker && activeDialogue.translatedSpeaker && (
+                    <span
+                      style={{
+                        fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
+                        fontWeight: 600,
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      {activeDialogue.translatedSpeaker}
+                    </span>
+                  )}
+                </div>
+              )}
 
-            {/* Message (JP Source) */}
-            {config.showMessage && dialogue.message && (
-              <div
-                style={{
-                  fontSize: `${Math.max(12, (config.messageFontSize || config.fontSize) * 0.8)}px`,
-                  fontFamily: "var(--font-jp)",
-                  color: "var(--text-jp)",
-                  lineHeight: 1.5,
-                  borderLeft: "2px solid var(--border-active)",
-                  paddingLeft: "8px",
-                }}
-              >
-                {dialogue.message}
-              </div>
-            )}
+              {/* Message (Source Text / Dialogue) */}
+              {(config.showMessage || !activeDialogue.translatedMessage) && activeDialogue.message && (
+                <div
+                  style={{
+                    fontSize: `${config.messageFontSize || config.fontSize}px`,
+                    fontFamily: "var(--font-jp)",
+                    color: config.fontColor || "#FFFFFF",
+                    lineHeight: 1.5,
+                    textShadow: `${config.outlineWidth}px ${config.outlineWidth}px 0px ${config.outlineColor}`,
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {activeDialogue.message}
+                </div>
+              )}
 
-            {/* Translated Message */}
-            {config.showTranslatedMessage && dialogue.translatedMessage && (
-              <div
-                style={{
-                  fontSize: `${config.messageFontSize || config.fontSize}px`,
-                  fontWeight: 600,
-                  lineHeight: 1.4,
-                  color: config.fontColor,
-                  textShadow: `${config.outlineWidth}px ${config.outlineWidth}px 0px ${config.outlineColor}`,
-                }}
-              >
-                {dialogue.translatedMessage}
-              </div>
-            )}
-          </>
-        )}
+              {/* Translated Message */}
+              {config.showTranslatedMessage && activeDialogue.translatedMessage && (
+                <div
+                  style={{
+                    fontSize: `${config.messageFontSize || config.fontSize}px`,
+                    fontWeight: 600,
+                    lineHeight: 1.4,
+                    color: config.fontColor,
+                    textShadow: `${config.outlineWidth}px ${config.outlineWidth}px 0px ${config.outlineColor}`,
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {activeDialogue.translatedMessage}
+                </div>
+              )}
+            </>
+          )}
 
-        {/* 8-Way Resize Handles in Edit Mode */}
-        {isEditing && (
+          {/* 8-Way Resize Handles in Edit Mode */}
+          {isEditing && (
           <>
             {/* Corners */}
             <div
@@ -529,6 +551,7 @@ export const OverlayWindow: React.FC = () => {
           </>
         )}
       </div>
+      )}
     </div>
   );
 };

@@ -24,6 +24,7 @@ import {
   Sliders,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
+import { useToast } from "../common/ToastProvider";
 
 const INITIAL_STARRED_MODEL_IDS: string[] = [
   "anthropic/claude-3.5-sonnet",
@@ -66,6 +67,7 @@ const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
 ];
 
 export const TranslationProvidersView: React.FC = () => {
+  const toast = useToast();
   // OpenRouter Auth State
   const [apiKey, setApiKey] = useState<string>(() => {
     return localStorage.getItem("vn_openrouter_api_key") || "";
@@ -190,6 +192,7 @@ export const TranslationProvidersView: React.FC = () => {
       if (result.keyInfo) {
         localStorage.setItem("vn_openrouter_key_info", JSON.stringify(result.keyInfo));
       }
+      toast.success("OpenRouter API Key verified successfully!", "Key Active");
     } else {
       setKeyStatus("invalid");
       setKeyInfo(null);
@@ -197,6 +200,7 @@ export const TranslationProvidersView: React.FC = () => {
       localStorage.setItem("vn_openrouter_key_status", "invalid");
       localStorage.removeItem("vn_openrouter_verified_key");
       localStorage.removeItem("vn_openrouter_key_info");
+      toast.error(result.message || "Invalid OpenRouter API Key", "Verification Failed");
     }
   };
 

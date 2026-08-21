@@ -29,6 +29,33 @@ pub struct CapturedImage {
     pub dynamic_image: DynamicImage,
 }
 
+struct GdiCaptureGuard {
+    h_wnd: HWND,
+    h_dc_screen: HDC,
+    h_dc_mem: HDC,
+    h_bitmap: HBITMAP,
+    h_old_bitmap: HBITMAP,
+}
+
+impl Drop for GdiCaptureGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if self.h_dc_mem != 0 as HDC {
+                if self.h_old_bitmap != 0 as HBITMAP {
+                    SelectObject(self.h_dc_mem, self.h_old_bitmap);
+                }
+                if self.h_bitmap != 0 as HBITMAP {
+                    DeleteObject(self.h_bitmap);
+                }
+                DeleteDC(self.h_dc_mem);
+            }
+            if self.h_dc_screen != 0 as HDC {
+                ReleaseDC(self.h_wnd, self.h_dc_screen);
+            }
+        }
+    }
+}
+
 /// Capture a screen region via Win32 GDI BitBlt
 pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
     if width <= 0 || height <= 0 {
@@ -42,28 +69,32 @@ pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
             return Err("Failed to obtain screen DC".to_string());
         }
 
+        let mut guard = GdiCaptureGuard {
+            h_wnd,
+            h_dc_screen,
+            h_dc_mem: 0 as HDC,
+            h_bitmap: 0 as HBITMAP,
+            h_old_bitmap: 0 as HBITMAP,
+        };
+
         let h_dc_mem: HDC = CreateCompatibleDC(h_dc_screen);
         if h_dc_mem == 0 as HDC {
-            ReleaseDC(h_wnd, h_dc_screen);
             return Err("Failed to create compatible memory DC".to_string());
         }
+        guard.h_dc_mem = h_dc_mem;
 
         let h_bitmap: HBITMAP = CreateCompatibleBitmap(h_dc_screen, width, height);
         if h_bitmap == 0 as HBITMAP {
-            DeleteDC(h_dc_mem);
-            ReleaseDC(h_wnd, h_dc_screen);
             return Err("Failed to create compatible bitmap".to_string());
         }
+        guard.h_bitmap = h_bitmap;
 
         let h_old_bitmap = SelectObject(h_dc_mem, h_bitmap);
+        guard.h_old_bitmap = h_old_bitmap as HBITMAP;
 
         // BitBlt screenshot from screen DC into memory DC
         let bitblt_ok = BitBlt(h_dc_mem, 0, 0, width, height, h_dc_screen, x, y, SRCCOPY);
         if bitblt_ok == 0 {
-            SelectObject(h_dc_mem, h_old_bitmap);
-            DeleteObject(h_bitmap);
-            DeleteDC(h_dc_mem);
-            ReleaseDC(h_wnd, h_dc_screen);
             return Err("BitBlt screen capture failed".to_string());
         }
 
@@ -88,12 +119,6 @@ pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
             &mut bmi,
             DIB_RGB_COLORS,
         );
-
-        // Cleanup GDI objects
-        SelectObject(h_dc_mem, h_old_bitmap);
-        DeleteObject(h_bitmap);
-        DeleteDC(h_dc_mem);
-        ReleaseDC(h_wnd, h_dc_screen);
 
         if get_bits_ok == 0 {
             return Err("GetDIBits failed to extract pixel buffer".to_string());

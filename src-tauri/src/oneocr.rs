@@ -44,6 +44,9 @@ pub struct OcrScanResult {
     pub is_settled: bool,
 }
 
+/// Wrapper around `oneocr_rs::OcrEngine` to allow storage in a static `Mutex`.
+/// Safety: Access is strictly synchronized via `OCR_ENGINE_INSTANCE` Mutex guard,
+/// ensuring exclusive single-threaded execution during OCR calls.
 struct SendOcrEngine(oneocr_rs::OcrEngine);
 unsafe impl Send for SendOcrEngine {}
 
@@ -68,7 +71,7 @@ fn compute_stroke_edge_hash(img: &image::DynamicImage, sensitivity: u8) -> u64 {
     }
 
     // Sensitivity threshold: 1 (lenient) to 10 (strict)
-    let threshold = ((11 - sensitivity.clamp(1, 10) as i32) * 5) as i32;
+    let threshold = (11 - sensitivity.clamp(1, 10) as i32) * 5;
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let raw = gray.as_raw();
@@ -108,7 +111,7 @@ fn run_ocr_pipeline_on_image(
     idx: usize,
     region_name: &str,
 ) -> String {
-    let temp_file = temp_dir.join(format!("vn_ocr_crop_{}_{}.png", idx, std::process::id()));
+    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}.png", std::process::id(), idx));
     if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Png) {
         eprintln!("Warning: Failed to write temporary crop image: {}", e);
         return String::new();
@@ -121,8 +124,6 @@ fn run_ocr_pipeline_on_image(
             None
         }
     };
-
-    let _ = fs::remove_file(&temp_file);
 
     if let Some(ocr_res) = ocr_res_opt {
         let mut lines = Vec::new();
@@ -280,6 +281,10 @@ pub fn scan_screen_regions(
 
     let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
     let state_map = state_guard.get_or_insert_with(HashMap::new);
+
+    // Evict motion states for regions that no longer exist (prevent static memory leak)
+    let active_ids: std::collections::HashSet<&String> = regions.iter().map(|r| &r.id).collect();
+    state_map.retain(|id, _| active_ids.contains(id));
 
     for (idx, region) in regions.iter().enumerate() {
         let x = region.physical_x.unwrap_or(region.x);

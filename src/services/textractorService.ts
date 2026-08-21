@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { TextractorProcessInfo, TextractorMessage } from "../types";
+import { useTextractorStore } from "../stores/useTextractorStore";
+import { executePreprocessingPipeline, extractSpeakerAndDialogue } from "../utils/textPreprocessor";
+import { translationManager } from "./translationManager";
 
 export interface EngineHookPreset {
   name: string;
@@ -66,19 +69,91 @@ export const POPULAR_HOOK_PRESETS: EngineHookPreset[] = [
   },
 ];
 
-export const DEFAULT_TEXTRACTOR_PATH = "D:\\Program Files\\Textractor\\x86\\TextractorCLI.exe";
-export const DEFAULT_TEXTRACTOR_DIR = "D:\\Program Files\\Textractor";
+export const DEFAULT_TEXTRACTOR_PATH = "C:\\Program Files\\Textractor\\x86\\TextractorCLI.exe";
+export const DEFAULT_TEXTRACTOR_DIR = "C:\\Program Files\\Textractor";
+
+// Smart merge helper for visual novel typewriter text fragments & multi-pass memory hooks
+export function mergeDialogueFragments(current: string, incoming: string): string {
+  const cur = current.trim();
+  const inc = incoming.trim();
+
+  if (!cur) return inc;
+  if (!inc) return cur;
+
+  // 1. If incoming chunk is an exact match or substring already inside current, keep current
+  if (cur.includes(inc)) {
+    return cur;
+  }
+
+  // 2. If current is a prefix/substring of incoming, take incoming
+  if (inc.includes(cur)) {
+    return inc;
+  }
+
+  // 3. Suffix-prefix overlap merge (e.g. cur: "かような機会があれば、" inc: "あれば、是が非でも」")
+  for (let len = Math.min(cur.length, inc.length); len >= 2; len--) {
+    const curEnd = cur.slice(-len);
+    const incStart = inc.slice(0, len);
+    if (curEnd === incStart) {
+      return cur + inc.slice(len);
+    }
+  }
+
+  // 4. If current line hasn't closed quotation and incoming is continuation
+  if (
+    !cur.endsWith("」") &&
+    !cur.endsWith("』") &&
+    !cur.endsWith("）") &&
+    !cur.endsWith(")") &&
+    !inc.startsWith("「") &&
+    !inc.startsWith("『")
+  ) {
+    return cur + inc;
+  }
+
+  return inc;
+}
 
 export class TextractorService {
+  private static unlistenFn: UnlistenFn | null = null;
+  private static debounceTimer: any = null;
+  private static bufferedMessage = "";
+  private static bufferedSpeaker = "";
+  private static lastDispatchedText = { speaker: "", message: "" };
+
+  /**
+   * Initialize global textractor listener stream
+   */
+  public static async initListener() {
+    if (this.unlistenFn) return;
+    try {
+      this.unlistenFn = await listen<TextractorMessage>("textractor-text-event", (event) => {
+        this.handleIncomingMessage(event.payload);
+      });
+
+      await listen<{ pid: number }>("textractor-process-terminated", (_event) => {
+        useTextractorStore.getState().setIsHooked(false);
+        useTextractorStore.getState().setAttachedPid(null);
+      });
+    } catch (err) {
+      console.warn("Failed to register Textractor global event listener:", err);
+    }
+  }
+
   /**
    * Enumerate running GUI processes with valid window titles
    */
   public static async listProcesses(): Promise<TextractorProcessInfo[]> {
+    useTextractorStore.getState().setIsLoadingProcesses(true);
     try {
-      return await invoke<TextractorProcessInfo[]>("list_target_processes");
+      const procs = await invoke<TextractorProcessInfo[]>("list_target_processes");
+      useTextractorStore.getState().setProcesses(procs);
+      return procs;
     } catch (error) {
       console.warn("Failed to list target processes:", error);
       return [];
+    } finally {
+      useTextractorStore.getState().setIsLoadingProcesses(false);
     }
   }
 
@@ -86,11 +161,23 @@ export class TextractorService {
    * Start Textractor CLI sidecar and attach to target PID
    */
   public static async startSidecar(exePath: string, targetPid: number): Promise<{ success: boolean; error?: string }> {
+    const store = useTextractorStore.getState();
+    store.setIsAttaching(true);
+    store.setHookError(null);
+
+    await this.initListener();
+
     try {
       await invoke("start_textractor", { exePath, targetPid });
+      store.setIsHooked(true);
+      store.setAttachedPid(targetPid);
       return { success: true };
     } catch (error: any) {
-      return { success: false, error: error?.toString() || "Unknown error starting Textractor" };
+      const errStr = error?.toString() || "Unknown error starting Textractor";
+      store.setHookError(errStr);
+      return { success: false, error: errStr };
+    } finally {
+      store.setIsAttaching(false);
     }
   }
 
@@ -112,6 +199,7 @@ export class TextractorService {
   public static async stopSidecar(): Promise<{ success: boolean }> {
     try {
       await invoke("stop_textractor");
+      useTextractorStore.getState().resetTextractor();
       return { success: true };
     } catch (error) {
       console.warn("Failed to stop Textractor:", error);
@@ -127,4 +215,248 @@ export class TextractorService {
       callback(event.payload);
     });
   }
+
+  private static handleIncomingMessage(msg: TextractorMessage) {
+    const store = useTextractorStore.getState();
+    const handle = msg.handle;
+    const rawText = msg.text || "";
+    if (!rawText.trim()) return;
+
+    // 1. Update Threads map & Thread Logs in Store
+    store.setThreads((prevThreads) => {
+      const nextThreads = new Map(prevThreads);
+      const existing = nextThreads.get(handle);
+      if (existing) {
+        nextThreads.set(handle, {
+          ...existing,
+          totalLines: existing.totalLines + 1,
+          lastText: rawText,
+          lastTimestamp: msg.timestamp,
+        });
+      } else {
+        nextThreads.set(handle, {
+          id: handle,
+          name: msg.name || `Thread #${handle}`,
+          hookCode: msg.hook_code || "",
+          address: msg.address || "",
+          totalLines: 1,
+          lastText: rawText,
+          lastTimestamp: msg.timestamp,
+          isActive: true,
+          role: "ignored",
+        });
+      }
+      return nextThreads;
+    });
+
+    store.setThreadLogs((prevLogs) => {
+      const nextLogs = new Map(prevLogs);
+      const list = nextLogs.get(handle) || [];
+      const updated = [msg, ...list].slice(0, store.maxLogLines);
+      nextLogs.set(handle, updated);
+      return nextLogs;
+    });
+
+    // 2. Process message according to designated Thread Role
+    const isCombined = store.combinedThreadId === handle;
+    const isMessage = store.messageThreadId === handle;
+    const isSpeaker = store.speakerThreadId === handle;
+
+    if (isCombined) {
+      const extracted = extractSpeakerAndDialogue(rawText);
+      const cleanSpk = extracted.speaker ? executePreprocessingPipeline(extracted.speaker, "textractor") : "";
+      const cleanMsg = executePreprocessingPipeline(extracted.message, "textractor");
+
+      this.bufferedSpeaker = cleanSpk;
+      this.bufferedMessage = mergeDialogueFragments(this.bufferedMessage, cleanMsg);
+
+      store.setLatestSpeaker(this.bufferedSpeaker);
+      store.setLatestMessage(this.bufferedMessage);
+      store.setLatestRawMessage(rawText);
+
+      this.debounceDispatch();
+    } else if (isSpeaker) {
+      const cleanSpk = executePreprocessingPipeline(rawText, "textractor").trim();
+      this.bufferedSpeaker = cleanSpk;
+      store.setLatestSpeaker(cleanSpk);
+    } else if (isMessage) {
+      const cleanMsg = executePreprocessingPipeline(rawText, "textractor");
+      this.bufferedMessage = mergeDialogueFragments(this.bufferedMessage, cleanMsg);
+
+      store.setLatestMessage(this.bufferedMessage);
+      store.setLatestRawMessage(rawText);
+
+      this.debounceDispatch();
+    }
+  }
+
+  private static debounceDispatch() {
+    const store = useTextractorStore.getState();
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+
+    this.debounceTimer = setTimeout(() => {
+      const spk = this.bufferedSpeaker.trim();
+      const msg = this.bufferedMessage.trim();
+
+      if (!msg) return;
+
+      const hasChanged = spk !== this.lastDispatchedText.speaker || msg !== this.lastDispatchedText.message;
+
+      if (hasChanged || !store.ignoreDuplicateLines) {
+        this.lastDispatchedText = { speaker: spk, message: msg };
+        if (store.autoForwardToOverlay) {
+          translationManager.translate({
+            speaker: spk || undefined,
+            message: msg,
+          });
+        }
+      }
+
+      // Reset buffer after dispatch
+      this.bufferedMessage = "";
+      this.bufferedSpeaker = "";
+    }, store.debounceMs);
+  }
+
+  /**
+   * Set thread role and recompute inspector
+   */
+  public static toggleRole(threadId: number, role: "combined" | "message" | "speaker") {
+    const store = useTextractorStore.getState();
+
+    let nextCombined = store.combinedThreadId;
+    let nextMsg = store.messageThreadId;
+    let nextSpeaker = store.speakerThreadId;
+
+    if (role === "combined") {
+      if (nextCombined === threadId) {
+        nextCombined = null;
+      } else {
+        nextCombined = threadId;
+        nextMsg = null;
+        nextSpeaker = null;
+      }
+    } else if (role === "message") {
+      if (nextMsg === threadId) {
+        nextMsg = null;
+      } else {
+        nextMsg = threadId;
+        nextCombined = null;
+        if (nextSpeaker === threadId) nextSpeaker = null;
+      }
+    } else if (role === "speaker") {
+      if (nextSpeaker === threadId) {
+        nextSpeaker = null;
+      } else {
+        nextSpeaker = threadId;
+        nextCombined = null;
+        if (nextMsg === threadId) nextMsg = null;
+      }
+    }
+
+    store.setCombinedThreadId(nextCombined);
+    store.setMessageThreadId(nextMsg);
+    store.setSpeakerThreadId(nextSpeaker);
+
+    // Update role on thread objects in map
+    store.setThreads((prev) => {
+      const next = new Map(prev);
+      for (const [id, t] of next.entries()) {
+        let tRole: "combined" | "message" | "speaker" | "ignored" = "ignored";
+        if (nextCombined === id) tRole = "combined";
+        else if (nextMsg === id) tRole = "message";
+        else if (nextSpeaker === id) tRole = "speaker";
+        next.set(id, { ...t, role: tRole });
+      }
+      return next;
+    });
+
+    this.recomputeInspector(nextCombined, nextMsg, nextSpeaker);
+  }
+
+  /**
+   * Recomputes live stream inspector according to active roles
+   */
+  public static recomputeInspector(
+    combinedId: number | null,
+    msgId: number | null,
+    speakerId: number | null
+  ) {
+    const store = useTextractorStore.getState();
+    this.bufferedMessage = "";
+    this.bufferedSpeaker = "";
+    this.lastDispatchedText = { speaker: "", message: "" };
+
+    if (combinedId === null && msgId === null && speakerId === null) {
+      store.setLatestSpeaker("");
+      store.setLatestMessage("");
+      store.setLatestRawMessage("");
+      return;
+    }
+
+    if (combinedId !== null) {
+      const thread = store.threads.get(combinedId);
+      if (thread && thread.lastText) {
+        const clean = executePreprocessingPipeline(thread.lastText, "textractor");
+        const { speaker, message } = extractSpeakerAndDialogue(clean);
+        store.setLatestSpeaker(speaker);
+        store.setLatestMessage(message);
+        store.setLatestRawMessage(thread.lastText);
+      } else {
+        store.setLatestSpeaker("");
+        store.setLatestMessage("");
+        store.setLatestRawMessage("");
+      }
+      return;
+    }
+
+    // Separate Speaker
+    if (speakerId !== null) {
+      const spkThread = store.threads.get(speakerId);
+      if (spkThread && spkThread.lastText) {
+        const cleanSpk = executePreprocessingPipeline(spkThread.lastText, "textractor").trim();
+        store.setLatestSpeaker(cleanSpk);
+      } else {
+        store.setLatestSpeaker("");
+      }
+    } else {
+      store.setLatestSpeaker("");
+    }
+
+    // Separate Dialogue
+    if (msgId !== null) {
+      const msgThread = store.threads.get(msgId);
+      if (msgThread && msgThread.lastText) {
+        const cleanMsg = executePreprocessingPipeline(msgThread.lastText, "textractor");
+        store.setLatestMessage(cleanMsg);
+        store.setLatestRawMessage(msgThread.lastText);
+      } else {
+        store.setLatestMessage("");
+        store.setLatestRawMessage("");
+      }
+    } else {
+      store.setLatestMessage("");
+      store.setLatestRawMessage("");
+    }
+  }
+
+  /**
+   * Clear logs for a specific thread or all threads
+   */
+  public static clearLogs(threadId?: number) {
+    const store = useTextractorStore.getState();
+    if (threadId !== undefined) {
+      store.setThreadLogs((prev) => {
+        const next = new Map(prev);
+        next.set(threadId, []);
+        return next;
+      });
+    } else {
+      store.setThreadLogs(new Map());
+    }
+  }
 }
+
+export const textractorService = TextractorService;

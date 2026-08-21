@@ -162,7 +162,7 @@ mod win32 {
             );
         }
 
-        ctx.processes.sort_by(|a, b| a.window_title.to_lowercase().cmp(&b.window_title.to_lowercase()));
+        ctx.processes.sort_by_key(|a| a.window_title.to_lowercase());
         ctx.processes
     }
 }
@@ -233,14 +233,17 @@ pub fn start_textractor(
         let _ = stdin.write_all(attach_cmd.as_bytes());
         let _ = stdin.flush();
 
-        // Store child & stdin
-        if let Ok(mut c) = state.child.lock() {
+        // Store child & stdin safely (recovering from poisoned mutex if previous thread panicked)
+        {
+            let mut c = state.child.lock().unwrap_or_else(|e| e.into_inner());
             *c = Some(child);
         }
-        if let Ok(mut s) = state.stdin.lock() {
+        {
+            let mut s = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
             *s = Some(stdin);
         }
-        if let Ok(mut p) = state.active_pid.lock() {
+        {
+            let mut p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
             *p = Some(target_pid);
         }
 
@@ -266,6 +269,7 @@ pub fn start_textractor(
             let mut reader = BufReader::new(stdout);
             let mut u16_buf: Vec<u16> = Vec::new();
             let mut pair = [0u8; 2];
+            const MAX_U16_BUFFER_SIZE: usize = 32_768; // 64KB max line safety bound
 
             while let Ok(()) = reader.read_exact(&mut pair) {
                 let code_unit = u16::from_le_bytes(pair);
@@ -286,9 +290,16 @@ pub fn start_textractor(
                     }
                     u16_buf.clear();
                 } else if code_unit != 0x000D {
-                    u16_buf.push(code_unit);
+                    if u16_buf.len() < MAX_U16_BUFFER_SIZE {
+                        u16_buf.push(code_unit);
+                    } else {
+                        // Flush safety threshold reached without newline
+                        u16_buf.clear();
+                    }
                 }
             }
+
+            let _ = app_clone.emit("textractor-process-terminated", serde_json::json!({ "pid": target_pid }));
         });
 
         Ok(())
@@ -328,17 +339,38 @@ pub fn stop_textractor(state: tauri::State<'_, TextractorState>) -> Result<(), S
     Ok(())
 }
 
-fn stop_textractor_internal(state: &TextractorState) {
-    if let Ok(mut s) = state.stdin.lock() {
-        *s = None;
-    }
-    if let Ok(mut c) = state.child.lock() {
-        if let Some(mut child) = c.take() {
-            let _ = child.kill();
+pub fn stop_textractor_internal(state: &TextractorState) {
+    // 1. Send graceful detach command to target process if active
+    let active_pid = {
+        let mut p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
+        p.take()
+    };
+
+    if let Some(pid) = active_pid {
+        if let Ok(mut s) = state.stdin.lock() {
+            if let Some(ref mut stdin) = *s {
+                let detach_cmd = format!("detach -P{}\r\n", pid);
+                let _ = stdin.write_all(detach_cmd.as_bytes());
+                let _ = stdin.flush();
+                // Grace period to allow texthook.dll to unload cleanly from target process
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
         }
     }
-    if let Ok(mut p) = state.active_pid.lock() {
-        *p = None;
+
+    // 2. Close stdin handle
+    {
+        let mut s = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
+        *s = None;
+    }
+
+    // 3. Terminate child process
+    {
+        let mut c = state.child.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut child) = c.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -398,10 +430,5 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
 }
 
 fn chrono_local_time() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let sec = now % 60;
-    let min = (now / 60) % 60;
-    let hour = (now / 3600 + 7) % 24;
-    format!("{:02}:{:02}:{:02}", hour, min, sec)
+    chrono::Local::now().format("%H:%M:%S").to_string()
 }

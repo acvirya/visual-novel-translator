@@ -829,7 +829,28 @@ export function compileOverlayTemplate(
       .replace(/\{\{\s*borderRadius\s*\}\}/gi, `${config.borderRadius}px`);
   }
 
-  return output;
+  return sanitizeOverlayHtml(output);
+}
+
+/**
+ * Strips potentially dangerous script tags, inline event handlers, and javascript: links
+ */
+export function sanitizeOverlayHtml(html: string): string {
+  if (!html) return "";
+
+  // 1. Remove <script> tags and contents
+  let clean = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+
+  // 2. Remove <iframe>, <object>, <embed>, <applet>, <form>, <link>, <meta> tags
+  clean = clean.replace(/<\/?(iframe|object|embed|applet|form|link|meta|base)\b[^>]*>/gi, "");
+
+  // 3. Remove inline event handlers like onclick=, onerror=, onload=, etc.
+  clean = clean.replace(/\son[a-z]+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, "");
+
+  // 4. Disallow javascript: pseudo protocols in href/src
+  clean = clean.replace(/(href|src)\s*=\s*(?:'javascript:[^']*'|"javascript:[^"]*"|javascript:[^\s>]+)/gi, '$1="#"');
+
+  return clean;
 }
 
 /**

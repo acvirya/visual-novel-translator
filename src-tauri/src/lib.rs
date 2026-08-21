@@ -6,8 +6,25 @@ use oneocr::{find_oneocr_installation, scan_screen_regions, OcrEngineStatus, Ocr
 use screen_capture::{capture_screen_rect, image_to_base64_data_url, CaptureRegion};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
 use textractor::TextractorState;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .pool_max_idle_per_host(10)
+            .gzip(true)
+            .brotli(true)
+            .deflate(true)
+            .build()
+            .expect("Failed to initialize shared HTTP client")
+    })
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MonitorInfo {
@@ -245,14 +262,312 @@ fn close_region_selector_overlay(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn translate_free_mt(
+    text: String,
+    source_lang: String,
+    target_lang: String,
+    provider: String,
+    api_key: Option<String>,
+) -> Result<String, String> {
+    let client = get_http_client();
+
+    let prov = provider.to_lowercase();
+
+    // 1. DeepL Free API if API Key provided
+    if prov.contains("deepl") {
+        if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
+            let res = client
+                .post("https://api-free.deepl.com/v2/translate")
+                .header("Authorization", format!("DeepL-Auth-Key {}", key.trim()))
+                .json(&serde_json::json!({
+                    "text": [text],
+                    "target_lang": target_lang.to_uppercase(),
+                    "source_lang": if source_lang == "auto" { serde_json::Value::Null } else { serde_json::Value::String(source_lang.to_uppercase()) }
+                }))
+                .send()
+                .await;
+
+            if let Ok(resp) = res {
+                if resp.status().is_success() {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(txt) = json["translations"][0]["text"].as_str() {
+                            return Ok(txt.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Google Translate Free MT
+    let url = "https://translate.googleapis.com/translate_a/single";
+    let resp = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        .query(&[
+            ("client", "gtx"),
+            ("sl", &source_lang),
+            ("tl", &target_lang),
+            ("dt", "t"),
+            ("q", &text),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to Google Translate: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Google Translate HTTP error {}", resp.status()));
+    }
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Google response: {}", e))?;
+
+    if let Some(arr) = json.as_array() {
+        if let Some(first_arr) = arr.first().and_then(|v| v.as_array()) {
+            let mut result = String::new();
+            for seg in first_arr {
+                if let Some(seg_arr) = seg.as_array() {
+                    if let Some(txt) = seg_arr.first().and_then(|v| v.as_str()) {
+                        result.push_str(txt);
+                    }
+                }
+            }
+            if !result.is_empty() {
+                return Ok(result.trim().to_string());
+            }
+        }
+    }
+
+    Err("Invalid response structure from translation service".to_string())
+}
+
+#[tauri::command]
+fn show_save_script_dialog(default_name: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Create New Script File")
+        .add_filter("JSON Lines (*.jsonl)", &["jsonl"])
+        .add_filter("JSON File (*.json)", &["json"])
+        .add_filter("All Files (*.*)", &["*"]);
+
+    if let Some(name) = default_name {
+        dialog = dialog.set_file_name(&name);
+    } else {
+        dialog = dialog.set_file_name("new_script.jsonl");
+    }
+
+    if let Some(path) = dialog.save_file() {
+        let path_str = path.to_string_lossy().to_string();
+        // Create initial empty file if it doesn't exist
+        if !path.exists() {
+            let _ = std::fs::write(&path, "");
+        }
+        Ok(Some(path_str))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+fn show_open_script_dialog() -> Result<Option<(String, String)>, String> {
+    let file = rfd::FileDialog::new()
+        .set_title("Open Script File")
+        .add_filter("Script Files (*.jsonl, *.json)", &["jsonl", "json"])
+        .add_filter("All Files (*.*)", &["*"])
+        .pick_file();
+
+    if let Some(path) = file {
+        let path_str = path.to_string_lossy().to_string();
+        let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read script file: {}", e))?;
+        Ok(Some((path_str, content)))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+fn save_script_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write script file: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn read_script_file_by_path(path: String) -> Result<Option<String>, String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() && p.is_file() {
+        let content = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+fn show_pick_files_dialog() -> Result<Vec<(String, String, u64)>, String> {
+    let files = rfd::FileDialog::new()
+        .set_title("Select Script Files to Batch Translate")
+        .add_filter("Script Files (*.jsonl, *.json, *.txt)", &["jsonl", "json", "txt"])
+        .add_filter("All Files (*.*)", &["*"])
+        .pick_files();
+
+    if let Some(paths) = files {
+        let mut results = Vec::new();
+        for path in paths {
+            let path_str = path.to_string_lossy().to_string();
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                results.push((path_str, content, size));
+            }
+        }
+        Ok(results)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+fn show_pick_directory_dialog() -> Result<Option<String>, String> {
+    let folder = rfd::FileDialog::new()
+        .set_title("Select Output Folder for Translations")
+        .pick_folder();
+
+    if let Some(path) = folder {
+        Ok(Some(path.to_string_lossy().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn openrouter_chat_completion(
+    api_key: String,
+    model_id: String,
+    messages_json: String,
+    temperature: f64,
+) -> Result<String, String> {
+    let client = get_http_client();
+
+    let messages: serde_json::Value = serde_json::from_str(&messages_json)
+        .map_err(|e| format!("Invalid messages JSON: {}", e))?;
+
+    let payload = serde_json::json!({
+        "model": model_id,
+        "messages": messages,
+        "temperature": temperature,
+        "response_format": { "type": "json_object" }
+    });
+
+    let resp = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key.trim()))
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
+        .header("X-Title", "VN Translator Desktop")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to OpenRouter API: {}", e))?;
+
+    let status = resp.status();
+    let body_bytes = resp.bytes().await.map_err(|e| format!("Failed to read OpenRouter response bytes: {}", e))?;
+    let body_text = String::from_utf8_lossy(&body_bytes).to_string();
+
+    if !status.is_success() {
+        // If the model rejected json_object parameter specifically (HTTP 400), retry without response_format
+        let is_format_error = status.as_u16() == 400
+            && (body_text.contains("response_format")
+                || body_text.contains("json_object")
+                || body_text.contains("structured output")
+                || body_text.contains("schema"));
+
+        if is_format_error {
+            let fallback_payload = serde_json::json!({
+                "model": model_id,
+                "messages": messages,
+                "temperature": temperature
+            });
+            let retry_resp = client
+                .post("https://openrouter.ai/api/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", api_key.trim()))
+                .header("Content-Type", "application/json")
+                .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
+                .header("X-Title", "VN Translator Desktop")
+                .json(&fallback_payload)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to connect to OpenRouter API (retry): {}", e))?;
+
+            let retry_status = retry_resp.status();
+            let retry_bytes = retry_resp.bytes().await.map_err(|e| format!("Failed to read retry response bytes: {}", e))?;
+            let retry_body = String::from_utf8_lossy(&retry_bytes).to_string();
+            if !retry_status.is_success() {
+                return Err(format!("OpenRouter API error (HTTP {}): {}", retry_status, retry_body));
+            }
+            let parsed: serde_json::Value = serde_json::from_str(&retry_body)
+                .map_err(|e| format!("Failed to parse OpenRouter response: {}", e))?;
+            if let Some(content) = parsed["choices"][0]["message"]["content"].as_str() {
+                return Ok(content.trim().to_string());
+            }
+        }
+        return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body_text)
+        .map_err(|e| format!("Failed to parse OpenRouter response: {}", e))?;
+
+    if let Some(content) = parsed["choices"][0]["message"]["content"].as_str() {
+        Ok(content.trim().to_string())
+    } else {
+        Err(format!("Empty or unexpected OpenRouter response payload: {}", body_text))
+    }
+}
+
+#[tauri::command]
+fn append_debug_log(file_name: String, content: String) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::{Component, Path};
+
+    let log_path = Path::new(&file_name);
+
+    // Disallow path traversal components ('..')
+    for component in log_path.components() {
+        if component == Component::ParentDir {
+            return Err("Invalid file path: path traversal is not permitted".to_string());
+        }
+    }
+
+    if let Some(parent) = log_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file_name)
+        .map_err(|e| format!("Failed to open log file {}: {}", file_name, e))?;
+
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("Failed to write to log file: {}", e))?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(TextractorState::new())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == "main" {
+                    let state = window.state::<TextractorState>();
+                    textractor::stop_textractor_internal(&state);
                     window.app_handle().exit(0);
                 }
             }
@@ -271,9 +586,24 @@ pub fn run() {
             capture_regions_preview,
             run_oneocr_scan,
             open_region_selector_overlay,
-            close_region_selector_overlay
+            close_region_selector_overlay,
+            translate_free_mt,
+            show_save_script_dialog,
+            show_open_script_dialog,
+            save_script_file,
+            read_script_file_by_path,
+            show_pick_files_dialog,
+            show_pick_directory_dialog,
+            openrouter_chat_completion,
+            append_debug_log
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                let state = app_handle.state::<TextractorState>();
+                textractor::stop_textractor_internal(&state);
+            }
+        });
 }
 

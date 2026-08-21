@@ -1,6 +1,6 @@
 import { PreprocessingStep, PreprocessingSource } from "../types";
 
-export const DEFAULT_PREPROCESSING_SOURCES: PreprocessingSource[] = ["manual", "textractor", "ocr"];
+export const DEFAULT_PREPROCESSING_SOURCES: PreprocessingSource[] = ["manual", "textractor", "ocr", "batch"];
 
 export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
   {
@@ -9,7 +9,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Furigana / Ruby Annotation Stripper",
     description: "Strips pronunciation readings like 私(わたし), 漢字[かんじ], and <ruby> tags",
     isEnabled: true,
-    applicableSources: ["manual", "textractor"],
+    applicableSources: ["manual", "textractor", "batch"],
     options: {
       stripRubyParentheses: true,
       stripRubyBrackets: true,
@@ -22,7 +22,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Control Characters & Engine Tags",
     description: "Removes VN engine format tags (e.g. \\c[2], \\v[1]), null bytes, and cleans escape sequences",
     isEnabled: true,
-    applicableSources: ["manual", "textractor"],
+    applicableSources: ["manual", "textractor", "batch"],
     options: {
       isRegex: true,
     },
@@ -33,7 +33,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Unicode NFKC Normalization",
     description: "Converts half-width katakana (ｶﾀｶﾅ → カタカナ) and normalizes character representations",
     isEnabled: true,
-    applicableSources: ["manual", "textractor", "ocr"],
+    applicableSources: ["manual", "textractor", "ocr", "batch"],
   },
   {
     id: "step_phrase_deduplicator",
@@ -49,7 +49,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Stutter & Repeated Character Reducer",
     description: "Normalizes excessive repetitions and stutters (e.g. あ、、あの → あ、あの, ！！！！ → ！)",
     isEnabled: true,
-    applicableSources: ["manual", "textractor", "ocr"],
+    applicableSources: ["manual", "textractor", "ocr", "batch"],
     options: {
       collapseLimit: 1,
     },
@@ -60,7 +60,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Japanese Punctuation Normalizer",
     description: "Standardizes ellipses (…… → …), quotes (「」『』), and strips decorative symbols (♪, ♥, ★)",
     isEnabled: true,
-    applicableSources: ["manual", "textractor", "ocr"],
+    applicableSources: ["manual", "textractor", "ocr", "batch"],
     options: {
       normalizeQuotes: false,
       removeDecorativeSymbols: true,
@@ -72,7 +72,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Whitespace & Line Break Normalizer",
     description: "Converts full-width spaces (　) and multiple spaces into single space, trims edges",
     isEnabled: true,
-    applicableSources: ["manual", "textractor", "ocr"],
+    applicableSources: ["manual", "textractor", "ocr", "batch"],
   },
 ];
 

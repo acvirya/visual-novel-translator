@@ -26,7 +26,7 @@ export type PreprocessingType =
   | "unicode_nfkc"
   | "custom_regex";
 
-export type PreprocessingSource = "manual" | "textractor" | "ocr";
+export type PreprocessingSource = "manual" | "textractor" | "ocr" | "batch";
 
 export interface PreprocessingStep {
   id: string;

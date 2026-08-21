@@ -188,7 +188,7 @@ export const TextPreprocessingView: React.FC = () => {
               <Sparkles size={16} color="var(--accent-primary)" /> Centralized Text Preprocessing Pipeline
             </span>
             <span className="card-subtitle">
-              Configure cleanup rules and specify which input source (Manual, Textractor, OCR) each step applies to.
+              Configure cleanup rules and specify which input source (Manual, Textractor, OCR, Batch Script) each step applies to.
             </span>
           </div>
 
@@ -352,10 +352,10 @@ export const TextPreprocessingView: React.FC = () => {
                     Applies to:
                   </span>
 
-                  {(["manual", "textractor", "ocr"] as PreprocessingSource[]).map((src) => {
+                  {(["manual", "textractor", "ocr", "batch"] as PreprocessingSource[]).map((src) => {
                     const activeSources = step.applicableSources ?? DEFAULT_PREPROCESSING_SOURCES;
                     const isSelected = activeSources.includes(src);
-                    const label = src === "manual" ? "Manual Input" : src === "textractor" ? "Textractor" : "OCR";
+                    const label = src === "manual" ? "Manual Input" : src === "textractor" ? "Textractor" : src === "ocr" ? "OCR" : "Batch Script";
 
                     return (
                       <label
@@ -482,6 +482,7 @@ export const TextPreprocessingView: React.FC = () => {
                   { id: "manual", label: "Manual" },
                   { id: "textractor", label: "Textractor" },
                   { id: "ocr", label: "OCR" },
+                  { id: "batch", label: "Batch" },
                 ].map((tab) => {
                   const isActive = testSource === tab.id;
                   return (

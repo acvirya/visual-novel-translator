@@ -268,19 +268,73 @@ class SettingsManager {
   private loadFromStorage(): AppSettings {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
+      let loaded: AppSettings;
       if (raw) {
         const parsed = JSON.parse(raw);
-        return this.deepMerge(DEFAULT_APP_SETTINGS, parsed);
+        loaded = this.deepMerge(DEFAULT_APP_SETTINGS, parsed);
+      } else {
+        loaded = JSON.parse(JSON.stringify(DEFAULT_APP_SETTINGS));
       }
+
+      // Sync legacy flat keys if present to maintain cross-system consistency
+      const flatSource = localStorage.getItem("vn_source_lang");
+      if (flatSource) loaded.general.sourceLang = flatSource;
+      const flatTarget = localStorage.getItem("vn_target_lang");
+      if (flatTarget) loaded.general.targetLang = flatTarget;
+      const flatModel = localStorage.getItem("vn_selected_model");
+      if (flatModel) loaded.translation.activeProviderId = flatModel;
+      const flatOpenRouterKey = localStorage.getItem("vn_openrouter_api_key");
+      if (flatOpenRouterKey) {
+        if (!loaded.translation.providers.openrouter) {
+          loaded.translation.providers.openrouter = {
+            id: "openrouter",
+            name: "OpenRouter",
+            type: "openrouter",
+            apiKey: flatOpenRouterKey,
+            isEnabled: true,
+          };
+        } else {
+          loaded.translation.providers.openrouter.apiKey = flatOpenRouterKey;
+        }
+      }
+
+      return loaded;
     } catch (e) {
       console.warn("Failed to parse settings from localStorage:", e);
     }
     return JSON.parse(JSON.stringify(DEFAULT_APP_SETTINGS));
   }
 
+  private syncFlatKeys() {
+    try {
+      if (this.cache.general?.sourceLang) {
+        localStorage.setItem("vn_source_lang", this.cache.general.sourceLang);
+      }
+      if (this.cache.general?.targetLang) {
+        localStorage.setItem("vn_target_lang", this.cache.general.targetLang);
+      }
+      if (this.cache.translation?.activeProviderId) {
+        localStorage.setItem("vn_selected_model", this.cache.translation.activeProviderId);
+      }
+      const openRouterKey =
+        this.cache.translation?.providers?.openrouter?.apiKey ||
+        this.cache.translation?.providers?.openai?.apiKey;
+      if (openRouterKey) {
+        localStorage.setItem("vn_openrouter_api_key", openRouterKey);
+      }
+      const deepLKey = this.cache.translation?.providers?.deepl?.apiKey;
+      if (deepLKey) {
+        localStorage.setItem("vn_deepl_api_key", deepLKey);
+      }
+    } catch {
+      // Ignored if localStorage is restricted
+    }
+  }
+
   private saveToStorage() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.cache));
+      this.syncFlatKeys();
       this.notifyListeners();
     } catch (e) {
       console.error("Failed to save settings to localStorage:", e);
@@ -312,6 +366,35 @@ class SettingsManager {
 
   public getSettings(): AppSettings {
     return JSON.parse(JSON.stringify(this.cache));
+  }
+
+  public getSourceLang(): string {
+    return this.cache.general?.sourceLang || localStorage.getItem("vn_source_lang") || "ja";
+  }
+
+  public getTargetLang(): string {
+    return this.cache.general?.targetLang || localStorage.getItem("vn_target_lang") || "en";
+  }
+
+  public getSelectedModel(): string {
+    return this.cache.translation?.activeProviderId || localStorage.getItem("vn_selected_model") || "mt:google-translate";
+  }
+
+  public getOpenRouterApiKey(): string {
+    return (
+      this.cache.translation?.providers?.openrouter?.apiKey ||
+      this.cache.translation?.providers?.openai?.apiKey ||
+      localStorage.getItem("vn_openrouter_api_key") ||
+      ""
+    );
+  }
+
+  public getDeepLApiKey(): string {
+    return (
+      this.cache.translation?.providers?.deepl?.apiKey ||
+      localStorage.getItem("vn_deepl_api_key") ||
+      ""
+    );
   }
 
   public getGeneral(): GeneralSettings {
@@ -412,7 +495,7 @@ class SettingsManager {
   }
 
   /**
-   * Reset specific category or all settings to factory defaults
+   * Reset specific category or all settings to factory defaults, and clean up flat keys
    */
   public resetSettings(category?: keyof AppSettings) {
     if (category) {

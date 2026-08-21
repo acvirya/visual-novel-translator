@@ -1,17 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  TextractorProcessInfo,
-  TextractorMessage,
-  TextractorThread,
-} from "../../types";
-import {
   TextractorService,
   POPULAR_HOOK_PRESETS,
   DEFAULT_TEXTRACTOR_PATH,
   EngineHookPreset,
 } from "../../services/textractorService";
-import { executePreprocessingPipeline, extractSpeakerAndDialogue } from "../../utils/textPreprocessor";
-import { overlayChannel } from "../../utils/overlayChannel";
+import { executePreprocessingPipeline } from "../../utils/textPreprocessor";
+import { useTextractorStore } from "../../stores/useTextractorStore";
 import {
   Cpu,
   RefreshCw,
@@ -33,65 +28,59 @@ import {
   X,
 } from "lucide-react";
 
-// Smart merge helper for visual novel typewriter text fragments & multi-pass memory hooks
-function mergeDialogueFragments(current: string, incoming: string): string {
-  const cur = current.trim();
-  const inc = incoming.trim();
-
-  if (!cur) return inc;
-  if (!inc) return cur;
-
-  // 1. If incoming chunk is an exact match or substring already inside current, keep current (e.g. current is full sentence)
-  if (cur.includes(inc)) {
-    return cur;
-  }
-
-  // 2. If current is a prefix/substring of incoming, take incoming (e.g. progressive typewriter expansion)
-  if (inc.includes(cur)) {
-    return inc;
-  }
-
-  // 3. Suffix-prefix overlap merge (e.g. cur: "かような機会があれば、" inc: "あれば、是が非でも」")
-  for (let len = Math.min(cur.length, inc.length); len >= 2; len--) {
-    const curEnd = cur.slice(-len);
-    const incStart = inc.slice(0, len);
-    if (curEnd === incStart) {
-      return cur + inc.slice(len);
-    }
-  }
-
-  // 4. If current line hasn't closed quotation and incoming is continuation
-  if (
-    !cur.endsWith("」") &&
-    !cur.endsWith("』") &&
-    !cur.endsWith("）") &&
-    !cur.endsWith(")") &&
-    !inc.startsWith("「") &&
-    !inc.startsWith("『")
-  ) {
-    return cur + inc;
-  }
-
-  // Otherwise, it is a new dialogue turn
-  return inc;
-}
-
 export const TextractorInputView: React.FC = () => {
-  // Textractor Binary Path & Architecture
-  const [exePath, setExePath] = useState<string>(() => {
-    return localStorage.getItem("vn_textractor_path") || DEFAULT_TEXTRACTOR_PATH;
-  });
-  const [arch, setArch] = useState<"x86" | "x64">(() => {
-    return (localStorage.getItem("vn_textractor_arch") as "x86" | "x64") || "x86";
-  });
+  // Global Textractor State from Zustand SSOT
+  const {
+    exePath,
+    arch,
+    processes,
+    isLoadingProcesses,
+    selectedPid,
+    isHooked,
+    isAttaching,
+    attachedPid,
+    hookError,
+    discoveryDuration,
+    discoverySecondsLeft,
+    isDiscoveryActive,
+    debounceMs,
+    threads,
+    combinedThreadId,
+    messageThreadId,
+    speakerThreadId,
+    inspectedThreadId,
+    maxLogLines,
+    threadLogs,
+    ignoreDuplicateLines,
+    latestSpeaker,
+    latestMessage,
+    latestRawMessage,
+    autoForwardToOverlay,
+    setExePath,
+    setArch,
+    setSelectedPid,
+    setDiscoveryDuration,
+    setDiscoverySecondsLeft,
+    setIsDiscoveryActive,
+    setDebounceMs,
+    setInspectedThreadId,
+    setMaxLogLines,
+    setIgnoreDuplicateLines,
+    setAutoForwardToOverlay,
+    setLatestSpeaker,
+    setLatestMessage,
+    setLatestRawMessage,
+  } = useTextractorStore();
 
-  // Process Enumeration State
-  const [processes, setProcesses] = useState<TextractorProcessInfo[]>([]);
-  const [isLoadingProcesses, setIsLoadingProcesses] = useState<boolean>(false);
-  const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  // Local UI-only state (search input & dropdown popovers)
   const [processSearchQuery, setProcessSearchQuery] = useState<string>("");
   const [isProcessDropdownOpen, setIsProcessDropdownOpen] = useState<boolean>(false);
+  const [specificTextFilter, setSpecificTextFilter] = useState<string>("");
+  const [selectedPreset, setSelectedPreset] = useState<EngineHookPreset>(POPULAR_HOOK_PRESETS[0]);
+  const [customHookCode, setCustomHookCode] = useState<string>("");
+
   const processDropdownRef = useRef<HTMLDivElement>(null);
+  const discoveryTimerRef = useRef<any>(null);
 
   // Close process dropdown on outside click
   useEffect(() => {
@@ -104,449 +93,17 @@ export const TextractorInputView: React.FC = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Sidecar Hooking State
-  const [isHooked, setIsHooked] = useState<boolean>(false);
-  const [isAttaching, setIsAttaching] = useState<boolean>(false);
-  const [hookError, setHookError] = useState<string | null>(null);
-  const [attachedPid, setAttachedPid] = useState<number | null>(null);
-
-  // Hook Discovery Duration & Debounce Settings
-  const [discoveryDuration, setDiscoveryDuration] = useState<number>(() => {
-    const saved = localStorage.getItem("vn_textractor_discovery_duration");
-    return saved ? Number(saved) : 10;
-  });
-  const [discoverySecondsLeft, setDiscoverySecondsLeft] = useState<number>(0);
-  const [isDiscoveryActive, setIsDiscoveryActive] = useState<boolean>(false);
-  const [debounceMs, setDebounceMs] = useState<number>(() => {
-    const saved = localStorage.getItem("vn_textractor_debounce_ms");
-    return saved ? Number(saved) : 250;
-  });
-  const [specificTextFilter, setSpecificTextFilter] = useState<string>("");
-
-  // Custom Hook Codes & Presets
-  const [selectedPreset, setSelectedPreset] = useState<EngineHookPreset>(POPULAR_HOOK_PRESETS[0]);
-  const [customHookCode, setCustomHookCode] = useState<string>("");
-
-  // Detected Threads & Role Mapping (Combined vs Separate Speaker / Dialogue)
-  const [threads, setThreads] = useState<Map<number, TextractorThread>>(new Map());
-  const [combinedThreadId, setCombinedThreadId] = useState<number | null>(null);
-  const [messageThreadId, setMessageThreadId] = useState<number | null>(null);
-  const [speakerThreadId, setSpeakerThreadId] = useState<number | null>(null);
-
-  // Inspected Thread & Per-Thread Logs
-  const [inspectedThreadId, setInspectedThreadId] = useState<number | null>(null);
-  const [maxLogLines, setMaxLogLines] = useState<number>(() => {
-    const saved = localStorage.getItem("vn_textractor_max_log_lines");
-    return saved ? Number(saved) : 100;
-  });
-  const [threadLogs, setThreadLogs] = useState<Map<number, TextractorMessage[]>>(new Map());
-
-  // Duplicate Line Suppression Filter State
-  const [ignoreDuplicateLines, setIgnoreDuplicateLines] = useState<boolean>(() => {
-    return localStorage.getItem("vn_ignore_duplicate_lines") !== "false";
-  });
-
+  // Initialize Textractor listener and load process list on mount
   useEffect(() => {
-    localStorage.setItem("vn_ignore_duplicate_lines", String(ignoreDuplicateLines));
-  }, [ignoreDuplicateLines]);
-
-  useEffect(() => {
-    localStorage.setItem("vn_textractor_debounce_ms", String(debounceMs));
-    localStorage.setItem("vn_textractor_max_log_lines", String(maxLogLines));
-    localStorage.setItem("vn_textractor_discovery_duration", String(discoveryDuration));
-  }, [debounceMs, maxLogLines, discoveryDuration]);
-
-  // Synchronized Dialogue State for Live Stream Inspector
-  const [latestSpeaker, setLatestSpeaker] = useState<string>("");
-  const [latestMessage, setLatestMessage] = useState<string>("");
-  const [latestRawMessage, setLatestRawMessage] = useState<string>("");
-  const [autoForwardToOverlay, setAutoForwardToOverlay] = useState<boolean>(() => {
-    const saved = localStorage.getItem("vn_textractor_auto_forward");
-    return saved !== null ? saved === "true" : true;
-  });
-
-  useEffect(() => {
-    localStorage.setItem("vn_textractor_auto_forward", String(autoForwardToOverlay));
-  }, [autoForwardToOverlay]);
-
-  // Sync state into persistent Refs to prevent listener re-subscription race conditions
-  const combinedThreadIdRef = useRef<number | null>(null);
-  const messageThreadIdRef = useRef<number | null>(null);
-  const speakerThreadIdRef = useRef<number | null>(null);
-  const autoForwardRef = useRef<boolean>(true);
-  const ignoreDuplicateLinesRef = useRef<boolean>(true);
-  const debounceMsRef = useRef<number>(250);
-  const maxLogLinesRef = useRef<number>(100);
-  const latestSpeakerRef = useRef<string>("");
-  const lastForwardedTextRef = useRef<{ message: string; speaker: string }>({ message: "", speaker: "" });
-
-  combinedThreadIdRef.current = combinedThreadId;
-  messageThreadIdRef.current = messageThreadId;
-  speakerThreadIdRef.current = speakerThreadId;
-  autoForwardRef.current = autoForwardToOverlay;
-  ignoreDuplicateLinesRef.current = ignoreDuplicateLines;
-  debounceMsRef.current = debounceMs;
-  maxLogLinesRef.current = maxLogLines;
-  latestSpeakerRef.current = latestSpeaker;
-
-  const dialogueAccumulatorRef = useRef<{
-    buffer: string;
-    rawBuffer: string;
-    lastTimestamp: number;
-    timer: any;
-  }>({
-    buffer: "",
-    rawBuffer: "",
-    lastTimestamp: 0,
-    timer: null,
-  });
-
-  // Discovery Timer Ref
-  const discoveryTimerRef = useRef<any>(null);
-
-  // Save Path to localStorage
-  useEffect(() => {
-    localStorage.setItem("vn_textractor_path", exePath);
-  }, [exePath]);
-
-  // Load process list on mount
-  const loadProcesses = async () => {
-    setIsLoadingProcesses(true);
-    try {
-      const list = await TextractorService.listProcesses();
-      setProcesses(list || []);
-      if (list && list.length > 0 && selectedPid === null) {
-        setSelectedPid(list[0].pid);
-      }
-    } catch (err) {
-      console.warn("Failed to load processes:", err);
-    } finally {
-      setIsLoadingProcesses(false);
-    }
-  };
-
-  useEffect(() => {
-    loadProcesses();
-  }, []);
-
-  // Centralized Inspector Recomputation & State Reset across all role modes
-  const recomputeLiveInspector = (
-    nextCombined: number | null,
-    nextMsg: number | null,
-    nextSpeaker: number | null
-  ) => {
-    // 1. Reset debounce buffer & duplicate suppression cache
-    dialogueAccumulatorRef.current = { buffer: "", rawBuffer: "", lastTimestamp: 0, timer: null };
-    lastForwardedTextRef.current = { message: "", speaker: "" };
-
-    // 2. If all streams disabled -> wipe inspector completely
-    if (nextCombined === null && nextMsg === null && nextSpeaker === null) {
-      setLatestSpeaker("");
-      setLatestMessage("");
-      setLatestRawMessage("");
-      return;
-    }
-
-    // 3. If Combined Auto-Split is active -> re-extract from combined thread only
-    if (nextCombined !== null) {
-      const thread = threads.get(nextCombined);
-      if (thread && thread.lastText) {
-        const clean = executePreprocessingPipeline(thread.lastText, "textractor");
-        const { speaker, message } = extractSpeakerAndDialogue(clean);
-        setLatestSpeaker(speaker);
-        setLatestMessage(message);
-        setLatestRawMessage(thread.lastText);
-      } else {
-        setLatestSpeaker("");
-        setLatestMessage("");
-        setLatestRawMessage("");
-      }
-      return;
-    }
-
-    // 4. Separate Speaker & Dialogue streams
-    // Recompute Speaker
-    if (nextSpeaker !== null) {
-      const spkThread = threads.get(nextSpeaker);
-      if (spkThread && spkThread.lastText) {
-        const cleanSpk = executePreprocessingPipeline(spkThread.lastText, "textractor").trim();
-        setLatestSpeaker(cleanSpk);
-      } else {
-        setLatestSpeaker("");
-      }
-    } else {
-      setLatestSpeaker("");
-    }
-
-    // Recompute Dialogue
-    if (nextMsg !== null) {
-      const msgThread = threads.get(nextMsg);
-      if (msgThread && msgThread.lastText) {
-        const cleanMsg = executePreprocessingPipeline(msgThread.lastText, "textractor");
-        setLatestMessage(cleanMsg);
-        setLatestRawMessage(msgThread.lastText);
-      } else {
-        setLatestMessage("");
-        setLatestRawMessage("");
-      }
-    } else {
-      setLatestMessage("");
-      setLatestRawMessage("");
-    }
-  };
-
-  // Dedicated Role Click Handlers with Unified Recompute
-  const handleToggleCombined = (thread: TextractorThread) => {
-    if (combinedThreadIdRef.current === thread.id) {
-      setCombinedThreadId(null);
-      recomputeLiveInspector(null, messageThreadIdRef.current, speakerThreadIdRef.current);
-    } else {
-      setCombinedThreadId(thread.id);
-      setMessageThreadId(null);
-      setSpeakerThreadId(null);
-      recomputeLiveInspector(thread.id, null, null);
-    }
-  };
-
-  const handleToggleDialogue = (thread: TextractorThread) => {
-    if (messageThreadIdRef.current === thread.id) {
-      setMessageThreadId(null);
-      recomputeLiveInspector(null, null, speakerThreadIdRef.current);
-    } else {
-      setMessageThreadId(thread.id);
-      setCombinedThreadId(null);
-      const nextSpeaker = speakerThreadIdRef.current === thread.id ? null : speakerThreadIdRef.current;
-      if (speakerThreadIdRef.current === thread.id) setSpeakerThreadId(null);
-      recomputeLiveInspector(null, thread.id, nextSpeaker);
-    }
-  };
-
-  const handleToggleSpeaker = (thread: TextractorThread) => {
-    if (speakerThreadIdRef.current === thread.id) {
-      setSpeakerThreadId(null);
-      recomputeLiveInspector(null, messageThreadIdRef.current, null);
-    } else {
-      setSpeakerThreadId(thread.id);
-      setCombinedThreadId(null);
-      const nextMsg = messageThreadIdRef.current === thread.id ? null : messageThreadIdRef.current;
-      if (messageThreadIdRef.current === thread.id) setMessageThreadId(null);
-      recomputeLiveInspector(null, nextMsg, thread.id);
-    }
-  };
-
-  // Listen to Textractor text events via Tauri Event listener (Registered once on mount)
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-
-    async function setupListener() {
-      unlisten = await TextractorService.onTextEvent((msg: TextractorMessage) => {
-        const currentCombined = combinedThreadIdRef.current;
-        const currentMsgThread = messageThreadIdRef.current;
-        const currentSpeakerThread = speakerThreadIdRef.current;
-        const currentDebounce = debounceMsRef.current;
-        const currentMaxLogs = maxLogLinesRef.current;
-        const currentIgnoreDup = ignoreDuplicateLinesRef.current;
-        const currentAutoForward = autoForwardRef.current;
-
-        // 1. Update Threads Map with fresh incoming text
-        setThreads((prev) => {
-          const next = new Map(prev);
-          const existing = next.get(msg.handle);
-          if (existing) {
-            next.set(msg.handle, {
-              ...existing,
-              totalLines: existing.totalLines + 1,
-              lastText: msg.text,
-              lastTimestamp: msg.timestamp,
-              hookCode: msg.hook_code || existing.hookCode,
-            });
-          } else {
-            // New thread discovered (Keep roles unassigned until explicitly set by user)
-            next.set(msg.handle, {
-              id: msg.handle,
-              name: msg.name || `Thread #${msg.handle}`,
-              hookCode: msg.hook_code || "ENGINE_DEFAULT",
-              address: msg.address,
-              totalLines: 1,
-              lastText: msg.text,
-              lastTimestamp: msg.timestamp,
-              isActive: true,
-              role: "ignored",
-              isPrimary: false,
-            });
-
-            // Set first thread as inspected thread if none selected yet
-            setInspectedThreadId((cur) => (cur === null ? msg.handle : cur));
-          }
-          return next;
-        });
-
-        // 2. Append to specific Thread Log (filter consecutive identical lines if enabled)
-        setThreadLogs((prev) => {
-          const next = new Map(prev);
-          const logs = next.get(msg.handle) || [];
-          if (currentIgnoreDup && logs.length > 0 && logs[0].text.trim() === msg.text.trim()) {
-            return next; // Suppress duplicate from flooding thread log
-          }
-          const updated = [msg, ...logs].slice(0, currentMaxLogs);
-          next.set(msg.handle, updated);
-          return next;
-        });
-
-        // 3. CASE A: COMBINED STREAM (Auto-Split Speaker + Message from single thread)
-        if (currentCombined !== null && msg.handle === currentCombined) {
-          const cleanText = executePreprocessingPipeline(msg.text, "textractor");
-          if (cleanText.trim().length > 0 && !msg.text.startsWith("Attached to process")) {
-            const now = Date.now();
-            const acc = dialogueAccumulatorRef.current;
-            const timeDiff = now - acc.lastTimestamp;
-            const windowLimit = Math.max(currentDebounce, 300);
-
-            // Accumulate and merge fragments if arriving within debounce window
-            let mergedClean = cleanText;
-            let mergedRaw = msg.text;
-
-            if (acc.buffer && timeDiff < windowLimit) {
-              mergedClean = mergeDialogueFragments(acc.buffer, cleanText);
-              mergedRaw = mergeDialogueFragments(acc.rawBuffer, msg.text);
-            }
-
-            acc.buffer = mergedClean;
-            acc.rawBuffer = mergedRaw;
-            acc.lastTimestamp = now;
-
-            // Auto-extract speaker and dialogue from merged text
-            const { speaker, message } = extractSpeakerAndDialogue(mergedClean);
-
-            setLatestSpeaker(speaker);
-            setLatestMessage(message);
-            setLatestRawMessage(mergedRaw);
-
-            if (acc.timer) clearTimeout(acc.timer);
-
-            acc.timer = setTimeout(() => {
-              const finalClean = executePreprocessingPipeline(acc.buffer, "textractor");
-              const extracted = extractSpeakerAndDialogue(finalClean);
-
-              setLatestSpeaker(extracted.speaker);
-              setLatestMessage(extracted.message);
-
-              // Suppress duplicate emission
-              if (
-                currentIgnoreDup &&
-                lastForwardedTextRef.current.message === extracted.message &&
-                lastForwardedTextRef.current.speaker === extracted.speaker
-              ) {
-                return;
-              }
-
-              lastForwardedTextRef.current = {
-                message: extracted.message,
-                speaker: extracted.speaker,
-              };
-
-              if (currentAutoForward) {
-                overlayChannel.send({
-                  type: "DIALOGUE_UPDATE",
-                  dialogue: {
-                    speaker: extracted.speaker || undefined,
-                    translatedSpeaker: extracted.speaker || undefined,
-                    message: acc.rawBuffer,
-                    translatedMessage: extracted.message,
-                  },
-                });
-              }
-            }, Math.max(currentDebounce, 150));
-          }
-        }
-
-        // 4. CASE B: DEDICATED SPEAKER THREAD (Separate stream)
-        else if (currentSpeakerThread !== null && msg.handle === currentSpeakerThread) {
-          const cleanSpeaker = executePreprocessingPipeline(msg.text, "textractor").trim();
-          if (cleanSpeaker) {
-            setLatestSpeaker(cleanSpeaker);
-          }
-        }
-
-        // 5. CASE C: DEDICATED DIALOGUE THREAD (Separate stream)
-        else if (currentMsgThread !== null && msg.handle === currentMsgThread) {
-          const cleanText = executePreprocessingPipeline(msg.text, "textractor");
-          if (cleanText.trim().length > 0 && !msg.text.startsWith("Attached to process")) {
-            const now = Date.now();
-            const acc = dialogueAccumulatorRef.current;
-            const timeDiff = now - acc.lastTimestamp;
-            const windowLimit = Math.max(currentDebounce, 300);
-
-            // Accumulate and merge fragments if arriving close together
-            let mergedClean = cleanText;
-            let mergedRaw = msg.text;
-
-            if (acc.buffer && timeDiff < windowLimit) {
-              mergedClean = mergeDialogueFragments(acc.buffer, cleanText);
-              mergedRaw = mergeDialogueFragments(acc.rawBuffer, msg.text);
-            }
-
-            acc.buffer = mergedClean;
-            acc.rawBuffer = mergedRaw;
-            acc.lastTimestamp = now;
-
-            // Immediately show current best merged sentence in Live Stream Inspector
-            setLatestMessage(mergedClean);
-            setLatestRawMessage(mergedRaw);
-
-            // Clear previous trailing flush timer
-            if (acc.timer) clearTimeout(acc.timer);
-
-            // Debounced forward to Overlay & Live Translation
-            acc.timer = setTimeout(() => {
-              const finalClean = executePreprocessingPipeline(acc.buffer, "textractor");
-              setLatestMessage(finalClean);
-
-              const currentSpeaker = latestSpeakerRef.current;
-
-              // Check if consecutive duplicate suppression is enabled
-              if (
-                currentIgnoreDup &&
-                lastForwardedTextRef.current.message === finalClean &&
-                lastForwardedTextRef.current.speaker === currentSpeaker
-              ) {
-                return;
-              }
-
-              lastForwardedTextRef.current = {
-                message: finalClean,
-                speaker: currentSpeaker,
-              };
-
-              if (currentAutoForward) {
-                overlayChannel.send({
-                  type: "DIALOGUE_UPDATE",
-                  dialogue: {
-                    speaker: currentSpeaker || undefined,
-                    translatedSpeaker: currentSpeaker || undefined,
-                    message: acc.rawBuffer,
-                    translatedMessage: finalClean,
-                  },
-                });
-              }
-            }, Math.max(currentDebounce, 150));
-          }
-        }
-      });
-    }
-
-    setupListener();
-
-    return () => {
-      if (unlisten) unlisten();
-    };
+    TextractorService.initListener();
+    TextractorService.listProcesses();
   }, []);
 
   // Handle Discovery Countdown Timer
   useEffect(() => {
     if (isDiscoveryActive && discoverySecondsLeft > 0) {
       discoveryTimerRef.current = setTimeout(() => {
-        setDiscoverySecondsLeft((prev) => prev - 1);
+        setDiscoverySecondsLeft(discoverySecondsLeft - 1);
       }, 1000);
     } else if (discoverySecondsLeft === 0 && isDiscoveryActive) {
       setIsDiscoveryActive(false);
@@ -555,7 +112,7 @@ export const TextractorInputView: React.FC = () => {
     return () => {
       if (discoveryTimerRef.current) clearTimeout(discoveryTimerRef.current);
     };
-  }, [isDiscoveryActive, discoverySecondsLeft]);
+  }, [isDiscoveryActive, discoverySecondsLeft, setDiscoverySecondsLeft, setIsDiscoveryActive]);
 
   // Manual Hook Search Toggle
   const handleToggleHookSearch = () => {
@@ -572,39 +129,12 @@ export const TextractorInputView: React.FC = () => {
   // Attach / Start Textractor Sidecar
   const handleAttach = async () => {
     if (!selectedPid) return;
-    setIsAttaching(true);
-    setHookError(null);
-
-    const res = await TextractorService.startSidecar(exePath, selectedPid);
-    setIsAttaching(false);
-
-    if (res.success) {
-      setIsHooked(true);
-      setAttachedPid(selectedPid);
-      setThreads(new Map());
-      setThreadLogs(new Map());
-      setCombinedThreadId(null);
-      setMessageThreadId(null);
-      setSpeakerThreadId(null);
-      setLatestSpeaker("");
-      setLatestMessage("");
-      setLatestRawMessage("");
-      setIsDiscoveryActive(false);
-      setDiscoverySecondsLeft(0);
-    } else {
-      setHookError(res.error || "Failed to attach Textractor to process.");
-    }
+    await TextractorService.startSidecar(exePath, selectedPid);
   };
 
   // Detach / Stop Textractor Sidecar
   const handleDetach = async () => {
     await TextractorService.stopSidecar();
-    setIsHooked(false);
-    setAttachedPid(null);
-    setCombinedThreadId(null);
-    setMessageThreadId(null);
-    setSpeakerThreadId(null);
-    setIsDiscoveryActive(false);
   };
 
   // Insert Custom Hook Code
@@ -618,46 +148,23 @@ export const TextractorInputView: React.FC = () => {
     setCustomHookCode("");
   };
 
-  // Switch architecture and reset process / inspector / threads state
+  // Switch architecture
   const handleSelectArch = async (selectedArch: "x86" | "x64") => {
     if (isHooked) {
       await TextractorService.stopSidecar();
-      setIsHooked(false);
-      setAttachedPid(null);
     }
     setArch(selectedArch);
-    const newPath = selectedArch === "x86"
-      ? "D:\\Program Files\\Textractor\\x86\\TextractorCLI.exe"
-      : "D:\\Program Files\\Textractor\\x64\\TextractorCLI.exe";
+    const newPath =
+      selectedArch === "x86"
+        ? "C:\\Program Files\\Textractor\\x86\\TextractorCLI.exe"
+        : "C:\\Program Files\\Textractor\\x64\\TextractorCLI.exe";
     setExePath(newPath);
-    localStorage.setItem("vn_textractor_path", newPath);
-    localStorage.setItem("vn_textractor_arch", selectedArch);
 
-    // Reset process selection
     setSelectedPid(null);
     setProcessSearchQuery("");
     setIsProcessDropdownOpen(false);
 
-    // Reset threads & logs
-    setThreads(new Map());
-    setThreadLogs(new Map());
-    setInspectedThreadId(null);
-    setCombinedThreadId(null);
-    setMessageThreadId(null);
-    setSpeakerThreadId(null);
-
-    // Reset Live Inspector
-    setLatestSpeaker("");
-    setLatestMessage("");
-    setLatestRawMessage("");
-    dialogueAccumulatorRef.current = { buffer: "", rawBuffer: "", lastTimestamp: 0, timer: null };
-
-    // Reset discovery timer
-    setIsDiscoveryActive(false);
-    setDiscoverySecondsLeft(0);
-
-    // Reload processes for new architecture
-    loadProcesses();
+    TextractorService.listProcesses();
   };
 
   // Selected process object
@@ -734,7 +241,7 @@ export const TextractorInputView: React.FC = () => {
               type="text"
               value={exePath}
               onChange={(e) => setExePath(e.target.value)}
-              placeholder="D:\Program Files\Textractor\x86\TextractorCLI.exe"
+              placeholder={DEFAULT_TEXTRACTOR_PATH}
               style={{ width: "100%", fontFamily: "var(--font-mono)", fontSize: "12px" }}
             />
           </div>
@@ -901,9 +408,9 @@ export const TextractorInputView: React.FC = () => {
             )}
           </div>
 
-          {/* Refresh Processes Button (on the left side of Attach Hook) */}
+          {/* Refresh Processes Button */}
           <button
-            onClick={loadProcesses}
+            onClick={() => TextractorService.listProcesses()}
             disabled={isLoadingProcesses || isHooked}
             className="btn-secondary"
             style={{ height: "32px", padding: "0 12px", fontSize: "12px", whiteSpace: "nowrap" }}
@@ -1121,7 +628,7 @@ export const TextractorInputView: React.FC = () => {
           </div>
         </div>
 
-        {/* Toolbar: Auto-Forward & Clear Stream directly above preview */}
+        {/* Toolbar: Auto-Forward & Clear Stream */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "10px" }}>
           <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer" }}>
             <input
@@ -1138,7 +645,6 @@ export const TextractorInputView: React.FC = () => {
               setLatestSpeaker("");
               setLatestMessage("");
               setLatestRawMessage("");
-              dialogueAccumulatorRef.current = { buffer: "", rawBuffer: "", lastTimestamp: 0, timer: null };
             }}
             disabled={!isLiveStreamActive}
             className="btn-secondary"
@@ -1299,7 +805,7 @@ export const TextractorInputView: React.FC = () => {
                         {/* 1. Combined (Auto-Split) Button */}
                         <button
                           type="button"
-                          onClick={() => handleToggleCombined(thread)}
+                          onClick={() => TextractorService.toggleRole(thread.id, "combined")}
                           className={isCombined ? "btn-primary" : "btn-secondary"}
                           style={{
                             padding: "2px 8px",
@@ -1321,7 +827,7 @@ export const TextractorInputView: React.FC = () => {
                         {/* 2. Dialogue Button */}
                         <button
                           type="button"
-                          onClick={() => handleToggleDialogue(thread)}
+                          onClick={() => TextractorService.toggleRole(thread.id, "message")}
                           className={isMsg ? "btn-primary" : "btn-secondary"}
                           style={{ padding: "2px 8px", fontSize: "11px", whiteSpace: "nowrap" }}
                           title="Assign as main dialogue text stream"
@@ -1332,7 +838,7 @@ export const TextractorInputView: React.FC = () => {
                         {/* 3. Speaker Button */}
                         <button
                           type="button"
-                          onClick={() => handleToggleSpeaker(thread)}
+                          onClick={() => TextractorService.toggleRole(thread.id, "speaker")}
                           className={isSpeaker ? "btn-primary" : "btn-secondary"}
                           style={{
                             padding: "2px 8px",
@@ -1433,11 +939,7 @@ export const TextractorInputView: React.FC = () => {
             <button
               onClick={() => {
                 if (inspectedThreadId !== null) {
-                  setThreadLogs((prev) => {
-                    const next = new Map(prev);
-                    next.set(inspectedThreadId, []);
-                    return next;
-                  });
+                  TextractorService.clearLogs(inspectedThreadId);
                 }
               }}
               disabled={!currentInspectedThread || currentThreadLogs.length === 0}

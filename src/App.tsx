@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { NavigationTab } from "./types";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Header } from "./components/layout/Header";
+import { shortcutService } from "./services/shortcutService";
+import { ToastProvider } from "./components/common/ToastProvider";
 
 // Translation Views
 import { LiveTranslateView } from "./components/views/LiveTranslateView";
@@ -23,59 +25,76 @@ import { TextPreprocessingView } from "./components/views/TextPreprocessingView"
 import { GeneralSettingsView } from "./components/views/GeneralSettingsView";
 import { TranslationProvidersView } from "./components/views/TranslationProvidersView";
 
+// Error Boundary
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
+
+interface TabConfig {
+  id: NavigationTab;
+  title: string;
+  component: React.ReactNode;
+}
+
 export function App() {
   const [currentTab, setCurrentTab] = useState<NavigationTab>("live-translate");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
 
-  const renderActiveView = () => {
-    switch (currentTab) {
-      case "live-translate":
-        return <LiveTranslateView />;
-      case "manual-translate":
-        return <ManualTranslateView />;
-      case "batch-translate":
-        return <BatchTranslateView />;
-      case "glossary-manager":
-        return <GlossaryManagerView />;
-      case "script-manager":
-        return <ScriptManagerView />;
-      case "logs":
-        return <LogsView />;
-      case "textractor":
-        return <TextractorInputView />;
-      case "ocr":
-        return <OcrInputView />;
-      case "overlay-settings":
-        return <OverlaySettingsView />;
-      case "text-preprocessing":
-        return <TextPreprocessingView />;
-      case "general-settings":
-        return <GeneralSettingsView />;
-      case "translation-providers":
-        return <TranslationProvidersView />;
-      default:
-        return <LiveTranslateView />;
-    }
-  };
+  useEffect(() => {
+    shortcutService.init();
+  }, []);
+
+  const tabs: TabConfig[] = [
+    { id: "live-translate", title: "Live Translate", component: <LiveTranslateView /> },
+    { id: "manual-translate", title: "Manual Translate", component: <ManualTranslateView /> },
+    { id: "batch-translate", title: "Batch Translate", component: <BatchTranslateView /> },
+    { id: "glossary-manager", title: "Glossary Manager", component: <GlossaryManagerView /> },
+    { id: "script-manager", title: "Script Manager", component: <ScriptManagerView /> },
+    { id: "logs", title: "Logs", component: <LogsView /> },
+    { id: "textractor", title: "Textractor Hook", component: <TextractorInputView /> },
+    { id: "ocr", title: "OCR Input", component: <OcrInputView /> },
+    { id: "overlay-settings", title: "Overlay Settings", component: <OverlaySettingsView /> },
+    { id: "text-preprocessing", title: "Text Preprocessing", component: <TextPreprocessingView /> },
+    { id: "general-settings", title: "General Settings", component: <GeneralSettingsView /> },
+    { id: "translation-providers", title: "Translation Providers", component: <TranslationProvidersView /> },
+  ];
 
   return (
-    <div className="app-layout">
-      {/* Collapsible Left Sidebar */}
-      <Sidebar
-        currentTab={currentTab}
-        onSelectTab={setCurrentTab}
-        isCollapsed={isSidebarCollapsed}
-        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-      />
+    <ErrorBoundary fallbackTitle="Visual Novel Translator encountered an unexpected error">
+      <ToastProvider>
+        <div className="app-layout">
+          {/* Collapsible Left Sidebar */}
+          <Sidebar
+            currentTab={currentTab}
+            onSelectTab={setCurrentTab}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          />
 
-      {/* Main Content Area */}
-      <div className="main-content">
-        <Header currentTab={currentTab} />
-        <main className="view-container">
-          {renderActiveView()}
-        </main>
-      </div>
-    </div>
+          {/* Main Content Area */}
+          <div className="main-content">
+            <Header currentTab={currentTab} />
+            <main className="view-container" style={{ position: "relative", flex: 1, minHeight: 0 }}>
+              {tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  style={{
+                    display: currentTab === tab.id ? "flex" : "none",
+                    flexDirection: "column",
+                    width: "100%",
+                    height: "100%",
+                    minHeight: 0,
+                    flex: 1,
+                  }}
+                >
+                  <ErrorBoundary fallbackTitle={`${tab.title} Error`}>
+                    {tab.component}
+                  </ErrorBoundary>
+                </div>
+              ))}
+            </main>
+          </div>
+        </div>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }
 
