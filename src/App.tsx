@@ -5,25 +5,11 @@ import { Header } from "./components/layout/Header";
 import { shortcutService } from "./services/shortcutService";
 import { ToastProvider } from "./components/common/ToastProvider";
 
-// Translation Views
-import { LiveTranslateView } from "./components/views/LiveTranslateView";
-import { ManualTranslateView } from "./components/views/ManualTranslateView";
+// Primary 4-Hub Views
+import { LiveGameHubView } from "./components/views/LiveGameHubView";
 import { BatchTranslateView } from "./components/views/BatchTranslateView";
-import { GlossaryManagerView } from "./components/views/GlossaryManagerView";
-import { ScriptManagerView } from "./components/views/ScriptManagerView";
-import { LogsView } from "./components/views/LogsView";
-
-// Input Views
-import { TextractorInputView } from "./components/views/TextractorInputView";
-import { OcrInputView } from "./components/views/OcrInputView";
-
-// Overlay Views
-import { OverlaySettingsView } from "./components/views/OverlaySettingsView";
-
-// Settings Views
-import { TextPreprocessingView } from "./components/views/TextPreprocessingView";
-import { GeneralSettingsView } from "./components/views/GeneralSettingsView";
-import { TranslationProvidersView } from "./components/views/TranslationProvidersView";
+import { KnowledgeBaseView } from "./components/views/KnowledgeBaseView";
+import { UnifiedSettingsView } from "./components/views/UnifiedSettingsView";
 
 // Error Boundary
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
@@ -35,26 +21,43 @@ interface TabConfig {
 }
 
 export function App() {
-  const [currentTab, setCurrentTab] = useState<NavigationTab>("live-translate");
+  const [currentTab, setCurrentTab] = useState<NavigationTab>("live-game");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
 
   useEffect(() => {
     shortcutService.init();
+
+    const handleResize = () => {
+      if (window.innerWidth < 860) {
+        setIsSidebarCollapsed(true);
+      }
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   const tabs: TabConfig[] = [
-    { id: "live-translate", title: "Live Translate", component: <LiveTranslateView /> },
-    { id: "manual-translate", title: "Manual Translate", component: <ManualTranslateView /> },
-    { id: "batch-translate", title: "Batch Translate", component: <BatchTranslateView /> },
-    { id: "glossary-manager", title: "Glossary Manager", component: <GlossaryManagerView /> },
-    { id: "script-manager", title: "Script Manager", component: <ScriptManagerView /> },
-    { id: "logs", title: "Logs", component: <LogsView /> },
-    { id: "textractor", title: "Textractor Hook", component: <TextractorInputView /> },
-    { id: "ocr", title: "OCR Input", component: <OcrInputView /> },
-    { id: "overlay-settings", title: "Overlay Settings", component: <OverlaySettingsView /> },
-    { id: "text-preprocessing", title: "Text Preprocessing", component: <TextPreprocessingView /> },
-    { id: "general-settings", title: "General Settings", component: <GeneralSettingsView /> },
-    { id: "translation-providers", title: "Translation Providers", component: <TranslationProvidersView /> },
+    {
+      id: "live-game",
+      title: "Live Game Translation",
+      component: <LiveGameHubView onNavigateToSettings={() => setCurrentTab("settings")} />,
+    },
+    {
+      id: "batch-translate",
+      title: "Batch Script Translator",
+      component: <BatchTranslateView onOpenPreprocessingSettings={() => setCurrentTab("settings")} />,
+    },
+    {
+      id: "knowledge-base",
+      title: "Knowledge Base",
+      component: <KnowledgeBaseView />,
+    },
+    {
+      id: "settings",
+      title: "Settings & AI Configuration",
+      component: <UnifiedSettingsView />,
+    },
   ];
 
   return (

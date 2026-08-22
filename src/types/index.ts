@@ -1,17 +1,18 @@
 export type NavigationTab =
-  // Translation
+  // 4 Primary Hubs
+  | "live-game"
+  | "batch-translate"
+  | "knowledge-base"
+  | "settings"
+  // Legacy / Sub-view compatibility aliases
   | "live-translate"
   | "manual-translate"
-  | "batch-translate"
   | "glossary-manager"
   | "script-manager"
   | "logs"
-  // Input
   | "textractor"
   | "ocr"
-  // Overlay
   | "overlay-settings"
-  // Settings
   | "text-preprocessing"
   | "general-settings"
   | "translation-providers";

@@ -181,6 +181,41 @@ pub fn list_target_processes() -> Result<Vec<ProcessInfo>, String> {
     }
 }
 
+fn resolve_textractor_exe(requested: &str) -> std::path::PathBuf {
+    let req_path = Path::new(requested);
+    if req_path.exists() && req_path.is_file() {
+        return req_path.to_path_buf();
+    }
+
+    let is_x64 = requested.to_lowercase().contains("x64");
+    let arch_dir = if is_x64 { "x64" } else { "x86" };
+
+    let candidates = [
+        format!("D:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
+        format!("C:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
+        format!("C:\\Program Files (x86)\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
+        format!("D:\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
+        format!("C:\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
+    ];
+
+    for c in candidates {
+        let p = Path::new(&c);
+        if p.exists() && p.is_file() {
+            return p.to_path_buf();
+        }
+    }
+
+    req_path.to_path_buf()
+}
+
+fn str_to_utf16_bytes(s: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(s.len() * 2);
+    for u in s.encode_utf16() {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    bytes
+}
+
 /// Start Textractor sidecar and attach to target PID
 #[tauri::command]
 pub fn start_textractor(
@@ -197,24 +232,24 @@ pub fn start_textractor(
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        let exe_path_obj = Path::new(&exe_path);
-        let mut cmd = Command::new(&exe_path);
+        let resolved_exe = resolve_textractor_exe(&exe_path);
+        println!("[Textractor start] Target PID: {}, Executable: {:?}", target_pid, resolved_exe);
+
+        let mut cmd = Command::new(&resolved_exe);
 
         // Crucial: set working directory to Textractor folder so it finds texthook.dll
-        if let Some(parent) = exe_path_obj.parent() {
+        if let Some(parent) = resolved_exe.parent() {
             cmd.current_dir(parent);
         }
 
-        // Attach CLI argument
-        cmd.args(["attach", &format!("-P{}", target_pid)])
-            .stdin(Stdio::piped())
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .creation_flags(CREATE_NO_WINDOW);
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("Failed to spawn Textractor at '{}': {}", exe_path, e))?;
+            .map_err(|e| format!("Failed to spawn Textractor at '{:?}': {}", resolved_exe, e))?;
 
         let mut stdin = child
             .stdin
@@ -228,9 +263,9 @@ pub fn start_textractor(
 
         let stderr = child.stderr.take();
 
-        // Send initial attach command to stdin as well
+        // Send initial attach command to stdin (UTF-16LE encoded for Textractor std::wcin)
         let attach_cmd = format!("attach -P{}\r\n", target_pid);
-        let _ = stdin.write_all(attach_cmd.as_bytes());
+        let _ = stdin.write_all(&str_to_utf16_bytes(&attach_cmd));
         let _ = stdin.flush();
 
         // Store child & stdin safely (recovering from poisoned mutex if previous thread panicked)
@@ -246,6 +281,19 @@ pub fn start_textractor(
             let mut p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
             *p = Some(target_pid);
         }
+
+        // Background delayed stdin attach retry to ensure Textractor CLI's std::getline loop processes it
+        let stdin_clone = state.stdin.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if let Ok(mut s) = stdin_clone.lock() {
+                if let Some(ref mut sin) = *s {
+                    let cmd = format!("attach -P{}\r\n", target_pid);
+                    let _ = sin.write_all(&str_to_utf16_bytes(&cmd));
+                    let _ = sin.flush();
+                }
+            }
+        });
 
         // Spawn async reader thread for stderr
         if let Some(err_stream) = stderr {
@@ -284,6 +332,7 @@ pub fn start_textractor(
                     let line_str = String::from_utf16_lossy(&u16_buf);
                     let trimmed = line_str.trim().trim_matches('\r').trim();
                     if !trimmed.is_empty() {
+                        println!("[Textractor stdout] {}", trimmed);
                         if let Some(msg) = parse_textractor_line(trimmed, target_pid) {
                             let _ = app_clone.emit("textractor-text-event", &msg);
                         }
@@ -320,8 +369,9 @@ pub fn send_textractor_command(
     if let Ok(mut stdin_opt) = state.stdin.lock() {
         if let Some(ref mut stdin) = *stdin_opt {
             let formatted = format!("{}\r\n", command.trim());
+            let utf16_bytes = str_to_utf16_bytes(&formatted);
             stdin
-                .write_all(formatted.as_bytes())
+                .write_all(&utf16_bytes)
                 .map_err(|e| format!("Failed to write to Textractor stdin: {}", e))?;
             stdin
                 .flush()
@@ -350,7 +400,7 @@ pub fn stop_textractor_internal(state: &TextractorState) {
         if let Ok(mut s) = state.stdin.lock() {
             if let Some(ref mut stdin) = *s {
                 let detach_cmd = format!("detach -P{}\r\n", pid);
-                let _ = stdin.write_all(detach_cmd.as_bytes());
+                let _ = stdin.write_all(&str_to_utf16_bytes(&detach_cmd));
                 let _ = stdin.flush();
             }
         }
@@ -381,14 +431,21 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
 
     let end_bracket = line.find(']')?;
     let header = &line[1..end_bracket];
-    let text = line[end_bracket + 1..].trim().to_string();
+    let text = if line.len() > end_bracket + 1 {
+        line[end_bracket + 1..].trim().to_string()
+    } else {
+        String::new()
+    };
 
     let parts: Vec<&str> = header.split(':').collect();
     if parts.is_empty() {
         return None;
     }
 
-    let handle = parts[0].trim().parse::<u32>().unwrap_or(0);
+    // Support both hexadecimal and decimal thread handles
+    let clean_h = parts[0].trim().trim_start_matches("0x").trim_start_matches("0X");
+    let handle = u32::from_str_radix(clean_h, 16).unwrap_or_else(|_| clean_h.parse::<u32>().unwrap_or(0));
+
     let mut pid = fallback_pid;
     let mut address = String::new();
     let mut context = String::new();
@@ -397,11 +454,15 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
     let mut hook_code = String::new();
 
     if parts.len() >= 6 {
-        pid = parts[1].trim().parse::<u32>().unwrap_or(fallback_pid);
+        let clean_pid = parts[1].trim().trim_start_matches("0x").trim_start_matches("0X");
+        pid = u32::from_str_radix(clean_pid, 16).unwrap_or_else(|_| clean_pid.parse::<u32>().unwrap_or(fallback_pid));
         address = parts[2].trim().to_string();
         context = parts[3].trim().to_string();
         context2 = parts[4].trim().to_string();
         name = parts[5].trim().to_string();
+        if name.is_empty() {
+            name = format!("Thread #{}", handle);
+        }
         if parts.len() > 6 {
             hook_code = parts[6..].join(":").trim().to_string();
         }

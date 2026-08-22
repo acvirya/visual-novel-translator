@@ -35,8 +35,10 @@ import {
   Check,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
+import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
 import { useToast } from "../common/ToastProvider";
 import { useTranslationStore } from "../../stores/useTranslationStore";
+import { settingsManager } from "../../services/settingsManager";
 import { Modal } from "../common/Modal";
 
 const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
@@ -136,8 +138,12 @@ export const TranslationProvidersView: React.FC = () => {
   const [useGoogleTranslate, setUseGoogleTranslate] = useState<boolean>(true);
   const [useDeepLFree, setUseDeepLFree] = useState<boolean>(true);
 
-  const sourceLang = localStorage.getItem("vn_source_lang") || "ja";
-  const targetLang = localStorage.getItem("vn_target_lang") || "en";
+  const [sourceLang, setSourceLang] = useState<string>(() => {
+    return localStorage.getItem("vn_source_lang") || "ja";
+  });
+  const [targetLang, setTargetLang] = useState<string>(() => {
+    return localStorage.getItem("vn_target_lang") || "en";
+  });
 
   // Auto-fetch OpenRouter models on load
   const loadModels = async () => {
@@ -166,6 +172,12 @@ export const TranslationProvidersView: React.FC = () => {
     localStorage.setItem("vn_active_style_preset_id", activePresetId);
     localStorage.setItem("vn_active_style_instructions", styleInstructions);
   }, [activePresetId, styleInstructions]);
+
+  useEffect(() => {
+    localStorage.setItem("vn_source_lang", sourceLang);
+    localStorage.setItem("vn_target_lang", targetLang);
+    settingsManager.updateGeneral({ sourceLang, targetLang });
+  }, [sourceLang, targetLang]);
 
   // Test Connection
   const handleTestConnection = async () => {
@@ -277,7 +289,41 @@ export const TranslationProvidersView: React.FC = () => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%" }}>
-      {/* 1. OpenRouter API Key & Authentication */}
+      {/* 1. Translation Languages Configuration */}
+      <div className="card" style={{ margin: 0 }}>
+        <div className="card-header">
+          <div>
+            <span className="card-title">
+              <Globe size={16} /> Translation Language Pair (Source & Target)
+            </span>
+            <span className="card-subtitle">
+              Configure original game dialogue source language and desired translation output language
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+          <div>
+            <LanguageSelectorCombobox
+              label="Original Game Source Language"
+              value={sourceLang}
+              onChange={(code) => setSourceLang(code)}
+              placeholder="Search or enter source language..."
+            />
+          </div>
+
+          <div>
+            <LanguageSelectorCombobox
+              label="Target Translation Language"
+              value={targetLang}
+              onChange={(code) => setTargetLang(code)}
+              placeholder="Search or enter target language..."
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* 2. OpenRouter API Key & Authentication */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
@@ -420,12 +466,12 @@ export const TranslationProvidersView: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Primary Translation Model Selection */}
+      {/* 3. Primary Translation Model Selection */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Sparkles size={16} /> Active Translation Model
+              <Sparkles size={16} /> 3. Active Translation Model & Parameters
             </span>
             <span className="card-subtitle">
               Select which LLM powers real-time live subtitle streaming and script translations
@@ -519,7 +565,7 @@ export const TranslationProvidersView: React.FC = () => {
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Sliders size={16} /> Translation Style & Tone Presets
+              <Sliders size={16} /> 4. Translation Style & Tone Presets
             </span>
             <span className="card-subtitle">
               Adjust character personality and translation tone without worrying about JSON schemas or language tags
@@ -702,12 +748,12 @@ export const TranslationProvidersView: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Free Online Machine Translation (MT) */}
+      {/* 5. Free Online Machine Translation (MT) */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Globe size={16} /> Free Online MT (Zero API Cost Fallback)
+              <Globe size={16} /> 5. Free Online MT (Zero API Cost Fallback)
             </span>
             <span className="card-subtitle">
               Fast web translation services used as backup when API credits expire

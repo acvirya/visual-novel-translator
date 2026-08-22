@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { OcrEngineStatus, OcrRegion, OcrScanResult, OcrStabilityConfig } from "../types";
 import { useOcrStore } from "../stores/useOcrStore";
+import { useTranslationStore } from "../stores/useTranslationStore";
 import { executePreprocessingPipeline } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
 
@@ -167,12 +168,15 @@ export class OcrService {
       const isSettled = result.isSettled;
       const hasChanged = cleanSpk !== this.lastSentText.speaker || cleanMsg !== this.lastSentText.message;
 
-      if (hasText && isSettled && hasChanged && store.autoForwardToOverlay) {
+      if (hasText && isSettled && hasChanged) {
         this.lastSentText = { speaker: cleanSpk, message: cleanMsg };
-        translationManager.translate({
-          speaker: cleanSpk || undefined,
-          message: cleanMsg,
-        });
+        const translationStore = useTranslationStore.getState();
+        if (!translationStore.isPaused) {
+          translationManager.translate({
+            speaker: cleanSpk || undefined,
+            message: cleanMsg,
+          });
+        }
       }
     } catch (err: any) {
       store.setScanError(err?.message || String(err));

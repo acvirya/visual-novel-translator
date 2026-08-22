@@ -1,17 +1,17 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import {
   Play,
   Pause,
   Trash2,
   Database,
-  RefreshCw,
-  ShieldCheck,
   History,
   RotateCcw,
   Check,
   X,
-  Sliders,
+  Bot,
+  Clock,
+  MessageSquare,
 } from "lucide-react";
 import { translationManager, LlmContextSettings } from "../../services/translationManager";
 import { useTranslationStore } from "../../stores/useTranslationStore";
@@ -22,16 +22,22 @@ export const LiveTranslateView: React.FC = () => {
     isPaused,
     selectedProvider,
     useScriptOnly,
-    scriptThreshold,
     contextSettings,
     contextHistoryLength,
     setSelectedProvider,
     setUseScriptOnly,
-    setScriptThreshold,
     clearLiveLogs,
   } = useTranslationStore();
 
   const [showContextModal, setShowContextModal] = useState<boolean>(false);
+  const [maxContextInput, setMaxContextInput] = useState<string>(() => String(contextSettings.maxContextLines));
+  const [retainContextInput, setRetainContextInput] = useState<string>(() => String(contextSettings.retainContextLines));
+
+  // Synchronize local input fields when external context settings change
+  useEffect(() => {
+    setMaxContextInput(String(contextSettings.maxContextLines));
+    setRetainContextInput(String(contextSettings.retainContextLines));
+  }, [contextSettings.maxContextLines, contextSettings.retainContextLines]);
 
   const handleTogglePause = () => {
     translationManager.setPaused(!isPaused);
@@ -42,12 +48,32 @@ export const LiveTranslateView: React.FC = () => {
     translationManager.setUseScriptOnly(enabled);
   };
 
-  const handleThresholdChange = (val: number) => {
-    setScriptThreshold(val);
-  };
-
   const handleSaveContextSettings = (newSettings: LlmContextSettings) => {
     translationManager.setContextSettings(newSettings);
+  };
+
+  const handleMaxContextBlur = () => {
+    let val = parseInt(maxContextInput, 10);
+    if (isNaN(val) || val < 0) val = 0;
+    setMaxContextInput(String(val));
+    const newRetain = Math.min(contextSettings.retainContextLines, val);
+    setRetainContextInput(String(newRetain));
+    handleSaveContextSettings({
+      ...contextSettings,
+      maxContextLines: val,
+      retainContextLines: newRetain,
+    });
+  };
+
+  const handleRetainContextBlur = () => {
+    let val = parseInt(retainContextInput, 10);
+    if (isNaN(val) || val < 0) val = 0;
+    const clamped = Math.min(val, contextSettings.maxContextLines);
+    setRetainContextInput(String(clamped));
+    handleSaveContextSettings({
+      ...contextSettings,
+      retainContextLines: clamped,
+    });
   };
 
   const handleResetContextHistory = () => {
@@ -57,8 +83,10 @@ export const LiveTranslateView: React.FC = () => {
   const isLlmProvider = !selectedProvider.startsWith("mt:");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", gap: "14px" }}>
-      {/* Top Action & Provider Bar */}
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", gap: "12px", overflow: "hidden" }}>
+      {/* ========================================================================= */}
+      {/* 1. TOP CONTROL & PROVIDER BAR                                            */}
+      {/* ========================================================================= */}
       <div
         style={{
           display: "flex",
@@ -67,12 +95,13 @@ export const LiveTranslateView: React.FC = () => {
           backgroundColor: "var(--bg-surface)",
           border: "1px solid var(--border-subtle)",
           borderRadius: "var(--radius-md)",
-          padding: "10px 16px",
+          padding: "10px 14px",
           flexWrap: "wrap",
-          gap: "12px",
+          gap: "10px",
+          flexShrink: 0,
         }}
       >
-        {/* Left Side: Auto Translate + Provider Selector + Context Config + Script Only Toggle */}
+        {/* Left Side: Auto Translate Action + Model Picker + Script Only Toggle */}
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
           {/* Auto Translate Toggle Button */}
           <button
@@ -81,6 +110,10 @@ export const LiveTranslateView: React.FC = () => {
             style={{
               backgroundColor: !isPaused ? "var(--accent-success)" : "var(--bg-surface-elevated)",
               padding: "7px 14px",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
             }}
           >
             {!isPaused ? <Pause size={14} /> : <Play size={14} />}
@@ -95,107 +128,86 @@ export const LiveTranslateView: React.FC = () => {
                 setSelectedProvider(id);
               }}
               disabled={useScriptOnly}
-              width="260px"
+              width="250px"
               compact={true}
             />
           </div>
 
-          {/* LLM Context Settings Button (Highlighted when LLM is active) */}
+          {/* Use Script Only Toggle Button */}
           <button
             type="button"
-            onClick={() => setShowContextModal(!showContextModal)}
-            className="btn-secondary"
+            onClick={() => handleToggleScriptOnly(!useScriptOnly)}
             style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
               padding: "6px 10px",
-              fontSize: "12px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              color: isLlmProvider ? "var(--accent-cyan)" : "var(--text-secondary)",
-              borderColor: isLlmProvider ? "rgba(56, 189, 248, 0.4)" : "var(--border-subtle)",
-              backgroundColor: showContextModal ? "var(--bg-surface-elevated)" : undefined,
-            }}
-            title="Configure LLM Context Window & Memory Retention"
-          >
-            <History size={13} style={{ color: isLlmProvider ? "var(--accent-cyan)" : "var(--text-muted)" }} />
-            <span>
-              Context: <strong>{contextSettings.maxContextLines}</strong> / <strong>{contextSettings.retainContextLines}</strong>
-            </span>
-          </button>
-
-          {/* Use Script Only Toggle */}
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              cursor: "pointer",
-              fontSize: "12.5px",
-              fontWeight: 600,
-              color: useScriptOnly ? "var(--accent-cyan)" : "var(--text-secondary)",
-              backgroundColor: useScriptOnly ? "rgba(56, 189, 248, 0.12)" : "var(--bg-surface-elevated)",
-              padding: "5px 10px",
               borderRadius: "var(--radius-sm)",
-              border: useScriptOnly ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border-subtle)",
+              border: `1px solid ${useScriptOnly ? "rgba(56, 189, 248, 0.5)" : "var(--border-subtle)"}`,
+              backgroundColor: useScriptOnly ? "rgba(56, 189, 248, 0.12)" : "var(--bg-surface-elevated)",
+              color: useScriptOnly ? "var(--accent-cyan)" : "var(--text-secondary)",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
               transition: "all 0.15s ease",
             }}
-            title="When enabled, translation relies exclusively on the pre-translated .jsonl script database"
+            title="When enabled, translation matches exclusively against the Knowledge Base script database"
           >
-            <input
-              type="checkbox"
-              checked={useScriptOnly}
-              onChange={(e) => handleToggleScriptOnly(e.target.checked)}
-            />
-            <ShieldCheck size={13} style={{ color: useScriptOnly ? "var(--accent-cyan)" : "var(--text-muted)" }} />
-            <span>Use Script Only</span>
-          </label>
-
-          {/* Script Match Threshold Slider */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "12px",
-              fontWeight: 600,
-              backgroundColor: "var(--bg-surface-elevated)",
-              padding: "4px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid var(--border-subtle)",
-            }}
-            title="Similarity threshold required to trigger an offline script match (50% - 100%)"
-          >
-            <Sliders size={12} style={{ color: "var(--accent-gold)" }} />
-            <span style={{ color: "var(--text-secondary)", fontSize: "11.5px" }}>Match:</span>
-            <input
-              type="range"
-              min="0.50"
-              max="1.00"
-              step="0.05"
-              value={scriptThreshold ?? 0.85}
-              onChange={(e) => handleThresholdChange(parseFloat(e.target.value))}
-              style={{ width: "65px", cursor: "pointer" }}
-            />
-            <span style={{ color: "var(--accent-gold)", minWidth: "30px", textAlign: "right", fontSize: "11.5px" }}>
-              {Math.round((scriptThreshold ?? 0.85) * 100)}%
-            </span>
-          </div>
+            <Database size={13} color={useScriptOnly ? "var(--accent-cyan)" : "var(--text-muted)"} />
+            <span>Script Only</span>
+          </button>
         </div>
 
-        {/* Right Side: Total Counter & Clear Button */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-            Lines: <strong style={{ color: "var(--text-primary)" }}>{liveLogs.length}</strong>
-          </span>
+        {/* Right Side: LLM Context (hidden when Script Only is active) + Clear */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          {/* LLM Context Settings Button (Visible for LLM models when NOT in Script Only mode) */}
+          {!useScriptOnly && isLlmProvider && (
+            <button
+              type="button"
+              onClick={() => setShowContextModal(!showContextModal)}
+              className="btn-secondary"
+              style={{
+                padding: "6px 10px",
+                fontSize: "12px",
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+                color: "var(--accent-cyan)",
+                borderColor: "rgba(56, 189, 248, 0.35)",
+                backgroundColor: showContextModal ? "var(--bg-surface-elevated)" : undefined,
+              }}
+              title="Configure LLM Context Window & Memory Retention"
+            >
+              <History size={13} />
+              <span>
+                Memory: <strong>{contextHistoryLength}</strong>/<strong>{contextSettings.maxContextLines}</strong>
+              </span>
+            </button>
+          )}
 
-          <button onClick={clearLiveLogs} className="btn-secondary" title="Clear log stream">
-            <Trash2 size={13} />
-            <span>Clear</span>
-          </button>
+          {/* Line Counter & Clear Button */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "4px" }}>
+            <span style={{ fontSize: "11.5px", color: "var(--text-muted)", padding: "0 4px" }}>
+              <strong>{liveLogs.length}</strong> lines
+            </span>
+
+            <button
+              onClick={clearLiveLogs}
+              disabled={liveLogs.length === 0}
+              className="btn-secondary"
+              style={{ height: "30px", padding: "0 8px", fontSize: "11.5px" }}
+              title="Clear dialogue stream logs"
+            >
+              <Trash2 size={12} />
+              <span>Clear</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Context Settings Popover / Card */}
+      {/* ========================================================================= */}
+      {/* 2. LLM CONTEXT CONFIGURATION MODAL / CARD                                 */}
+      {/* ========================================================================= */}
       {showContextModal && (
         <div
           style={{
@@ -206,7 +218,8 @@ export const LiveTranslateView: React.FC = () => {
             display: "flex",
             flexDirection: "column",
             gap: "12px",
-            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.4)",
+            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.45)",
+            flexShrink: 0,
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -225,117 +238,59 @@ export const LiveTranslateView: React.FC = () => {
             </button>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-            {/* Max Context Lines Slider */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px" }}>
+            {/* Max Context Lines Input */}
             <div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
-                  Max Context Lines (History Limit):
-                </label>
-                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent-cyan)" }}>
-                  {contextSettings.maxContextLines} lines
-                </span>
-              </div>
-              <input
-                type="range"
-                min={2}
-                max={30}
-                step={1}
-                value={contextSettings.maxContextLines}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  handleSaveContextSettings({
-                    ...contextSettings,
-                    maxContextLines: val,
-                    retainContextLines: Math.min(contextSettings.retainContextLines, val),
-                  });
-                }}
-                style={{ width: "100%", accentColor: "var(--accent-cyan)" }}
-              />
-              <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                Maximum number of previous dialogue turns sent to OpenRouter LLM for story continuity.
-              </span>
-            </div>
-
-            {/* Retain Context Lines Slider */}
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
-                  Retained Lines After Cut (Sliding Buffer):
-                </label>
-                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent-gold)" }}>
-                  {contextSettings.retainContextLines} lines
-                </span>
-              </div>
-              <input
-                type="range"
-                min={1}
-                max={Math.min(15, contextSettings.maxContextLines)}
-                step={1}
-                value={contextSettings.retainContextLines}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  handleSaveContextSettings({
-                    ...contextSettings,
-                    retainContextLines: val,
-                  });
-                }}
-                style={{ width: "100%", accentColor: "var(--accent-gold)" }}
-              />
-              <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                When history reaches max limit, this number of most recent dialogue lines are retained as the new baseline context.
-              </span>
-            </div>
-          </div>
-
-          {/* Max Characters per Line Filter */}
-          <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "10px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-              <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
-                Max Characters per Line (Skip/Burst Discard Filter):
+              <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
+                Max Context Lines (History Limit):
               </label>
-              <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--accent-cyan)" }}>
-                {contextSettings.maxCharsPerLine > 0 ? `${contextSettings.maxCharsPerLine} chars` : "Disabled"}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={maxContextInput}
+                  onChange={(e) => setMaxContextInput(e.target.value)}
+                  onBlur={handleMaxContextBlur}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleMaxContextBlur();
+                  }}
+                  style={{ width: "100%", fontSize: "12.5px", height: "32px", padding: "0 10px" }}
+                />
+                <span style={{ fontSize: "12px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>lines</span>
+              </div>
+              <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "4px" }}>
+                Maximum dialogue turns sent to LLM for story continuity (0 = disabled).
               </span>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <input
-                type="range"
-                min={50}
-                max={1000}
-                step={25}
-                value={contextSettings.maxCharsPerLine}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  handleSaveContextSettings({
-                    ...contextSettings,
-                    maxCharsPerLine: val,
-                  });
-                }}
-                style={{ flex: 1, accentColor: "var(--accent-cyan)" }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={5000}
-                className="input-field"
-                value={contextSettings.maxCharsPerLine}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10) || 0;
-                  handleSaveContextSettings({
-                    ...contextSettings,
-                    maxCharsPerLine: val,
-                  });
-                }}
-                style={{ width: "80px", fontSize: "12px", padding: "3px 6px", textAlign: "center" }}
-              />
+
+            {/* Retain Context Lines Input */}
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
+                Retained Lines After Cut (Sliding Buffer):
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={contextSettings.maxContextLines}
+                  value={retainContextInput}
+                  onChange={(e) => setRetainContextInput(e.target.value)}
+                  onBlur={handleRetainContextBlur}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleRetainContextBlur();
+                  }}
+                  style={{ width: "100%", fontSize: "12.5px", height: "32px", padding: "0 10px" }}
+                />
+                <span style={{ fontSize: "12px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>lines</span>
+              </div>
+              <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "4px" }}>
+                Number of most recent lines kept as baseline context when history limit is reached.
+              </span>
             </div>
-            <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-              Automatically discards huge clumped text bursts caused by holding the Fast-Forward/Skip button in game (prevents API lag & token waste).
-            </span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid var(--border-subtle)", paddingTop: "10px", marginTop: "4px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid var(--border-subtle)", paddingTop: "10px", marginTop: "2px" }}>
             <div style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px" }}>
               <span>Active Context Buffer:</span>
               <strong style={{ color: "var(--text-primary)" }}>{contextHistoryLength} / {contextSettings.maxContextLines} lines</strong>
@@ -350,7 +305,7 @@ export const LiveTranslateView: React.FC = () => {
                 title="Wipe active memory context for the next dialogue line"
               >
                 <RotateCcw size={12} />
-                <span>Reset Context Buffer</span>
+                <span>Reset Memory</span>
               </button>
               <button
                 type="button"
@@ -365,15 +320,18 @@ export const LiveTranslateView: React.FC = () => {
         </div>
       )}
 
-      {/* Live Stream Dialogue List */}
+      {/* ========================================================================= */}
+      {/* 3. LIVE STREAM DIALOGUE BACKLOG (Visual Novel Style)                      */}
+      {/* ========================================================================= */}
       <div
         style={{
           flex: 1,
           overflowY: "auto",
           display: "flex",
           flexDirection: "column",
-          gap: "12px",
+          gap: "10px",
           paddingRight: "4px",
+          minHeight: 0,
         }}
       >
         {liveLogs.length === 0 ? (
@@ -385,168 +343,151 @@ export const LiveTranslateView: React.FC = () => {
               justifyContent: "center",
               height: "100%",
               color: "var(--text-muted)",
-              gap: "8px",
+              gap: "10px",
+              padding: "40px 20px",
+              textAlign: "center",
             }}
           >
-            <RefreshCw size={28} style={{ opacity: 0.5 }} />
-            <span>No dialogue logs yet. Waiting for input from Textractor / OCR...</span>
-          </div>
-        ) : (
-          liveLogs.map((item) => (
-            <div
-              key={item.id}
-              style={{
-                backgroundColor: "var(--bg-surface)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-md)",
-                padding: "14px 16px",
-                display: "flex",
-                flexDirection: "column",
-                gap: "10px",
-              }}
-            >
-              {/* Header Row: [PROVIDER NAME] OR [SCRIPT MATCH %] + Timings */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  {/* Provider Name Badge (Only when translated via provider) */}
-                  {!item.matchedFromScript && item.provider && (
-                    <span
-                      className="badge badge-neutral"
-                      style={{
-                        backgroundColor: "var(--bg-surface-elevated)",
-                        color: "var(--text-primary)",
-                        border: "1px solid var(--border-active)",
-                        padding: "2px 8px",
-                        borderRadius: "var(--radius-sm)",
-                        fontWeight: 700,
-                        fontSize: "11px",
-                        letterSpacing: "0.3px",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {item.provider}
-                    </span>
-                  )}
-
-                  {/* Script Match % Badge (Only when matched from script) */}
-                  {item.matchedFromScript && (
-                    <span
-                      className="badge badge-success"
-                      style={{
-                        padding: "2px 8px",
-                        borderRadius: "var(--radius-sm)",
-                        fontWeight: 700,
-                        fontSize: "11px",
-                        letterSpacing: "0.3px",
-                        textTransform: "uppercase",
-                      }}
-                      title="Matched from pre-translated script database"
-                    >
-                      <Database size={11} />
-                      <span>Script Match {item.similarityScore ? `(${(item.similarityScore * 100).toFixed(0)}%)` : ""}</span>
-                    </span>
-                  )}
-                </div>
-
-                <div style={{ fontSize: "11px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px" }}>
-                  <span>{item.durationMs}ms</span>
-                  <span>•</span>
-                  <span>{item.timestamp}</span>
-                </div>
+            <MessageSquare size={36} style={{ opacity: 0.35, color: "var(--accent-primary)" }} />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: "13.5px", color: "var(--text-secondary)" }}>
+                Waiting for dialogue stream...
               </div>
-
-              {/* Character Name Section (if present) */}
-              {item.name && (
-                <div
-                  style={{
-                    backgroundColor: "var(--bg-app)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "6px 12px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "2px",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "10px",
-                      fontWeight: 700,
-                      textTransform: "uppercase",
-                      color: "var(--text-muted)",
-                      letterSpacing: "0.5px",
-                    }}
-                  >
-                    [name]
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "var(--font-jp)",
-                      fontSize: "13px",
-                      color: "var(--accent-gold)",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {item.name.source}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "12.5px",
-                      color: "var(--text-primary)",
-                      fontWeight: 500,
-                    }}
-                  >
-                    {item.name.translated}
-                  </div>
-                </div>
-              )}
-
-              {/* Message Section */}
-              <div
-                style={{
-                  backgroundColor: "var(--bg-app)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "8px 12px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "4px",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "10px",
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                    color: "var(--text-muted)",
-                    letterSpacing: "0.5px",
-                  }}
-                >
-                  [message]
-                </div>
-                <div
-                  style={{
-                    fontFamily: "var(--font-jp)",
-                    fontSize: "14px",
-                    color: "var(--text-jp)",
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {item.message.source}
-                </div>
-                <div
-                  style={{
-                    fontSize: "14px",
-                    color: "var(--text-primary)",
-                    fontWeight: 500,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {item.message.translated}
-                </div>
+              <div style={{ fontSize: "12px", marginTop: "4px" }}>
+                Make sure Textractor Hook or Screen OCR is connected in <strong>1. Input Setup</strong>, then advance dialogue in your game.
               </div>
             </div>
-          ))
+          </div>
+        ) : (
+          liveLogs.map((item) => {
+            const rawSpeaker = item.name?.source;
+            const transSpeaker = item.name?.translated;
+            const rawMessage = item.message?.source || "";
+            const transMessage = item.message?.translated || "";
+
+            return (
+              <div
+                key={item.id}
+                style={{
+                  backgroundColor: "var(--bg-surface)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-md)",
+                  padding: "12px 16px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "10px",
+                  transition: "border-color 0.15s ease",
+                }}
+              >
+                {/* Header Row: Provider / Script Badge & Timestamp */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    {/* Provider or Script Badge */}
+                    {item.matchedFromScript ? (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          backgroundColor: "rgba(63, 185, 80, 0.12)",
+                          color: "var(--accent-success)",
+                          border: "1px solid rgba(63, 185, 80, 0.3)",
+                          padding: "2px 8px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          letterSpacing: "0.2px",
+                        }}
+                      >
+                        <Database size={11} />
+                        <span>Script Match {item.similarityScore ? `(${(item.similarityScore * 100).toFixed(0)}%)` : ""}</span>
+                      </span>
+                    ) : (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          backgroundColor: "var(--bg-surface-elevated)",
+                          color: "var(--text-secondary)",
+                          border: "1px solid var(--border-subtle)",
+                          padding: "2px 8px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                        }}
+                      >
+                        <Bot size={11} color="var(--accent-primary)" />
+                        <span>{item.provider || "AI Model"}</span>
+                      </span>
+                    )}
+
+                    {item.durationMs > 0 && (
+                      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                        {item.durationMs}ms
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <Clock size={11} />
+                    <span>{item.timestamp}</span>
+                  </div>
+                </div>
+
+                {/* Original Japanese Dialogue Block */}
+                <div
+                  style={{
+                    backgroundColor: "rgba(0, 0, 0, 0.2)",
+                    borderLeft: "3px solid var(--border-active)",
+                    borderRadius: "0 var(--radius-sm) var(--radius-sm) 0",
+                    padding: "8px 12px",
+                    display: "flex",
+                    alignItems: "baseline",
+                    gap: "8px",
+                    fontFamily: "var(--font-jp)",
+                    fontSize: "13.5px",
+                    lineHeight: 1.55,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {rawSpeaker && (
+                    <span style={{ color: "var(--accent-gold)", fontWeight: 700, whiteSpace: "nowrap" }}>
+                      【{rawSpeaker}】
+                    </span>
+                  )}
+                  <span style={{ color: "var(--text-jp)" }}>
+                    {typeof rawMessage === "string" ? rawMessage : ""}
+                  </span>
+                </div>
+
+                {/* Translated Dialogue Block */}
+                <div
+                  style={{
+                    backgroundColor: "var(--bg-surface-elevated)",
+                    borderLeft: "3px solid var(--accent-primary)",
+                    borderRadius: "0 var(--radius-sm) var(--radius-sm) 0",
+                    padding: "10px 14px",
+                    display: "flex",
+                    alignItems: "baseline",
+                    gap: "8px",
+                    fontSize: "14px",
+                    lineHeight: 1.5,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {transSpeaker && (
+                    <span style={{ color: "var(--accent-gold)", fontWeight: 700, whiteSpace: "nowrap" }}>
+                      【{transSpeaker}】
+                    </span>
+                  )}
+                  <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                    {typeof transMessage === "string" ? transMessage : ""}
+                  </span>
+                </div>
+              </div>
+            );
+          })
         )}
       </div>
     </div>

@@ -52,7 +52,7 @@ class TranslationManager {
   private contextHistory: { user: string; assistant: string }[] = [];
   private queue: QueueTask[] = [];
   private isProcessingQueue = false;
-  private isPausedInternal = false;
+  private isPausedInternal = true;
 
   public subscribe(callback: (item: TranslationLogItem) => void) {
     this.listeners.push(callback);

@@ -20,6 +20,7 @@ export interface TextractorState {
   combinedThreadId: number | null;
   messageThreadId: number | null;
   speakerThreadId: number | null;
+  capturedThreads: Array<{ threadId: number; role: "speaker" | "dialogue" | "combined" }>;
   inspectedThreadId: number | null;
   maxLogLines: number;
   threadLogs: Map<number, TextractorMessage[]>;
@@ -47,6 +48,9 @@ export interface TextractorState {
   setCombinedThreadId: (id: number | null) => void;
   setMessageThreadId: (id: number | null) => void;
   setSpeakerThreadId: (id: number | null) => void;
+  setCapturedThreads: (threads: Array<{ threadId: number; role: "speaker" | "dialogue" | "combined" }> | ((prev: Array<{ threadId: number; role: "speaker" | "dialogue" | "combined" }>) => Array<{ threadId: number; role: "speaker" | "dialogue" | "combined" }>)) => void;
+  reorderCapturedThreads: (fromIndex: number, toIndex: number) => void;
+  updateCapturedThreadRole: (threadId: number, role: "speaker" | "dialogue" | "combined" | "ignored") => void;
   setInspectedThreadId: (id: number | null) => void;
   setMaxLogLines: (lines: number) => void;
   setThreadLogs: (logs: Map<number, TextractorMessage[]> | ((prev: Map<number, TextractorMessage[]>) => Map<number, TextractorMessage[]>)) => void;
@@ -85,6 +89,7 @@ export const useTextractorStore = create<TextractorState>((set) => {
     combinedThreadId: null,
     messageThreadId: null,
     speakerThreadId: null,
+    capturedThreads: [],
     inspectedThreadId: null,
     maxLogLines: savedMaxLogs,
     threadLogs: new Map(),
@@ -126,6 +131,32 @@ export const useTextractorStore = create<TextractorState>((set) => {
     setCombinedThreadId: (combinedThreadId) => set({ combinedThreadId }),
     setMessageThreadId: (messageThreadId) => set({ messageThreadId }),
     setSpeakerThreadId: (speakerThreadId) => set({ speakerThreadId }),
+    setCapturedThreads: (threadsOrFn) =>
+      set((state) => ({
+        capturedThreads: typeof threadsOrFn === "function" ? threadsOrFn(state.capturedThreads) : threadsOrFn,
+      })),
+    reorderCapturedThreads: (fromIndex, toIndex) =>
+      set((state) => {
+        const next = [...state.capturedThreads];
+        const [moved] = next.splice(fromIndex, 1);
+        next.splice(toIndex, 0, moved);
+        return { capturedThreads: next };
+      }),
+    updateCapturedThreadRole: (threadId, role) =>
+      set((state) => {
+        let next = [...state.capturedThreads];
+        if (role === "ignored") {
+          next = next.filter((t) => t.threadId !== threadId);
+        } else {
+          const idx = next.findIndex((t) => t.threadId === threadId);
+          if (idx >= 0) {
+            next[idx] = { threadId, role };
+          } else {
+            next.push({ threadId, role });
+          }
+        }
+        return { capturedThreads: next };
+      }),
     setInspectedThreadId: (inspectedThreadId) => set({ inspectedThreadId }),
     setMaxLogLines: (maxLogLines) => {
       localStorage.setItem("vn_textractor_max_log_lines", String(maxLogLines));
@@ -156,6 +187,7 @@ export const useTextractorStore = create<TextractorState>((set) => {
         combinedThreadId: null,
         messageThreadId: null,
         speakerThreadId: null,
+        capturedThreads: [],
         inspectedThreadId: null,
         threadLogs: new Map(),
         latestSpeaker: "",

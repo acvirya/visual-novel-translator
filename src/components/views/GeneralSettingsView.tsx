@@ -3,6 +3,7 @@ import { Keyboard, Globe, RotateCcw, ShieldAlert, BookOpen, Database, Scan, Pale
 import { settingsManager } from "../../services/settingsManager";
 import { useToast } from "../common/ToastProvider";
 import { ConfirmDialog } from "../common/ConfirmDialog";
+import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
 
 export const GeneralSettingsView: React.FC = () => {
   const toast = useToast();
@@ -179,31 +180,33 @@ export const GeneralSettingsView: React.FC = () => {
       {/* Languages & Translation Defaults */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
-          <span className="card-title">
-            <Globe size={16} /> Default Language Configuration
-          </span>
+          <div>
+            <span className="card-title">
+              <Globe size={16} /> Default Language Configuration
+            </span>
+            <span className="card-subtitle">
+              Configure original game dialogue source language and desired translation output language
+            </span>
+          </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
           <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Original Game Source Language
-            </label>
-            <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value)} style={{ width: "100%" }}>
-              <option value="ja">Japanese (日本語)</option>
-              <option value="zh">Chinese (中文)</option>
-              <option value="ko">Korean (한국어)</option>
-            </select>
+            <LanguageSelectorCombobox
+              label="Original Game Source Language"
+              value={sourceLang}
+              onChange={(code) => setSourceLang(code)}
+              placeholder="Search or enter source language..."
+            />
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Target Translation Language
-            </label>
-            <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} style={{ width: "100%" }}>
-              <option value="en">English</option>
-              <option value="id">Indonesian (Bahasa Indonesia)</option>
-            </select>
+            <LanguageSelectorCombobox
+              label="Target Translation Language"
+              value={targetLang}
+              onChange={(code) => setTargetLang(code)}
+              placeholder="Search or enter target language..."
+            />
           </div>
         </div>
       </div>

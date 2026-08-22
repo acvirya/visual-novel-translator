@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { translateWithFreeMt } from "./freeMtService";
-import { buildCompleteSystemPrompt, ChatMessage } from "./openRouterService";
+import { buildCompleteSystemPrompt, ChatMessage, calculateUsageCost } from "./openRouterService";
 import { extractSpeakerAndDialogue, executePreprocessingPipeline } from "../utils/textPreprocessor";
 import { logger } from "./loggerService";
 import { useBatchStore } from "../stores/useBatchStore";
@@ -979,6 +979,19 @@ class BatchTranslateService {
       } catch {}
 
       throw new Error("LLM response did not contain any valid translated dialogue lines matching the input batch schema.");
+    }
+
+    // Record session usage statistics (incremental in, out, cached, and cost)
+    try {
+      const promptChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
+      const promptTokens = Math.max(1, Math.round(promptChars / 2.6));
+      const cachedTokens = contextHistory.length > 0 ? Math.round((promptChars * 0.65) / 2.6) : 0;
+      const completionTokens = Math.max(1, Math.round(content.length / 3.0));
+      const cost = calculateUsageCost(settings.modelId, promptTokens, completionTokens, cachedTokens);
+
+      useBatchStore.getState().addSessionTokens(promptTokens, completionTokens, cachedTokens, cost);
+    } catch (statErr) {
+      console.warn("Failed to record batch session stats:", statErr);
     }
 
     return {

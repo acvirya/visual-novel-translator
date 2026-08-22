@@ -123,6 +123,8 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   flex-direction: column;
   padding-top: 14px;
   box-sizing: border-box;
+  overflow: visible;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.85));
 }
 
 .persona-nameplate {
@@ -160,10 +162,10 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 30px, 100% 100%, 26px 100%, 0 calc(100% - 26px));
   border-left: 6px solid #ff1053;
   border-right: 3px solid #ff1053;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.85);
   position: relative;
   padding: 16px 24px;
   box-sizing: border-box;
+  overflow: visible;
 }
 
 .persona-stripe {
@@ -417,7 +419,10 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   display: flex;
   flex-direction: column;
   padding-top: 10px;
+  padding-bottom: 16px;
   box-sizing: border-box;
+  overflow: visible;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.75));
 }
 
 .bubble-speaker {
@@ -447,11 +452,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   border: 3px solid #000000;
   border-radius: 20px;
   padding: 18px 22px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 4px 4px 0px #000000;
   display: flex;
   flex-direction: column;
   gap: 6px;
   box-sizing: border-box;
+  overflow: visible;
 }
 
 .bubble-jp {
@@ -477,6 +482,62 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   border-left: 14px solid transparent;
   border-right: 4px solid transparent;
   border-top: 16px solid rgba(255, 255, 255, 0.94);
+}
+.bubble-tail::after {
+  content: '';
+  position: absolute;
+  bottom: 0px;
+  left: -14px;
+  width: 0;
+  height: 0;
+  border-left: 14px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 16px solid #000000;
+  z-index: -1;
+  transform: translateY(3px);
+}`,
+  },
+  {
+    id: "cyberpunk",
+    name: "Cyberpunk HUD / Sci-Fi",
+    description: "Futuristic angular tech frame with neon yellow nameplate and high-contrast glowing accents",
+    html: `<div class="cyber-hud">
+  <div class="cyber-corner cyber-corner-tl"></div>
+  <div class="cyber-corner cyber-corner-tr"></div>
+  
+  {{#if hasSpeaker}}
+  <div class="cyber-header">
+    {{#if speaker}}
+    <div class="cyber-tag">ID // {{speaker}}</div>
+    {{/if}}
+    {{#if translatedSpeaker}}
+    <div class="cyber-subtag">[{{translatedSpeaker}}]</div>
+    {{/if}}
+  </div>
+  {{/if}}
+
+  {{#if message}}
+  <div class="cyber-raw">{{message}}</div>
+  {{/if}}
+
+  {{#if translatedMessage}}
+  <div class="cyber-translated">{{translatedMessage}}</div>
+  {{/if}}
+</div>`,
+    css: `.cyber-hud {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+  background: rgba(10, 12, 16, 0.92);
+  border: 2px solid #00f0ff;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+  padding: 14px 20px;
+  filter: drop-shadow(0 0 16px rgba(0, 240, 255, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  overflow: visible;
 }`,
   },
   {
@@ -781,11 +842,12 @@ export function compileOverlayTemplate(
 
   let output = templateHtml;
 
-  // Apply display field visibility toggles if config is present
+  // Apply display field visibility toggles if config is present:
+  // Raw Japanese fields can be toggled by user, translated fields are always enabled
   const allowSpeaker = config ? config.showSpeaker !== false : true;
-  const allowTransSpeaker = config ? config.showTranslatedSpeaker !== false : true;
+  const allowTransSpeaker = true;
   const allowMessage = config ? config.showMessage !== false : true;
-  const allowTransMessage = config ? config.showTranslatedMessage !== false : true;
+  const allowTransMessage = true;
 
   const speakerVal = allowSpeaker ? (dialogue.speaker || "") : "";
   const transSpeakerVal = allowTransSpeaker ? (dialogue.translatedSpeaker || "") : "";
@@ -816,11 +878,11 @@ export function compileOverlayTemplate(
 
   // 7. Interpolate Config Variables & Typography if available
   if (config) {
-    const speakerSize = config.speakerFontSize || Math.max(12, config.fontSize - 4);
+    const speakerSize = config.speakerFontSize || Math.max(12, (config.messageFontSize || config.fontSize) - 4);
     const messageSize = config.messageFontSize || config.fontSize;
 
     output = output
-      .replace(/\{\{\s*fontSize\s*\}\}/gi, `${config.fontSize}px`)
+      .replace(/\{\{\s*fontSize\s*\}\}/gi, `${messageSize}px`)
       .replace(/\{\{\s*speakerFontSize\s*\}\}/gi, `${speakerSize}px`)
       .replace(/\{\{\s*messageFontSize\s*\}\}/gi, `${messageSize}px`)
       .replace(/\{\{\s*fontColor\s*\}\}/gi, config.fontColor)

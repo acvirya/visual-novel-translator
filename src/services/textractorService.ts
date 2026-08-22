@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { TextractorProcessInfo, TextractorMessage } from "../types";
 import { useTextractorStore } from "../stores/useTextractorStore";
+import { useTranslationStore } from "../stores/useTranslationStore";
 import { executePreprocessingPipeline, extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
 
@@ -69,8 +70,8 @@ export const POPULAR_HOOK_PRESETS: EngineHookPreset[] = [
   },
 ];
 
-export const DEFAULT_TEXTRACTOR_PATH = "C:\\Program Files\\Textractor\\x86\\TextractorCLI.exe";
-export const DEFAULT_TEXTRACTOR_DIR = "C:\\Program Files\\Textractor";
+export const DEFAULT_TEXTRACTOR_PATH = "D:\\Program Files\\Textractor\\x86\\TextractorCLI.exe";
+export const DEFAULT_TEXTRACTOR_DIR = "D:\\Program Files\\Textractor";
 
 // Smart merge helper for visual novel typewriter text fragments & multi-pass memory hooks
 export function mergeDialogueFragments(current: string, incoming: string): string {
@@ -220,17 +221,16 @@ export class TextractorService {
     const store = useTextractorStore.getState();
     const handle = msg.handle;
     const rawText = msg.text || "";
-    if (!rawText.trim()) return;
 
-    // 1. Update Threads map & Thread Logs in Store
+    // 1. Update Threads map & Thread Logs in Store (Always register threads!)
     store.setThreads((prevThreads) => {
       const nextThreads = new Map(prevThreads);
       const existing = nextThreads.get(handle);
       if (existing) {
         nextThreads.set(handle, {
           ...existing,
-          totalLines: existing.totalLines + 1,
-          lastText: rawText,
+          totalLines: rawText ? existing.totalLines + 1 : existing.totalLines,
+          lastText: rawText || existing.lastText,
           lastTimestamp: msg.timestamp,
         });
       } else {
@@ -239,7 +239,7 @@ export class TextractorService {
           name: msg.name || `Thread #${handle}`,
           hookCode: msg.hook_code || "",
           address: msg.address || "",
-          totalLines: 1,
+          totalLines: rawText ? 1 : 0,
           lastText: rawText,
           lastTimestamp: msg.timestamp,
           isActive: true,
@@ -249,13 +249,22 @@ export class TextractorService {
       return nextThreads;
     });
 
-    store.setThreadLogs((prevLogs) => {
-      const nextLogs = new Map(prevLogs);
-      const list = nextLogs.get(handle) || [];
-      const updated = [msg, ...list].slice(0, store.maxLogLines);
-      nextLogs.set(handle, updated);
-      return nextLogs;
-    });
+    if (rawText.trim()) {
+      // Surface Textractor Console warnings (e.g. architecture mismatch) to UI
+      if (msg.name === "Console" && (rawText.toLowerCase().includes("mismatch") || rawText.toLowerCase().includes("fail") || rawText.toLowerCase().includes("error") || rawText.toLowerCase().includes("denied"))) {
+        store.setHookError(rawText);
+      }
+
+      store.setThreadLogs((prevLogs) => {
+        const nextLogs = new Map(prevLogs);
+        const list = nextLogs.get(handle) || [];
+        const updated = [msg, ...list].slice(0, store.maxLogLines);
+        nextLogs.set(handle, updated);
+        return nextLogs;
+      });
+    }
+
+    if (!rawText.trim()) return;
 
     // 2. Process message according to designated Thread Role
     const isCombined = store.combinedThreadId === handle;
@@ -304,9 +313,12 @@ export class TextractorService {
 
       const hasChanged = spk !== this.lastDispatchedText.speaker || msg !== this.lastDispatchedText.message;
 
-      if (hasChanged || !store.ignoreDuplicateLines) {
+      // Always suppress identical consecutive duplicate lines
+      if (hasChanged) {
         this.lastDispatchedText = { speaker: spk, message: msg };
-        if (store.autoForwardToOverlay) {
+        // Automatically forward to Live Translation if not paused
+        const translationStore = useTranslationStore.getState();
+        if (!translationStore.isPaused) {
           translationManager.translate({
             speaker: spk || undefined,
             message: msg,
@@ -321,59 +333,55 @@ export class TextractorService {
   }
 
   /**
-   * Set thread role and recompute inspector
+   * Set thread role and sync with capturedThreads
    */
-  public static toggleRole(threadId: number, role: "combined" | "message" | "speaker") {
+  public static setThreadRole(threadId: number, role: "combined" | "dialogue" | "speaker" | "ignored") {
     const store = useTextractorStore.getState();
+    store.updateCapturedThreadRole(threadId, role);
 
-    let nextCombined = store.combinedThreadId;
-    let nextMsg = store.messageThreadId;
-    let nextSpeaker = store.speakerThreadId;
+    const currentCaptured = useTextractorStore.getState().capturedThreads;
+    let nextCombined: number | null = null;
+    let nextMsg: number | null = null;
+    let nextSpeaker: number | null = null;
 
-    if (role === "combined") {
-      if (nextCombined === threadId) {
-        nextCombined = null;
-      } else {
-        nextCombined = threadId;
-        nextMsg = null;
-        nextSpeaker = null;
-      }
-    } else if (role === "message") {
-      if (nextMsg === threadId) {
-        nextMsg = null;
-      } else {
-        nextMsg = threadId;
-        nextCombined = null;
-        if (nextSpeaker === threadId) nextSpeaker = null;
-      }
-    } else if (role === "speaker") {
-      if (nextSpeaker === threadId) {
-        nextSpeaker = null;
-      } else {
-        nextSpeaker = threadId;
-        nextCombined = null;
-        if (nextMsg === threadId) nextMsg = null;
-      }
+    for (const c of currentCaptured) {
+      if (c.role === "combined" && nextCombined === null) nextCombined = c.threadId;
+      if (c.role === "dialogue" && nextMsg === null) nextMsg = c.threadId;
+      if (c.role === "speaker" && nextSpeaker === null) nextSpeaker = c.threadId;
     }
 
     store.setCombinedThreadId(nextCombined);
     store.setMessageThreadId(nextMsg);
     store.setSpeakerThreadId(nextSpeaker);
 
-    // Update role on thread objects in map
     store.setThreads((prev) => {
       const next = new Map(prev);
       for (const [id, t] of next.entries()) {
-        let tRole: "combined" | "message" | "speaker" | "ignored" = "ignored";
-        if (nextCombined === id) tRole = "combined";
-        else if (nextMsg === id) tRole = "message";
-        else if (nextSpeaker === id) tRole = "speaker";
+        const captured = currentCaptured.find((c) => c.threadId === id);
+        const tRole: "combined" | "message" | "speaker" | "ignored" = captured
+          ? (captured.role === "dialogue" ? "message" : captured.role)
+          : "ignored";
         next.set(id, { ...t, role: tRole });
       }
       return next;
     });
 
     this.recomputeInspector(nextCombined, nextMsg, nextSpeaker);
+  }
+
+  /**
+   * Set thread role and recompute inspector (Legacy toggle helper)
+   */
+  public static toggleRole(threadId: number, role: "combined" | "message" | "speaker") {
+    const store = useTextractorStore.getState();
+    const targetRole = role === "message" ? "dialogue" : role;
+    const existing = store.capturedThreads.find((c) => c.threadId === threadId);
+
+    if (existing && existing.role === targetRole) {
+      this.setThreadRole(threadId, "ignored");
+    } else {
+      this.setThreadRole(threadId, targetRole);
+    }
   }
 
   /**

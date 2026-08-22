@@ -95,10 +95,29 @@ export const SUPPORTED_LANGUAGES: Record<string, string> = {
   vi: "Vietnamese",
   th: "Thai",
   pt: "Portuguese",
+  "pt-pt": "Portuguese (Portugal)",
   it: "Italian",
   pl: "Polish",
   tr: "Turkish",
   ar: "Arabic",
+  nl: "Dutch",
+  ms: "Malay",
+  tl: "Tagalog",
+  uk: "Ukrainian",
+  cs: "Czech",
+  hu: "Hungarian",
+  sv: "Swedish",
+  fi: "Finnish",
+  da: "Danish",
+  no: "Norwegian",
+  el: "Greek",
+  ro: "Romanian",
+  hi: "Hindi",
+  he: "Hebrew",
+  jv: "Javanese",
+  su: "Sundanese",
+  la: "Latin",
+  eo: "Esperanto",
   auto: "Original Language",
 };
 
@@ -644,3 +663,36 @@ export async function translateWithOpenRouter(options: {
     rawText: content,
   };
 }
+
+/**
+ * Calculates estimated USD cost based on token usage and cached model pricing
+ */
+export function calculateUsageCost(
+  modelId: string,
+  promptTokens: number,
+  completionTokens: number,
+  cachedTokens: number = 0
+): number {
+  const cachedListStr = localStorage.getItem("openrouter_available_models");
+  let promptPrice = 0.00000015; // default fallback ($0.15 / 1M tokens)
+  let compPrice = 0.0000006;   // default fallback ($0.60 / 1M tokens)
+
+  if (cachedListStr) {
+    try {
+      const models: OpenRouterModel[] = JSON.parse(cachedListStr);
+      const m = models.find((x) => x.id === modelId);
+      if (m?.pricing) {
+        promptPrice = parseFloat(m.pricing.prompt) || promptPrice;
+        compPrice = parseFloat(m.pricing.completion) || compPrice;
+      }
+    } catch {}
+  }
+
+  const nonCachedPrompt = Math.max(0, promptTokens - cachedTokens);
+  // Prompt caching typically yields ~50-80% discount on OpenRouter
+  const promptCost = nonCachedPrompt * promptPrice + cachedTokens * promptPrice * 0.25;
+  const compCost = completionTokens * compPrice;
+
+  return promptCost + compCost;
+}
+

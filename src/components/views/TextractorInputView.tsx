@@ -2,15 +2,11 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   TextractorService,
   POPULAR_HOOK_PRESETS,
-  DEFAULT_TEXTRACTOR_PATH,
   EngineHookPreset,
 } from "../../services/textractorService";
-import { executePreprocessingPipeline } from "../../utils/textPreprocessor";
 import { useTextractorStore } from "../../stores/useTextractorStore";
 import {
-  Cpu,
   RefreshCw,
-  CheckCircle2,
   XCircle,
   Play,
   Square,
@@ -18,17 +14,27 @@ import {
   Sliders,
   Terminal,
   Trash2,
-  Radio,
   Search,
-  FileText,
   Activity,
   Layers,
-  Sparkles,
   Check,
   X,
+  GripVertical,
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  Radio,
+  FolderOpen,
+  Filter,
 } from "lucide-react";
 
-export const TextractorInputView: React.FC = () => {
+interface TextractorInputViewProps {
+  onOpenPreprocessingSettings?: () => void;
+}
+
+export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
+  onOpenPreprocessingSettings,
+}) => {
   // Global Textractor State from Zustand SSOT
   const {
     exePath,
@@ -40,282 +46,187 @@ export const TextractorInputView: React.FC = () => {
     isAttaching,
     attachedPid,
     hookError,
-    discoveryDuration,
-    discoverySecondsLeft,
-    isDiscoveryActive,
     debounceMs,
     threads,
-    combinedThreadId,
-    messageThreadId,
-    speakerThreadId,
+    capturedThreads,
     inspectedThreadId,
-    maxLogLines,
     threadLogs,
-    ignoreDuplicateLines,
     latestSpeaker,
     latestMessage,
     latestRawMessage,
-    autoForwardToOverlay,
     setExePath,
     setArch,
     setSelectedPid,
-    setDiscoveryDuration,
-    setDiscoverySecondsLeft,
-    setIsDiscoveryActive,
     setDebounceMs,
+    reorderCapturedThreads,
     setInspectedThreadId,
-    setMaxLogLines,
-    setIgnoreDuplicateLines,
-    setAutoForwardToOverlay,
     setLatestSpeaker,
     setLatestMessage,
     setLatestRawMessage,
   } = useTextractorStore();
 
-  // Local UI-only state (search input & dropdown popovers)
+  // Local UI State
   const [processSearchQuery, setProcessSearchQuery] = useState<string>("");
   const [isProcessDropdownOpen, setIsProcessDropdownOpen] = useState<boolean>(false);
-  const [specificTextFilter, setSpecificTextFilter] = useState<string>("");
+  const [isThreadDropdownOpen, setIsThreadDropdownOpen] = useState<boolean>(false);
+  const [threadSearchQuery, setThreadSearchQuery] = useState<string>("");
+  const [logFilterQuery, setLogFilterQuery] = useState<string>("");
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [selectedPreset, setSelectedPreset] = useState<EngineHookPreset>(POPULAR_HOOK_PRESETS[0]);
   const [customHookCode, setCustomHookCode] = useState<string>("");
+  const [draggingCapturedIndex, setDraggingCapturedIndex] = useState<number | null>(null);
 
   const processDropdownRef = useRef<HTMLDivElement>(null);
-  const discoveryTimerRef = useRef<any>(null);
+  const threadDropdownRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
 
-  // Close process dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (processDropdownRef.current && !processDropdownRef.current.contains(e.target as Node)) {
         setIsProcessDropdownOpen(false);
+      }
+      if (threadDropdownRef.current && !threadDropdownRef.current.contains(e.target as Node)) {
+        setIsThreadDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Initialize Textractor listener and load process list on mount
+  // Initialize Textractor listener and process list on mount
   useEffect(() => {
     TextractorService.initListener();
     TextractorService.listProcesses();
   }, []);
 
-  // Handle Discovery Countdown Timer
+  // Auto-select first thread if none inspected
   useEffect(() => {
-    if (isDiscoveryActive && discoverySecondsLeft > 0) {
-      discoveryTimerRef.current = setTimeout(() => {
-        setDiscoverySecondsLeft(discoverySecondsLeft - 1);
-      }, 1000);
-    } else if (discoverySecondsLeft === 0 && isDiscoveryActive) {
-      setIsDiscoveryActive(false);
+    if (inspectedThreadId === null && threads.size > 0) {
+      const firstId = Array.from(threads.keys())[0];
+      setInspectedThreadId(firstId);
     }
+  }, [threads, inspectedThreadId, setInspectedThreadId]);
 
-    return () => {
-      if (discoveryTimerRef.current) clearTimeout(discoveryTimerRef.current);
-    };
-  }, [isDiscoveryActive, discoverySecondsLeft, setDiscoverySecondsLeft, setIsDiscoveryActive]);
-
-  // Manual Hook Search Toggle
-  const handleToggleHookSearch = () => {
-    if (!isHooked) return;
-    if (isDiscoveryActive) {
-      setIsDiscoveryActive(false);
-      setDiscoverySecondsLeft(0);
-    } else {
-      setIsDiscoveryActive(true);
-      setDiscoverySecondsLeft(discoveryDuration > 0 ? discoveryDuration : 9999);
-    }
-  };
-
-  // Attach / Start Textractor Sidecar
+  // Actions
   const handleAttach = async () => {
     if (!selectedPid) return;
     await TextractorService.startSidecar(exePath, selectedPid);
   };
 
-  // Detach / Stop Textractor Sidecar
   const handleDetach = async () => {
     await TextractorService.stopSidecar();
   };
 
-  // Insert Custom Hook Code
   const handleInsertHookCode = async () => {
-    if (!isHooked || !attachedPid) return;
-    const code = customHookCode.trim();
-    if (!code) return;
-
-    const command = `${code} -P${attachedPid}`;
-    await TextractorService.sendCommand(command);
-    setCustomHookCode("");
+    if (!isHooked || !customHookCode.trim()) return;
+    await TextractorService.sendCommand(customHookCode.trim());
   };
 
-  // Switch architecture
-  const handleSelectArch = async (selectedArch: "x86" | "x64") => {
-    if (isHooked) {
-      await TextractorService.stopSidecar();
+  const handleSelectArch = (newArch: "x86" | "x64") => {
+    setArch(newArch);
+    if (newArch === "x86" && exePath.includes("\\x64\\")) {
+      setExePath(exePath.replace("\\x64\\", "\\x86\\"));
+    } else if (newArch === "x64" && exePath.includes("\\x86\\")) {
+      setExePath(exePath.replace("\\x86\\", "\\x64\\"));
     }
-    setArch(selectedArch);
-    const newPath =
-      selectedArch === "x86"
-        ? "C:\\Program Files\\Textractor\\x86\\TextractorCLI.exe"
-        : "C:\\Program Files\\Textractor\\x64\\TextractorCLI.exe";
-    setExePath(newPath);
-
-    setSelectedPid(null);
-    setProcessSearchQuery("");
-    setIsProcessDropdownOpen(false);
-
-    TextractorService.listProcesses();
   };
 
-  // Selected process object
-  const selectedProcess = processes.find((p) => p.pid === selectedPid) || null;
+  // Convert threads Map to array
+  const allThreadsList = Array.from(threads.values()).sort((a, b) => b.totalLines - a.totalLines);
 
-  // Filter processes by search query
   const filteredProcesses = processes.filter((p) => {
-    const q = processSearchQuery.toLowerCase().trim();
-    if (!q) return true;
+    if (!processSearchQuery.trim()) return true;
+    const q = processSearchQuery.toLowerCase();
     return (
       p.name.toLowerCase().includes(q) ||
       p.window_title.toLowerCase().includes(q) ||
-      p.pid.toString().includes(q)
+      String(p.pid).includes(q)
     );
   });
 
-  // Filter threads by specific text search if user typed one
-  const threadList = Array.from(threads.values()).filter((t) => {
-    if (!specificTextFilter.trim()) return true;
-    return t.lastText.toLowerCase().includes(specificTextFilter.toLowerCase().trim());
+  const filteredThreadList = allThreadsList.filter((t) => {
+    if (!threadSearchQuery.trim()) return true;
+    const q = threadSearchQuery.toLowerCase();
+    return (
+      t.name.toLowerCase().includes(q) ||
+      String(t.id).includes(q) ||
+      t.hookCode.toLowerCase().includes(q) ||
+      (t.lastText && t.lastText.toLowerCase().includes(q))
+    );
   });
 
-  // Active inspected thread details & logs
-  const currentInspectedThread = inspectedThreadId !== null ? threads.get(inspectedThreadId) : null;
-  const currentThreadLogs = inspectedThreadId !== null ? threadLogs.get(inspectedThreadId) || [] : [];
+  const selectedProcess = processes.find((p) => p.pid === (attachedPid || selectedPid));
+  const inspectedThread = inspectedThreadId !== null ? threads.get(inspectedThreadId) : null;
+  const inspectedLogs = inspectedThreadId !== null ? threadLogs.get(inspectedThreadId) || [] : [];
+  const filteredLogs = inspectedLogs.filter((log) => {
+    if (!logFilterQuery.trim()) return true;
+    return (log.text || "").toLowerCase().includes(logFilterQuery.toLowerCase());
+  });
 
-  const isLiveStreamActive = combinedThreadId !== null || messageThreadId !== null || speakerThreadId !== null;
+  // Drag and drop handlers for captured threads
+  const handleDragStart = (index: number) => {
+    setDraggingCapturedIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggingCapturedIndex === null || draggingCapturedIndex === index) return;
+    reorderCapturedThreads(draggingCapturedIndex, index);
+    setDraggingCapturedIndex(index);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingCapturedIndex(null);
+  };
+
+  const isLiveStreamActive = capturedThreads.length > 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%", maxWidth: "100%", minWidth: 0, boxSizing: "border-box" }}>
-      {/* 1. Header: Path Configuration & Real-Time Sidecar Status */}
-      <div className="card" style={{ margin: 0, minWidth: 0 }}>
-        <div className="card-header">
-          <div>
-            <span className="card-title">
-              <Cpu size={16} color="var(--accent-primary)" /> Textractor Sidecar Hooker
-            </span>
-            <span className="card-subtitle">
-              Hook in-game dialogues directly from visual novel game processes into VN Translator
-            </span>
-          </div>
-
-          {/* Status Badge */}
-          <span
-            className={isHooked ? "badge badge-success" : "badge badge-danger"}
-            style={{
-              padding: "4px 10px",
-              fontWeight: 700,
-              fontSize: "12px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-            }}
-          >
-            {isHooked ? (
-              <>
-                <CheckCircle2 size={12} /> Hook Attached (PID: {attachedPid})
-              </>
-            ) : (
-              <>
-                <XCircle size={12} /> Disconnected (Idle)
-              </>
-            )}
-          </span>
-        </div>
-
-        {/* Textractor Executable Path & Arch Config */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "12px", alignItems: "center" }}>
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-              TextractorCLI Executable Location
-            </label>
-            <input
-              type="text"
-              value={exePath}
-              onChange={(e) => setExePath(e.target.value)}
-              placeholder={DEFAULT_TEXTRACTOR_PATH}
-              style={{ width: "100%", fontFamily: "var(--font-mono)", fontSize: "12px" }}
-            />
-          </div>
-
-          {/* Arch Toggle */}
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-              Target Game Architecture
-            </label>
-            <div style={{ display: "flex", gap: "4px" }}>
-              <button
-                type="button"
-                onClick={() => handleSelectArch("x86")}
-                className={arch === "x86" ? "btn-primary" : "btn-secondary"}
-                style={{ padding: "5px 12px", fontSize: "12px" }}
-                title="Use 32-bit TextractorCLI for 95% of Visual Novels (Kirikiri, Siglus, Majiro, etc.)"
-              >
-                x86 (32-bit VN)
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSelectArch("x64")}
-                className={arch === "x64" ? "btn-primary" : "btn-secondary"}
-                style={{ padding: "5px 12px", fontSize: "12px" }}
-                title="Use 64-bit TextractorCLI for 64-bit Unity and modern visual novels"
-              >
-                x64 (64-bit)
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {hookError && (
-          <div
-            style={{
-              marginTop: "8px",
-              padding: "8px 12px",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "12px",
-              backgroundColor: "rgba(248, 81, 73, 0.12)",
-              border: "1px solid var(--accent-danger)",
-              color: "var(--accent-danger)",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-            }}
-          >
-            <XCircle size={14} />
-            <span>{hookError}</span>
-          </div>
-        )}
-      </div>
-
-      {/* 2. Target Visual Novel Process Picker & Attacher */}
-      <div className="card" style={{ margin: 0, minWidth: 0 }}>
-        <div className="card-header">
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px", width: "100%" }}>
+      {/* ========================================================================= */}
+      {/* 1. TARGET GAME PROCESS (Compact Quick Connect Bar)                        */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
+        <div className="card-header" style={{ paddingBottom: "10px" }}>
           <div>
             <span className="card-title">
               <Radio size={16} /> Target Game Process
             </span>
             <span className="card-subtitle">
-              Select running Visual Novel window to attach text hooking engine
+              Select running Visual Novel window to hook real-time text threads
             </span>
           </div>
+
+          {isHooked && attachedPid && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "5px",
+                fontSize: "11.5px",
+                fontWeight: 600,
+                color: "#3fb950",
+                backgroundColor: "rgba(63, 185, 80, 0.12)",
+                border: "1px solid rgba(63, 185, 80, 0.3)",
+                padding: "3px 8px",
+                borderRadius: "20px",
+              }}
+            >
+              <span style={{ width: "7px", height: "7px", borderRadius: "50%", backgroundColor: "#3fb950" }} />
+              Hook Active (PID: {attachedPid})
+            </span>
+          )}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "10px", alignItems: "center" }}>
-          {/* Searchable Process Combobox */}
-          <div ref={processDropdownRef} style={{ position: "relative" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
+          {/* Searchable Process Picker */}
+          <div ref={processDropdownRef} style={{ position: "relative", flex: "1 1 280px", minWidth: "220px" }}>
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
               <Search size={14} style={{ position: "absolute", left: "10px", color: "var(--text-muted)", pointerEvents: "none" }} />
               <input
                 type="text"
-                placeholder={selectedProcess ? `"${selectedProcess.window_title}" (${selectedProcess.name} - PID: ${selectedProcess.pid})` : "Type or click to search game process by title, exe, or PID..."}
+                placeholder={selectedProcess ? `"${selectedProcess.window_title}" (${selectedProcess.name} - PID: ${selectedProcess.pid})` : "Click or type to search game window..."}
                 value={isProcessDropdownOpen ? processSearchQuery : (selectedProcess ? `"${selectedProcess.window_title}" — ${selectedProcess.name} (PID: ${selectedProcess.pid})` : "")}
                 onChange={(e) => {
                   setProcessSearchQuery(e.target.value);
@@ -328,7 +239,7 @@ export const TextractorInputView: React.FC = () => {
                   }
                 }}
                 disabled={isHooked}
-                style={{ width: "100%", paddingLeft: "32px", fontSize: "12px", height: "32px" }}
+                style={{ width: "100%", paddingLeft: "32px", fontSize: "12px", height: "34px" }}
               />
               {selectedPid && !isHooked && (
                 <button
@@ -338,14 +249,14 @@ export const TextractorInputView: React.FC = () => {
                     setProcessSearchQuery("");
                   }}
                   style={{ position: "absolute", right: "8px", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "2px" }}
-                  title="Clear selected process"
+                  title="Clear selection"
                 >
                   <X size={12} />
                 </button>
               )}
             </div>
 
-            {/* Dropdown Menu */}
+            {/* Process Dropdown Menu */}
             {isProcessDropdownOpen && !isHooked && (
               <div
                 style={{
@@ -354,7 +265,7 @@ export const TextractorInputView: React.FC = () => {
                   left: 0,
                   right: 0,
                   marginTop: "4px",
-                  backgroundColor: "var(--bg-surface-elevated)",
+                  backgroundColor: "var(--bg-panel, #161b22)",
                   border: "1px solid var(--border-subtle)",
                   borderRadius: "var(--radius-sm)",
                   boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
@@ -382,14 +293,18 @@ export const TextractorInputView: React.FC = () => {
                           padding: "8px 12px",
                           fontSize: "12px",
                           cursor: "pointer",
-                          backgroundColor: isSelected ? "var(--bg-surface-hover)" : "transparent",
+                          backgroundColor: isSelected ? "rgba(88, 166, 255, 0.15)" : "transparent",
                           borderBottom: "1px solid rgba(255,255,255,0.04)",
                           display: "flex",
                           justifyContent: "space-between",
                           alignItems: "center",
                         }}
-                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--bg-surface-hover)")}
-                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isSelected ? "var(--bg-surface-hover)" : "transparent")}
+                        onMouseEnter={(e) => {
+                          if (!isSelected) e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)";
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isSelected) e.currentTarget.style.backgroundColor = "transparent";
+                        }}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
                           <span style={{ fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -413,12 +328,67 @@ export const TextractorInputView: React.FC = () => {
             onClick={() => TextractorService.listProcesses()}
             disabled={isLoadingProcesses || isHooked}
             className="btn-secondary"
-            style={{ height: "32px", padding: "0 12px", fontSize: "12px", whiteSpace: "nowrap" }}
-            title="Refresh running Windows processes"
+            style={{ height: "34px", padding: "0 12px", fontSize: "12px", whiteSpace: "nowrap" }}
+            title="Refresh running game processes"
           >
-            <RefreshCw size={12} className={isLoadingProcesses ? "spin" : ""} />
-            <span>{isLoadingProcesses ? "Scanning..." : "Refresh Processes"}</span>
+            <RefreshCw size={13} className={isLoadingProcesses ? "spin" : ""} />
+            <span>Refresh</span>
           </button>
+
+          {/* Architecture Switcher Toggle (32-bit / 64-bit) */}
+          <div
+            style={{
+              display: "inline-flex",
+              backgroundColor: "var(--bg-app)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "var(--radius-sm)",
+              padding: "2px",
+              height: "34px",
+              boxSizing: "border-box",
+              flexShrink: 0,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => handleSelectArch("x86")}
+              disabled={isHooked}
+              style={{
+                padding: "0 10px",
+                height: "100%",
+                fontSize: "11.5px",
+                fontWeight: 600,
+                borderRadius: "3px",
+                border: "none",
+                backgroundColor: arch === "x86" ? "var(--accent-primary)" : "transparent",
+                color: arch === "x86" ? "#ffffff" : "var(--text-secondary)",
+                cursor: isHooked ? "not-allowed" : "pointer",
+                transition: "all 0.15s ease",
+              }}
+              title="32-bit Visual Novel executable"
+            >
+              32-bit (x86)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectArch("x64")}
+              disabled={isHooked}
+              style={{
+                padding: "0 10px",
+                height: "100%",
+                fontSize: "11.5px",
+                fontWeight: 600,
+                borderRadius: "3px",
+                border: "none",
+                backgroundColor: arch === "x64" ? "var(--accent-primary)" : "transparent",
+                color: arch === "x64" ? "#ffffff" : "var(--text-secondary)",
+                cursor: isHooked ? "not-allowed" : "pointer",
+                transition: "all 0.15s ease",
+              }}
+              title="64-bit Visual Novel executable"
+            >
+              64-bit (x64)
+            </button>
+          </div>
 
           {/* Attach / Detach Button */}
           {!isHooked ? (
@@ -426,7 +396,7 @@ export const TextractorInputView: React.FC = () => {
               onClick={handleAttach}
               disabled={isAttaching || !selectedPid}
               className="btn-primary"
-              style={{ height: "32px", padding: "0 18px", whiteSpace: "nowrap", fontWeight: 600 }}
+              style={{ height: "34px", padding: "0 18px", whiteSpace: "nowrap", fontWeight: 600 }}
             >
               {isAttaching ? <RefreshCw size={13} className="spin" /> : <Play size={13} />}
               <span>{isAttaching ? "Attaching..." : "Attach Hook"}</span>
@@ -435,604 +405,675 @@ export const TextractorInputView: React.FC = () => {
             <button
               onClick={handleDetach}
               className="btn-danger"
-              style={{ height: "32px", padding: "0 18px", whiteSpace: "nowrap", fontWeight: 600 }}
+              style={{ height: "34px", padding: "0 18px", whiteSpace: "nowrap", fontWeight: 600 }}
             >
               <Square size={13} />
-              <span>Detach Hook</span>
+              <span>Detach</span>
             </button>
           )}
         </div>
+
+        {hookError && (
+          <div
+            style={{
+              marginTop: "8px",
+              padding: "8px 12px",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "12px",
+              backgroundColor: "rgba(248, 81, 73, 0.12)",
+              border: "1px solid var(--accent-danger)",
+              color: "var(--accent-danger)",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <XCircle size={15} style={{ flexShrink: 0 }} />
+            <span>{hookError}</span>
+          </div>
+        )}
       </div>
 
-      {/* 3. Hook Search Settings & Performance Tuning */}
-      <div className="card" style={{ margin: 0, minWidth: 0 }}>
-        <div className="card-header">
-          <div>
-            <span className="card-title">
-              <Sliders size={16} /> Hook Search & Performance Tuning
-            </span>
-            <span className="card-subtitle">
-              Start manual hook search to capture active in-game text threads with lightweight CPU limits
-            </span>
-          </div>
-
-          {/* Manual Hook Search Trigger Button */}
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <button
-              onClick={handleToggleHookSearch}
-              disabled={!isHooked}
-              className={isDiscoveryActive ? "btn-danger" : "btn-primary"}
-              style={{ padding: "5px 14px", fontSize: "12px", whiteSpace: "nowrap" }}
-              title={!isHooked ? "Attach to a game process first" : isDiscoveryActive ? "Stop active search" : "Start scanning for new in-game text threads"}
-            >
-              {isDiscoveryActive ? (
-                <>
-                  <Square size={12} />
-                  <span>Stop Search ({discoveryDuration === 0 ? "Active" : `${discoverySecondsLeft}s left`})</span>
-                </>
-              ) : (
-                <>
-                  <Search size={12} />
-                  <span>Start Hook Search</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1.5fr", gap: "16px", alignItems: "center" }}>
-          {/* Discovery Duration Setting */}
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Hook Search Duration: <strong>{discoveryDuration === 0 ? "Continuous" : `${discoveryDuration} seconds`}</strong>
-            </label>
-            <select
-              value={discoveryDuration}
-              onChange={(e) => setDiscoveryDuration(Number(e.target.value))}
-              disabled={isDiscoveryActive}
-              style={{ width: "100%" }}
-            >
-              <option value={5}>5 Seconds (Ultra Lightweight)</option>
-              <option value={10}>10 Seconds (Recommended)</option>
-              <option value={20}>20 Seconds (Deeper Scan)</option>
-              <option value={0}>Continuous (No Time Limit)</option>
-            </select>
-          </div>
-
-          {/* Text Refresh Delay / Debounce */}
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Typewriter Debounce: <strong>{debounceMs} ms</strong>
-            </label>
-            <input
-              type="range"
-              min={50}
-              max={600}
-              step={50}
-              value={debounceMs}
-              onChange={(e) => setDebounceMs(Number(e.target.value))}
-              style={{ width: "100%" }}
-            />
-          </div>
-
-          {/* Search Specific Text Matcher */}
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Search Specific Text on Game Screen
-            </label>
-            <input
-              type="text"
-              value={specificTextFilter}
-              onChange={(e) => setSpecificTextFilter(e.target.value)}
-              placeholder="e.g. 「私の名前は... or first few words"
-              style={{ width: "100%", fontSize: "12px" }}
-            />
-          </div>
-        </div>
-
-        {/* Additional Preprocessing & Performance Toggles */}
-        <div style={{ marginTop: "12px", paddingTop: "10px", borderTop: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={ignoreDuplicateLines}
-              onChange={(e) => setIgnoreDuplicateLines(e.target.checked)}
-            />
-            <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-              Remove Consecutive Duplicate Lines (Anti-Echo / Double Trigger)
-            </span>
-            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-              — Suppresses identical consecutive lines from re-triggering translations or flooding logs
-            </span>
-          </label>
-        </div>
-      </div>
-
-      {/* 4. Engine Presets & Custom Hook Code Bar */}
-      <div className="card" style={{ margin: 0, minWidth: 0 }}>
-        <div className="card-header">
-          <div>
-            <span className="card-title">
-              <Terminal size={16} /> Custom Hook Code Injection
-            </span>
-            <span className="card-subtitle">
-              Insert specialized memory hook codes for specific Visual Novel game engines
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.5fr auto", gap: "10px", alignItems: "center" }}>
-          {/* Preset Engine Dropdown */}
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-              Popular Engine Presets
-            </label>
-            <select
-              value={selectedPreset.name}
-              onChange={(e) => {
-                const found = POPULAR_HOOK_PRESETS.find((p) => p.name === e.target.value);
-                if (found) {
-                  setSelectedPreset(found);
-                  if (found.code) setCustomHookCode(found.code);
-                }
-              }}
-              style={{ width: "100%" }}
-            >
-              {POPULAR_HOOK_PRESETS.map((preset) => (
-                <option key={preset.name} value={preset.name}>
-                  {preset.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Hook Code Input */}
-          <div>
-            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-              Hook Code String (e.g. /HN-4*0@... or HS-8*0@...)
-            </label>
-            <input
-              type="text"
-              value={customHookCode}
-              onChange={(e) => setCustomHookCode(e.target.value)}
-              placeholder="Enter hook code..."
-              style={{ width: "100%", fontFamily: "var(--font-mono)", fontSize: "12px" }}
-            />
-          </div>
-
-          {/* Insert Hook Button */}
-          <div style={{ paddingTop: "18px" }}>
-            <button
-              onClick={handleInsertHookCode}
-              disabled={!isHooked || !customHookCode.trim()}
-              className="btn-secondary"
-              style={{ padding: "7px 16px", whiteSpace: "nowrap" }}
-            >
-              <Zap size={13} color="var(--accent-gold)" />
-              <span>Insert Hook</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* 5. Live Stream Inspector (Full-Width Top Panel) */}
-      <div className="card" style={{ margin: 0, minWidth: 0, width: "100%", boxSizing: "border-box" }}>
+      {/* ========================================================================= */}
+      {/* 2. LIVE STREAM INSPECTOR & ACTIVE CAPTURED THREADS (Drag & Drop Reorder)  */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <Activity size={16} color="var(--accent-success)" /> Live Stream Inspector
+              <Activity size={16} color="var(--accent-success)" /> Live Stream Inspector & Captured Threads
             </span>
             <span className="card-subtitle">
-              Live text stream intercepted from selected game thread
+              Manage intercepted threads: set role (Dialogue / Speaker / Combined) and drag to reorder
             </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {/* Quick Button to Text Preprocessing Rules Settings */}
+            {onOpenPreprocessingSettings && (
+              <button
+                type="button"
+                onClick={onOpenPreprocessingSettings}
+                className="btn-secondary"
+                style={{ height: "28px", padding: "0 10px", fontSize: "11.5px", display: "flex", alignItems: "center", gap: "5px" }}
+                title="Configure active regex and cleaning rules"
+              >
+                <Filter size={12} color="var(--accent-primary)" />
+                <span>Clean Rules</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                setLatestSpeaker("");
+                setLatestMessage("");
+                setLatestRawMessage("");
+              }}
+              disabled={!isLiveStreamActive}
+              className="btn-secondary"
+              style={{ height: "28px", padding: "0 8px", fontSize: "11px" }}
+              title="Clear live preview buffer"
+            >
+              <Trash2 size={11} />
+              <span>Clear</span>
+            </button>
           </div>
         </div>
 
-        {/* Toolbar: Auto-Forward & Clear Stream */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "10px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={autoForwardToOverlay}
-              onChange={(e) => setAutoForwardToOverlay(e.target.checked)}
-              disabled={!isLiveStreamActive}
-            />
-            <span style={{ fontWeight: 600 }}>Auto-Forward to Live Translation & Overlay</span>
-          </label>
-
-          <button
-            onClick={() => {
-              setLatestSpeaker("");
-              setLatestMessage("");
-              setLatestRawMessage("");
-            }}
-            disabled={!isLiveStreamActive}
-            className="btn-secondary"
-            style={{ height: "26px", padding: "0 10px", fontSize: "11px" }}
-            title="Clear live stream output"
-          >
-            <Trash2 size={11} />
-            <span>Clear Stream</span>
-          </button>
-        </div>
-
-        {/* Live Stream Output Box */}
-        {!isLiveStreamActive ? (
+        {/* Captured Threads List (Reorderable) */}
+        {capturedThreads.length === 0 ? (
           <div
             style={{
-              padding: "16px 20px",
+              padding: "16px",
               backgroundColor: "var(--bg-app)",
               border: "1px dashed var(--border-subtle)",
               borderRadius: "var(--radius-sm)",
               textAlign: "center",
               color: "var(--text-muted)",
-              fontSize: "12.5px",
+              fontSize: "12px",
             }}
           >
-            Live stream forwarding is currently idle. Click <strong>"✨ Set Combined"</strong>, <strong>"💬 Set Dialogue"</strong>, or <strong>"👤 Set Speaker"</strong> on any thread below to activate live streaming.
+            No active threads captured yet. Use the <strong>Detected Threads</strong> section below to select and capture game dialogue threads.
           </div>
         ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "12px" }}>
+            {capturedThreads.map((item, index) => {
+              const thread = threads.get(item.threadId);
+              const threadName = thread ? thread.name : `Thread #${item.threadId}`;
+              const lastSnippet = thread?.lastText || "(no text intercepted yet)";
+
+              return (
+                <div
+                  key={item.threadId}
+                  draggable
+                  onDragStart={() => handleDragStart(index)}
+                  onDragOver={(e) => handleDragOver(e, index)}
+                  onDragEnd={handleDragEnd}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "8px 12px",
+                    backgroundColor: item.role === "combined" ? "rgba(46, 160, 67, 0.08)" : item.role === "speaker" ? "rgba(255, 193, 7, 0.08)" : "rgba(88, 166, 255, 0.08)",
+                    border: `1px solid ${item.role === "combined" ? "rgba(46, 160, 67, 0.4)" : item.role === "speaker" ? "rgba(255, 193, 7, 0.4)" : "rgba(88, 166, 255, 0.4)"}`,
+                    borderRadius: "var(--radius-sm)",
+                    gap: "10px",
+                    cursor: "grab",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  {/* Left: Drag Handle & Thread Name */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
+                    <GripVertical size={14} color="var(--text-muted)" style={{ cursor: "grab", flexShrink: 0 }} />
+                    <span style={{ fontSize: "11px", fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--accent-primary)" }}>
+                      #{item.threadId}
+                    </span>
+                    <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                      {threadName}
+                    </span>
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      — "{lastSnippet}"
+                    </span>
+                  </div>
+
+                  {/* Right: Role Dropdown & Remove Button */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                    <select
+                      value={item.role}
+                      onChange={(e) => TextractorService.setThreadRole(item.threadId, e.target.value as any)}
+                      style={{
+                        fontSize: "11.5px",
+                        padding: "3px 8px",
+                        borderRadius: "4px",
+                        fontWeight: 600,
+                        backgroundColor: "var(--bg-panel)",
+                      }}
+                    >
+                      <option value="dialogue">💬 Dialogue Text</option>
+                      <option value="speaker">👤 Character Speaker Name</option>
+                      <option value="combined">✨ Combined (Auto-Split)</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => TextractorService.setThreadRole(item.threadId, "ignored")}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--accent-danger)",
+                        cursor: "pointer",
+                        padding: "4px",
+                      }}
+                      title="Remove from active captured threads"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Live Stream Direct 2-Tier Output Box (RAW on Top, Clean Result on Bottom) */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-app)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius-sm)",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          {/* Top Tier: Intercepted RAW Stream */}
           <div
             style={{
-              padding: "12px 16px",
-              backgroundColor: "var(--bg-app)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
+              padding: "7px 12px",
+              backgroundColor: "rgba(0, 0, 0, 0.25)",
+              borderBottom: "1px solid var(--border-subtle)",
               display: "flex",
-              flexDirection: "column",
+              alignItems: "baseline",
               gap: "8px",
+              fontSize: "11.5px",
+              minWidth: 0,
             }}
           >
-            {/* Synchronized Combined Preview */}
-            <div style={{ display: "flex", alignItems: "baseline", gap: "8px", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>
-              {latestSpeaker ? (
-                <span style={{ color: "var(--accent-gold)", fontWeight: 700, fontSize: "14px", whiteSpace: "nowrap" }}>
-                  【{latestSpeaker}】
+            <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "0.5px", flexShrink: 0 }}>
+              RAW INTERCEPT:
+            </span>
+            <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {latestRawMessage || "(no incoming raw text)"}
+            </span>
+          </div>
+
+          {/* Bottom Tier: Clean Extracted Dialogue Result */}
+          <div
+            style={{
+              padding: "10px 14px",
+              display: "flex",
+              alignItems: "baseline",
+              gap: "8px",
+              minWidth: 0,
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+            }}
+          >
+            {latestSpeaker ? (
+              <span style={{ color: "var(--accent-gold)", fontWeight: 700, fontSize: "14px", whiteSpace: "nowrap" }}>
+                【{latestSpeaker}】
+              </span>
+            ) : null}
+            <span style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 600, lineHeight: 1.45 }}>
+              {latestMessage || (
+                <span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: "12.5px" }}>
+                  {isLiveStreamActive ? "(Waiting for in-game dialogue on active threads...)" : "(No active thread captured)"}
                 </span>
-              ) : null}
-              <span style={{ color: "var(--text-primary)", fontSize: "14px", fontWeight: 600, lineHeight: 1.4 }}>
-                {latestMessage || (
-                  <span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: "12.5px" }}>
-                    (Waiting for in-game dialogue on active thread...)
+              )}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 3. DETECTED THREADS & LOG (Unified Searchable Combobox + Log Box)         */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
+        <div className="card-header" style={{ paddingBottom: "10px" }}>
+          <div>
+            <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Layers size={16} /> Detected Hook Threads & Real-Time Log ({allThreadsList.length})
+            </span>
+            <span className="card-subtitle">
+              Search and inspect all memory hook threads discovered in the game process
+            </span>
+          </div>
+        </div>
+
+        {/* Thread Selector Searchable Combobox */}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "10px" }}>
+          <div ref={threadDropdownRef} style={{ position: "relative", flex: 1 }}>
+            <div
+              onClick={() => setIsThreadDropdownOpen(!isThreadDropdownOpen)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "var(--bg-app)",
+                border: `1px solid ${isThreadDropdownOpen ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+                borderRadius: "var(--radius-sm)",
+                padding: "6px 12px",
+                cursor: "pointer",
+                fontSize: "12.5px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden" }}>
+                <Terminal size={14} color="var(--accent-primary)" />
+                {inspectedThread ? (
+                  <>
+                    <span style={{ fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--accent-primary)" }}>
+                      #{inspectedThread.id}
+                    </span>
+                    <span style={{ fontWeight: 600 }}>{inspectedThread.name}</span>
+                    {capturedThreads.some((c) => c.threadId === inspectedThread.id) ? (
+                      <span className="badge badge-success" style={{ fontSize: "10px", padding: "1px 5px" }}>
+                        Active Captured
+                      </span>
+                    ) : (
+                      <span className="badge badge-neutral" style={{ fontSize: "10px", padding: "1px 5px" }}>
+                        Standby ({inspectedThread.totalLines} lines)
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span style={{ color: "var(--text-muted)" }}>
+                    {allThreadsList.length === 0 ? "No threads discovered yet..." : "Select thread to inspect..."}
                   </span>
                 )}
-              </span>
+              </div>
+
+              <ChevronDown size={14} color="var(--text-muted)" />
             </div>
 
-            {/* RAW vs CLEAN Footnote */}
-            {latestRawMessage && (
-              <div style={{ display: "flex", gap: "16px", fontSize: "11px", borderTop: "1px solid var(--border-subtle)", paddingTop: "6px" }}>
-                <div style={{ color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                  <span>RAW: </span>
-                  <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>{latestRawMessage}</span>
+            {/* Dropdown Menu */}
+            {isThreadDropdownOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  marginTop: "4px",
+                  backgroundColor: "var(--bg-panel, #161b22)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  boxShadow: "0 10px 28px rgba(0, 0, 0, 0.5)",
+                  zIndex: 999,
+                  display: "flex",
+                  flexDirection: "column",
+                  maxHeight: "260px",
+                  overflow: "hidden",
+                }}
+              >
+                {/* Search Bar */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "8px 10px",
+                    borderBottom: "1px solid var(--border-subtle)",
+                    backgroundColor: "var(--bg-app)",
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Search size={14} color="var(--text-muted)" />
+                  <input
+                    type="text"
+                    placeholder="Search thread name, hook code, or text snippet..."
+                    value={threadSearchQuery}
+                    onChange={(e) => setThreadSearchQuery(e.target.value)}
+                    style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontSize: "12px", color: "var(--text-primary)" }}
+                    autoFocus
+                  />
+                  {threadSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setThreadSearchQuery("")}
+                      style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
                 </div>
-                <div style={{ color: "var(--accent-success)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                  <span>CLEAN: </span>
-                  <span style={{ fontWeight: 600 }}>{latestMessage}</span>
+
+                {/* Thread Items List */}
+                <div style={{ overflowY: "auto", flex: 1, padding: "4px" }}>
+                  {filteredThreadList.length === 0 ? (
+                    <div style={{ padding: "12px", textAlign: "center", color: "var(--text-muted)", fontSize: "12px" }}>
+                      No matching threads found.
+                    </div>
+                  ) : (
+                    filteredThreadList.map((t) => {
+                      const isCaptured = capturedThreads.some((c) => c.threadId === t.id);
+                      const isInspected = inspectedThreadId === t.id;
+
+                      return (
+                        <div
+                          key={t.id}
+                          onClick={() => {
+                            setInspectedThreadId(t.id);
+                            setIsThreadDropdownOpen(false);
+                            setThreadSearchQuery("");
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            padding: "7px 10px",
+                            borderRadius: "4px",
+                            cursor: "pointer",
+                            backgroundColor: isInspected ? "rgba(88, 166, 255, 0.15)" : "transparent",
+                            fontSize: "12px",
+                            borderBottom: "1px solid rgba(255,255,255,0.03)",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isInspected) e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)";
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isInspected) e.currentTarget.style.backgroundColor = "transparent";
+                          }}
+                        >
+                          <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0, flex: 1 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <span style={{ fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--accent-primary)" }}>
+                                #{t.id}
+                              </span>
+                              <span style={{ fontWeight: 600 }}>{t.name}</span>
+                              {isCaptured && (
+                                <span className="badge badge-success" style={{ fontSize: "9.5px", padding: "0 4px" }}>
+                                  Captured
+                                </span>
+                              )}
+                            </div>
+                            <span style={{ fontSize: "11px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              "{t.lastText || "(no text yet)"}"
+                            </span>
+                          </div>
+
+                          <span style={{ fontSize: "10.5px", color: "var(--text-muted)", marginLeft: "8px" }}>
+                            {t.totalLines} lines
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
           </div>
-        )}
-      </div>
 
-      {/* 6. Dual Column Panel: Detected Threads (Left) & Thread Log Inspector (Right) */}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.05fr) minmax(0, 0.95fr)", gap: "16px", minWidth: 0, width: "100%", boxSizing: "border-box" }}>
-        {/* Left Column: Discovered Threads Table with Multi-Role Assignment */}
-        <div className="card" style={{ margin: 0, minWidth: 0, width: "100%", boxSizing: "border-box", overflow: "hidden" }}>
-          <div className="card-header">
-            <div>
-              <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <Layers size={16} /> Detected Text Threads ({threadList.length})
-              </span>
-              <span className="card-subtitle">Click card to view thread log. Assign roles with buttons.</span>
-            </div>
-          </div>
-
-          {threadList.length === 0 ? (
-            <div style={{ padding: "28px 16px", textAlign: "center", color: "var(--text-muted)", fontSize: "12.5px" }}>
-              {isHooked
-                ? "Waiting for in-game dialogue... Advance a line in your game or click 'Start Hook Search'."
-                : "Attach to a game process above to start discovering hook threads."}
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "360px", overflowY: "auto", minWidth: 0 }}>
-              {threadList.map((thread) => {
-                const isCombined = combinedThreadId === thread.id;
-                const isMsg = messageThreadId === thread.id;
-                const isSpeaker = speakerThreadId === thread.id;
-                const isInspected = inspectedThreadId === thread.id;
-
-                let cardBorder = isInspected ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)";
-                let cardBg = isInspected ? "rgba(78, 115, 223, 0.12)" : "var(--bg-app)";
-
-                if (isCombined) {
-                  cardBorder = "1px solid var(--accent-success)";
-                  cardBg = isInspected ? "rgba(46, 160, 67, 0.18)" : "rgba(46, 160, 67, 0.08)";
-                } else if (isMsg) {
-                  cardBorder = "1px solid var(--accent-primary)";
-                  cardBg = isInspected ? "rgba(78, 115, 223, 0.18)" : "rgba(78, 115, 223, 0.08)";
-                } else if (isSpeaker) {
-                  cardBorder = "1px solid var(--accent-gold)";
-                  cardBg = isInspected ? "rgba(255, 193, 7, 0.15)" : "rgba(255, 193, 7, 0.06)";
-                }
-
-                return (
-                  <div
-                    key={thread.id}
-                    onClick={() => setInspectedThreadId(thread.id)}
-                    style={{
-                      padding: "10px 12px",
-                      backgroundColor: cardBg,
-                      border: cardBorder,
-                      borderRadius: "var(--radius-sm)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "6px",
-                      minWidth: 0,
-                      maxWidth: "100%",
-                      boxSizing: "border-box",
-                      cursor: "pointer",
-                      transition: "all 0.1s ease",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                        <span style={{ fontWeight: 600, fontSize: "12.5px", color: isInspected ? "var(--accent-primary)" : "var(--text-primary)", whiteSpace: "nowrap" }}>
-                          #{thread.id} {thread.name}
-                        </span>
-
-                        {/* Active Role Badges */}
-                        {isCombined && (
-                          <span className="badge badge-success" style={{ fontSize: "10px", padding: "1px 6px", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: "3px" }}>
-                            <Sparkles size={9} /> Combined Auto-Split
-                          </span>
-                        )}
-                        {isMsg && (
-                          <span className="badge badge-primary" style={{ fontSize: "10px", padding: "1px 6px", whiteSpace: "nowrap" }}>
-                            💬 Dialogue
-                          </span>
-                        )}
-                        {isSpeaker && (
-                          <span className="badge badge-warning" style={{ fontSize: "10px", padding: "1px 6px", whiteSpace: "nowrap" }}>
-                            👤 Speaker Name
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Role Selector Action Buttons */}
-                      <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-                        {/* 1. Combined (Auto-Split) Button */}
-                        <button
-                          type="button"
-                          onClick={() => TextractorService.toggleRole(thread.id, "combined")}
-                          className={isCombined ? "btn-primary" : "btn-secondary"}
-                          style={{
-                            padding: "2px 8px",
-                            fontSize: "11px",
-                            whiteSpace: "nowrap",
-                            borderColor: isCombined ? "var(--accent-success)" : undefined,
-                            backgroundColor: isCombined ? "var(--accent-success)" : undefined,
-                            color: isCombined ? "#fff" : undefined,
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "3px",
-                          }}
-                          title="Auto-split Character Name (Speaker) & Dialogue Message from single combined thread"
-                        >
-                          <Sparkles size={11} />
-                          <span>Set Combined</span>
-                        </button>
-
-                        {/* 2. Dialogue Button */}
-                        <button
-                          type="button"
-                          onClick={() => TextractorService.toggleRole(thread.id, "message")}
-                          className={isMsg ? "btn-primary" : "btn-secondary"}
-                          style={{ padding: "2px 8px", fontSize: "11px", whiteSpace: "nowrap" }}
-                          title="Assign as main dialogue text stream"
-                        >
-                          💬 Set Dialogue
-                        </button>
-
-                        {/* 3. Speaker Button */}
-                        <button
-                          type="button"
-                          onClick={() => TextractorService.toggleRole(thread.id, "speaker")}
-                          className={isSpeaker ? "btn-primary" : "btn-secondary"}
-                          style={{
-                            padding: "2px 8px",
-                            fontSize: "11px",
-                            whiteSpace: "nowrap",
-                            borderColor: isSpeaker ? "var(--accent-gold)" : undefined,
-                            backgroundColor: isSpeaker ? "var(--accent-gold)" : undefined,
-                            color: isSpeaker ? "#000" : undefined,
-                          }}
-                          title="Assign as character / speaker name tag stream"
-                        >
-                          👤 Set Speaker
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Hook Code & Metrics */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", minWidth: 0 }}>
-                      <span
-                        style={{
-                          fontFamily: "var(--font-mono)",
-                          fontSize: "10.5px",
-                          backgroundColor: "var(--bg-surface)",
-                          color: "var(--accent-cyan)",
-                          padding: "1px 6px",
-                          borderRadius: "2px",
-                          border: "1px solid var(--border-subtle)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          maxWidth: "75%",
-                        }}
-                      >
-                        {thread.hookCode}
-                      </span>
-                      <span className="badge badge-neutral" style={{ fontSize: "10px", flexShrink: 0 }}>
-                        {thread.totalLines} lines
-                      </span>
-                    </div>
-
-                    {/* Last Text Snippet */}
-                    <div
-                      style={{
-                        fontSize: "11.5px",
-                        color: "var(--text-secondary)",
-                        whiteSpace: "nowrap",
-                        textOverflow: "ellipsis",
-                        overflow: "hidden",
-                        minWidth: 0,
-                        maxWidth: "100%",
-                        backgroundColor: "rgba(0,0,0,0.2)",
-                        padding: "3px 6px",
-                        borderRadius: "2px",
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      {thread.lastText || "(Waiting for text...)"}
-                    </div>
-                  </div>
-                );
-              })}
+          {/* Quick Capture Button for Inspected Thread */}
+          {inspectedThread && (
+            <div style={{ display: "flex", gap: "6px" }}>
+              {!capturedThreads.some((c) => c.threadId === inspectedThread.id) ? (
+                <button
+                  type="button"
+                  onClick={() => TextractorService.setThreadRole(inspectedThread.id, "dialogue")}
+                  className="btn-primary"
+                  style={{ fontSize: "12px", padding: "5px 12px", display: "flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" }}
+                >
+                  <Plus size={13} />
+                  <span>Capture Thread</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => TextractorService.setThreadRole(inspectedThread.id, "ignored")}
+                  className="btn-secondary"
+                  style={{ fontSize: "12px", padding: "5px 10px", color: "var(--accent-danger)", display: "flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" }}
+                >
+                  <X size={13} />
+                  <span>Uncapture</span>
+                </button>
+              )}
             </div>
           )}
         </div>
 
-        {/* Right Column: Dedicated Thread Log Inspector */}
-        <div className="card" style={{ margin: 0, minWidth: 0, width: "100%", boxSizing: "border-box", overflow: "hidden" }}>
-          <div className="card-header">
-            <div>
-              <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <FileText size={16} /> Thread Log {currentInspectedThread ? `(#${currentInspectedThread.id})` : ""}
-              </span>
-              <span className="card-subtitle">
-                {currentInspectedThread
-                  ? `${currentInspectedThread.name} — ${currentInspectedThread.hookCode}`
-                  : "Select a thread on the left to view detailed line logs"}
-              </span>
-            </div>
-          </div>
-
-          {/* Sub-header Toolbar: Max Lines & Clear Log */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", gap: "8px", flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Max Lines:</span>
-              <select
-                value={maxLogLines}
-                onChange={(e) => setMaxLogLines(Number(e.target.value))}
-                style={{ fontSize: "11px", height: "26px", padding: "0 24px 0 6px" }}
-                title="Max log lines to retain"
-              >
-                <option value={50}>50 Lines</option>
-                <option value={100}>100 Lines</option>
-                <option value={200}>200 Lines</option>
-                <option value={500}>500 Lines</option>
-              </select>
-            </div>
-
-            <button
-              onClick={() => {
-                if (inspectedThreadId !== null) {
-                  TextractorService.clearLogs(inspectedThreadId);
-                }
-              }}
-              disabled={!currentInspectedThread || currentThreadLogs.length === 0}
-              className="btn-secondary"
-              style={{ height: "26px", padding: "0 10px", fontSize: "11px" }}
-              title="Clear log history for this thread"
-            >
-              <Trash2 size={11} />
-              <span>Clear Log</span>
-            </button>
-          </div>
-
-          {/* Thread Log Entries List */}
+        {/* Selected Thread Log Box */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-app)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius-sm)",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          {/* Log Toolbar */}
           <div
             style={{
-              backgroundColor: "var(--bg-app)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              padding: "10px",
-              height: "360px",
-              overflowY: "auto",
               display: "flex",
-              flexDirection: "column",
-              gap: "8px",
-              fontFamily: "var(--font-mono)",
-              fontSize: "12px",
-              minWidth: 0,
-              boxSizing: "border-box",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 10px",
+              backgroundColor: "var(--bg-panel)",
+              borderBottom: "1px solid var(--border-subtle)",
+              fontSize: "11.5px",
             }}
           >
-            {currentThreadLogs.length === 0 ? (
-              <span style={{ color: "var(--text-muted)", fontSize: "11.5px", margin: "auto" }}>
-                {currentInspectedThread
-                  ? "No lines recorded for this thread yet."
-                  : "Select a thread from the list on the left to view its history."}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Search size={12} color="var(--text-muted)" />
+              <input
+                type="text"
+                placeholder="Filter logs in this thread..."
+                value={logFilterQuery}
+                onChange={(e) => setLogFilterQuery(e.target.value)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  outline: "none",
+                  fontSize: "11.5px",
+                  color: "var(--text-primary)",
+                  width: "180px",
+                }}
+              />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ color: "var(--text-muted)" }}>
+                {filteredLogs.length} events
               </span>
+
+              {inspectedThread && (
+                <button
+                  type="button"
+                  onClick={() => TextractorService.clearLogs(inspectedThread.id)}
+                  style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                  title="Clear thread log history"
+                >
+                  <Trash2 size={11} />
+                  <span>Clear</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Log Lines Terminal Output */}
+          <div
+            ref={logContainerRef}
+            style={{
+              padding: "10px",
+              height: "180px",
+              overflowY: "auto",
+              fontFamily: "var(--font-mono)",
+              fontSize: "11.5px",
+              lineHeight: "1.5",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}
+          >
+            {filteredLogs.length === 0 ? (
+              <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)" }}>
+                {inspectedThread
+                  ? "No text received on this thread yet. Advance dialogue in your game."
+                  : "Select a thread above to view real-time log history."}
+              </div>
             ) : (
-              currentThreadLogs.map((log, idx) => {
-                const clean = executePreprocessingPipeline(log.text);
-
-                return (
-                  <div
-                    key={`${log.timestamp}_${idx}`}
-                    style={{
-                      borderBottom: "1px solid var(--border-subtle)",
-                      paddingBottom: "6px",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "2px",
-                      minWidth: 0,
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-muted)", minWidth: 0 }}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        [{log.timestamp}] Line #{currentThreadLogs.length - idx}
-                      </span>
-                      <span style={{ color: "var(--accent-cyan)", flexShrink: 0 }}>{log.hook_code}</span>
-                    </div>
-
-                    {/* Raw Text */}
-                    <div
-                      style={{
-                        color: "var(--text-secondary)",
-                        fontSize: "11.5px",
-                        minWidth: 0,
-                        overflowWrap: "anywhere",
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      <span style={{ color: "var(--text-muted)", fontSize: "10px" }}>RAW: </span>
-                      {log.text}
-                    </div>
-
-                    {/* Clean Preprocessed Text */}
-                    <div
-                      style={{
-                        color: "var(--accent-success)",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        minWidth: 0,
-                        overflowWrap: "anywhere",
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      <span style={{ fontSize: "10px" }}>CLEAN: </span>
-                      {clean}
-                    </div>
-                  </div>
-                );
-              })
+              filteredLogs.map((log, idx) => (
+                <div key={idx} style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
+                  <span style={{ color: "var(--text-muted)", fontSize: "10.5px", whiteSpace: "nowrap" }}>
+                    [{log.timestamp}]
+                  </span>
+                  <span style={{ color: "var(--text-primary)", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                    {log.text}
+                  </span>
+                </div>
+              ))
             )}
           </div>
         </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 4. ADVANCED HOOK SETTINGS (Categorized Collapsible Accordion)              */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
+        <div
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <Sliders size={15} color="var(--accent-primary)" />
+            <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-primary)" }}>
+              Advanced Hook Settings
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-muted)", fontSize: "12px" }}>
+            <span>{showAdvanced ? "Hide" : "Expand"}</span>
+            {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </div>
+        </div>
+
+        {showAdvanced && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "14px" }}>
+            {/* Category 1: Executable Path */}
+            <div style={{ backgroundColor: "var(--bg-app)", padding: "12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <FolderOpen size={13} color="var(--accent-primary)" />
+                <span>Textractor Binary Executable Path</span>
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
+                  TextractorCLI.exe File Path (Auto-resolved from drive D:\ and C:\)
+                </label>
+                <input
+                  type="text"
+                  value={exePath}
+                  onChange={(e) => setExePath(e.target.value)}
+                  style={{ width: "100%", fontSize: "11.5px", fontFamily: "var(--font-mono)" }}
+                />
+              </div>
+            </div>
+
+            {/* Category 2: Custom Engine Hook Code Injection */}
+            <div style={{ backgroundColor: "var(--bg-app)", padding: "12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Zap size={13} color="var(--accent-gold)" />
+                <span>Custom Memory Hook Code Injection</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px", alignItems: "flex-end" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
+                    Popular Engine Preset
+                  </label>
+                  <select
+                    value={selectedPreset.name}
+                    onChange={(e) => {
+                      const found = POPULAR_HOOK_PRESETS.find((p) => p.name === e.target.value);
+                      if (found) {
+                        setSelectedPreset(found);
+                        if (found.code) setCustomHookCode(found.code);
+                      }
+                    }}
+                    style={{ width: "100%", fontSize: "11.5px" }}
+                  >
+                    {POPULAR_HOOK_PRESETS.map((preset) => (
+                      <option key={preset.name} value={preset.name}>
+                        {preset.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
+                    Hook Code String (/HN... or /HS...)
+                  </label>
+                  <input
+                    type="text"
+                    value={customHookCode}
+                    onChange={(e) => setCustomHookCode(e.target.value)}
+                    placeholder="Enter hook code (e.g. /HN-4*0@...)"
+                    style={{ width: "100%", fontFamily: "var(--font-mono)", fontSize: "11.5px" }}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleInsertHookCode}
+                  disabled={!isHooked || !customHookCode.trim()}
+                  className="btn-secondary"
+                  style={{ padding: "6px 14px", fontSize: "11.5px", whiteSpace: "nowrap" }}
+                >
+                  <Zap size={12} color="var(--accent-gold)" />
+                  <span>Insert Hook</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Category 3: Performance & Timing */}
+            <div style={{ backgroundColor: "var(--bg-app)", padding: "12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Sliders size={13} color="var(--accent-primary)" />
+                <span>Typewriter Stream Delay Tuning</span>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
+                    Typewriter Debounce Delay: <strong>{debounceMs} ms</strong>
+                  </label>
+                  <input
+                    type="range"
+                    min={50}
+                    max={600}
+                    step={50}
+                    value={debounceMs}
+                    onChange={(e) => setDebounceMs(Number(e.target.value))}
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", maxWidth: "340px", lineHeight: "1.4" }}>
+                  Buffers in-game typewriter character animations before dispatching complete sentences.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

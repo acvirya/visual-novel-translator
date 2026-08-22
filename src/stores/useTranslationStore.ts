@@ -40,7 +40,7 @@ export const useTranslationStore = create<TranslationState>((set) => {
 
   return {
     liveLogs: [],
-    isPaused: false,
+    isPaused: true,
     selectedProvider: savedProvider,
     useScriptOnly: savedUseScriptOnly,
     scriptThreshold: savedThreshold,

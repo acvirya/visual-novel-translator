@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { OverlayConfig } from "../../types";
 import {
   overlayChannel,
@@ -21,19 +21,17 @@ import {
   Power,
   Move,
   Check,
-  Eye,
   Sliders,
-  Shield,
-  Type,
-  Maximize2,
-  Code,
   Sparkles,
   Palette,
-  FileCode,
   Plus,
   Save,
   Trash2,
   X,
+  ChevronDown,
+  ChevronUp,
+  Type,
+  Search,
 } from "lucide-react";
 
 interface MonitorInfo {
@@ -50,14 +48,14 @@ const INITIAL_OVERLAY_CONFIG: OverlayConfig = {
   isEnabled: false,
   targetMonitor: "monitor_1",
   isClickThrough: true,
-  isExcludedFromCapture: true,
+  isExcludedFromCapture: true, // Always active internally
 
   // Single Box Positioning & Auto-expansion
   x: 140,
   y: 760,
   width: 1100,
   height: 130,
-  maxExpandRatio: 2.0, // Expand vertically up to 2x initial height before scrolling
+  maxExpandRatio: 2.0,
 
   // Appearance
   fontSize: 20,
@@ -77,26 +75,11 @@ const INITIAL_OVERLAY_CONFIG: OverlayConfig = {
   showTranslatedMessage: true,
 
   // Custom Template Engine
-  useCustomTemplate: false,
+  useCustomTemplate: true,
   templatePreset: "classic",
   customTemplateHtml: OVERLAY_PRESETS[0].html,
   customTemplateCss: OVERLAY_PRESETS[0].css,
 };
-
-function hexToRgba(hex: string, opacity: number): string {
-  const cleanHex = hex.replace("#", "");
-  let r = 0, g = 0, b = 0;
-  if (cleanHex.length === 3) {
-    r = parseInt(cleanHex[0] + cleanHex[0], 16);
-    g = parseInt(cleanHex[1] + cleanHex[1], 16);
-    b = parseInt(cleanHex[2] + cleanHex[2], 16);
-  } else if (cleanHex.length === 6) {
-    r = parseInt(cleanHex.substring(0, 2), 16);
-    g = parseInt(cleanHex.substring(2, 4), 16);
-    b = parseInt(cleanHex.substring(4, 6), 16);
-  }
-  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
-}
 
 export const OverlaySettingsView: React.FC = () => {
   const [config, setConfig] = useState<OverlayConfig>(() => {
@@ -104,6 +87,8 @@ export const OverlaySettingsView: React.FC = () => {
     return {
       ...INITIAL_OVERLAY_CONFIG,
       ...(saved || {}),
+      isExcludedFromCapture: true, // Always guaranteed active
+      useCustomTemplate: true,
       customTemplateHtml: saved?.customTemplateHtml || OVERLAY_PRESETS[0].html,
       customTemplateCss: saved?.customTemplateCss || OVERLAY_PRESETS[0].css,
     };
@@ -120,8 +105,14 @@ export const OverlaySettingsView: React.FC = () => {
   const [isEditingPosition, setIsEditingPosition] = useState<boolean>(false);
   const [sampleTextType, setSampleTextType] = useState<"standard" | "long">("standard");
   const [activeCodeTab, setActiveCodeTab] = useState<"html" | "css">("html");
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
 
-  // New Preset Modal/Prompt State
+  // Searchable Preset Combobox State
+  const [isPresetDropdownOpen, setIsPresetDropdownOpen] = useState<boolean>(false);
+  const [presetSearchQuery, setPresetSearchQuery] = useState<string>("");
+  const presetDropdownRef = useRef<HTMLDivElement>(null);
+
+  // New Preset Modal State
   const [isCreatingNewPreset, setIsCreatingNewPreset] = useState<boolean>(false);
   const [newPresetName, setNewPresetName] = useState<string>("");
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
@@ -130,6 +121,24 @@ export const OverlaySettingsView: React.FC = () => {
   const activePresetId = config.templatePreset || "classic";
   const isCurrentBuiltIn = isBuiltInPreset(activePresetId);
 
+  // Filter presets by search query
+  const filteredPresets = allPresets.filter(
+    (p) =>
+      p.name.toLowerCase().includes(presetSearchQuery.toLowerCase()) ||
+      p.description.toLowerCase().includes(presetSearchQuery.toLowerCase())
+  );
+
+  // Close preset dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (presetDropdownRef.current && !presetDropdownRef.current.contains(e.target as Node)) {
+        setIsPresetDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   // Load monitors from Tauri backend
   useEffect(() => {
     async function loadMonitors() {
@@ -137,7 +146,6 @@ export const OverlaySettingsView: React.FC = () => {
         const list = await invoke<MonitorInfo[]>("get_monitors");
         if (list && list.length > 0) {
           setMonitors(list);
-          // Default to primary if not set
           const primary = list.find((m) => m.is_primary) || list[0];
           if (config.targetMonitor === "monitor_1" && primary) {
             updateConfig({ targetMonitor: primary.name });
@@ -150,7 +158,7 @@ export const OverlaySettingsView: React.FC = () => {
     loadMonitors();
   }, []);
 
-  // Listen to position saves from the actual overlay window
+  // Listen to position saves from actual overlay window
   useEffect(() => {
     const unsubscribe = overlayChannel.subscribe((event: OverlayEvent) => {
       if (event.type === "POSITION_SAVED") {
@@ -178,7 +186,7 @@ export const OverlaySettingsView: React.FC = () => {
 
   const updateConfig = (patch: Partial<OverlayConfig>) => {
     setConfig((prev) => {
-      const updated = { ...prev, ...patch };
+      const updated = { ...prev, ...patch, isExcludedFromCapture: true };
       overlayChannel.send({ type: "CONFIG_UPDATE", config: updated });
       settingsManager.updateOverlayConfig(updated);
       return updated;
@@ -244,7 +252,6 @@ export const OverlaySettingsView: React.FC = () => {
     saveUserCustomPresets(updatedList);
     settingsManager.updateOverlay({ userCustomPresets: updatedList });
 
-    // Fallback to classic preset
     handleApplyPreset(OVERLAY_PRESETS[0]);
     showFeedbackNotification("Custom preset deleted.");
   };
@@ -285,7 +292,7 @@ export const OverlaySettingsView: React.FC = () => {
     }
   };
 
-  // Sample Dialogue Mock
+  // Sample Dialogue Mock for Live Preview
   const sampleSpeakerJP = "坂上 智代";
   const sampleSpeakerEN = "Tomoyo Sakagami";
   const sampleMessageJP =
@@ -304,39 +311,112 @@ export const OverlaySettingsView: React.FC = () => {
     translatedMessage: sampleMessageEN,
   };
 
+  // Compile real-time preview
+  const speakerSize = config.speakerFontSize || 16;
+  const messageSize = config.messageFontSize || config.fontSize || 20;
+  const compiledHtml = compileOverlayTemplate(
+    config.customTemplateHtml || OVERLAY_PRESETS[0].html,
+    sampleDialogue,
+    config
+  );
+  const compiledCss = config.customTemplateCss || OVERLAY_PRESETS[0].css;
+  const rootVars = `:root { --speaker-font-size: ${speakerSize}px; --message-font-size: ${messageSize}px; --font-size: ${messageSize}px; }`;
+  const compiledPreviewHtml = `<style>${rootVars}\n${compiledCss}</style>${compiledHtml}`;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%" }}>
-      {/* Top Master Status & Action Bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          backgroundColor: "var(--bg-surface)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-md)",
-          padding: "12px 18px",
-          flexWrap: "wrap",
-          gap: "12px",
-        }}
-      >
-        {/* Left Side: Master Power Toggle & Edit Box Mode */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          {/* Overlay Power Toggle */}
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px", width: "100%", minWidth: 0 }}>
+      {/* ========================================================================= */}
+      {/* 1. QUICK OVERLAY CONTROL BAR                                              */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
+        <div className="card-header" style={{ paddingBottom: "10px" }}>
+          <div>
+            <span className="card-title">
+              <Sparkles size={16} color="var(--accent-primary)" /> In-Game Subtitle Overlay
+            </span>
+            <span className="card-subtitle">
+              Borderless transparent overlay rendering translated visual novel text over your game
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {config.isEnabled ? (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  fontSize: "11.5px",
+                  fontWeight: 600,
+                  color: "#3fb950",
+                  backgroundColor: "rgba(63, 185, 80, 0.12)",
+                  border: "1px solid rgba(63, 185, 80, 0.3)",
+                  padding: "3px 8px",
+                  borderRadius: "20px",
+                }}
+              >
+                <span style={{ width: "7px", height: "7px", borderRadius: "50%", backgroundColor: "#3fb950" }} />
+                Overlay Active
+              </span>
+            ) : (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  fontSize: "11.5px",
+                  fontWeight: 600,
+                  color: "var(--text-muted)",
+                  backgroundColor: "rgba(255, 255, 255, 0.05)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "3px 8px",
+                  borderRadius: "20px",
+                }}
+              >
+                <span style={{ width: "7px", height: "7px", borderRadius: "50%", backgroundColor: "var(--text-muted)" }} />
+                Standby
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Top Row: Target Display Monitor Selector */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", paddingBottom: "12px", borderBottom: "1px solid var(--border-subtle)" }}>
+          <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap" }}>
+            <Monitor size={14} color="var(--accent-primary)" /> Target Display Screen:
+          </label>
+          <select
+            value={config.targetMonitor}
+            onChange={(e) => updateConfig({ targetMonitor: e.target.value })}
+            style={{ height: "32px", fontSize: "12px", minWidth: "220px", maxWidth: "420px", flex: "1 1 auto" }}
+            title="Select target display monitor for in-game overlay"
+          >
+            {monitors.map((m, idx) => (
+              <option key={m.name || idx} value={m.name}>
+                {formatMonitorLabel(m)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Bottom Row: Master Action Buttons (Start / Stop & Reposition Box) */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", marginTop: "12px" }}>
+          {/* Master Start / Stop Button */}
           <button
             onClick={handleToggleOverlay}
             className={config.isEnabled ? "btn-primary" : "btn-secondary"}
             style={{
               backgroundColor: config.isEnabled ? "var(--accent-success)" : "var(--bg-surface-elevated)",
-              padding: "8px 16px",
+              height: "34px",
+              padding: "0 18px",
               fontWeight: 600,
             }}
           >
-            <Power size={15} />
-            <span>{config.isEnabled ? "Overlay Running" : "Overlay Disabled"}</span>
+            <Power size={14} />
+            <span>{config.isEnabled ? "Stop In-Game Overlay" : "Start In-Game Overlay"}</span>
           </button>
 
-          {/* Edit / Position Box Action */}
+          {/* Reposition Box Button */}
           <button
             onClick={handleToggleEditMode}
             disabled={!config.isEnabled}
@@ -345,833 +425,528 @@ export const OverlaySettingsView: React.FC = () => {
               backgroundColor: isEditingPosition ? "var(--accent-gold)" : "var(--bg-surface-elevated)",
               color: isEditingPosition ? "#000000" : "var(--text-primary)",
               borderColor: isEditingPosition ? "var(--accent-gold)" : "var(--border-subtle)",
-              opacity: config.isEnabled ? 1 : 0.45,
+              opacity: config.isEnabled ? 1 : 0.5,
               cursor: config.isEnabled ? "pointer" : "not-allowed",
-              padding: "8px 14px",
+              height: "34px",
+              padding: "0 14px",
               fontWeight: 600,
             }}
+            title="Drag and resize the overlay box directly on your screen"
           >
-            {isEditingPosition ? <Check size={15} /> : <Move size={15} />}
-            <span>{isEditingPosition ? "Save & Lock Position (Enter)" : "Edit / Position Box"}</span>
+            {isEditingPosition ? <Check size={14} /> : <Move size={14} />}
+            <span>{isEditingPosition ? "Save Position (Enter)" : "Drag / Reposition Box"}</span>
           </button>
         </div>
 
-        {/* Right Side: Screenshot/OCR Protection Badge */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <label
+        {saveNotification && (
+          <div
             style={{
+              marginTop: "10px",
+              padding: "7px 12px",
+              backgroundColor: "rgba(63, 185, 80, 0.12)",
+              border: "1px solid var(--accent-success)",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--accent-success)",
+              fontSize: "12px",
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              fontSize: "12px",
-              color: config.isExcludedFromCapture ? "var(--accent-cyan)" : "var(--text-muted)",
-              cursor: "pointer",
             }}
-            title="Uses Windows WDA_EXCLUDEFROMCAPTURE to guarantee the overlay is invisible to OCR and screen captures"
           >
+            <Check size={13} />
+            <span>{saveNotification}</span>
+          </div>
+        )}
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 2. PRESET & LIVE PREVIEW (Unified Card)                                   */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
+        {/* Preset Selector Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", flexWrap: "wrap", gap: "10px" }}>
+          <div>
+            <span className="card-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Palette size={16} color="var(--accent-gold)" /> Overlay Theme Preset & Live Preview
+            </span>
+            <span className="card-subtitle">
+              Choose visual style and test real-time rendering appearance
+            </span>
+          </div>
+
+          {/* Sample Dialogue Type Switcher */}
+          <div
+            style={{
+              display: "inline-flex",
+              backgroundColor: "var(--bg-app)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "var(--radius-sm)",
+              padding: "2px",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setSampleTextType("standard")}
+              style={{
+                padding: "3px 10px",
+                fontSize: "11px",
+                fontWeight: sampleTextType === "standard" ? 600 : 400,
+                borderRadius: "3px",
+                border: "none",
+                backgroundColor: sampleTextType === "standard" ? "var(--accent-primary)" : "transparent",
+                color: sampleTextType === "standard" ? "#ffffff" : "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              Standard Text
+            </button>
+            <button
+              type="button"
+              onClick={() => setSampleTextType("long")}
+              style={{
+                padding: "3px 10px",
+                fontSize: "11px",
+                fontWeight: sampleTextType === "long" ? 600 : 400,
+                borderRadius: "3px",
+                border: "none",
+                backgroundColor: sampleTextType === "long" ? "var(--accent-primary)" : "transparent",
+                color: sampleTextType === "long" ? "#ffffff" : "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              Long Dialogue
+            </button>
+          </div>
+        </div>
+
+        {/* Searchable Overlay Preset Dropdown */}
+        <div ref={presetDropdownRef} style={{ position: "relative", marginBottom: "14px", width: "100%" }}>
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <Search size={14} style={{ position: "absolute", left: "10px", color: "var(--text-muted)", pointerEvents: "none" }} />
             <input
-              type="checkbox"
-              checked={config.isExcludedFromCapture}
-              onChange={(e) => updateConfig({ isExcludedFromCapture: e.target.checked })}
+              type="text"
+              placeholder="Search or select overlay preset..."
+              value={isPresetDropdownOpen ? presetSearchQuery : (allPresets.find((p) => p.id === activePresetId)?.name || "Select Preset")}
+              onChange={(e) => {
+                setPresetSearchQuery(e.target.value);
+                setIsPresetDropdownOpen(true);
+              }}
+              onFocus={() => {
+                setIsPresetDropdownOpen(true);
+                setPresetSearchQuery("");
+              }}
+              style={{ width: "100%", paddingLeft: "32px", paddingRight: "30px", fontSize: "12px", height: "34px" }}
             />
-            <Shield size={14} style={{ color: config.isExcludedFromCapture ? "var(--accent-cyan)" : "var(--text-muted)" }} />
-            <span>Hidden from Screenshot / OCR</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Notification Toast */}
-      {saveNotification && (
-        <div
-          style={{
-            backgroundColor: "rgba(63, 185, 80, 0.15)",
-            border: "1px solid var(--accent-success)",
-            color: "var(--accent-success)",
-            borderRadius: "var(--radius-sm)",
-            padding: "8px 14px",
-            fontSize: "12.5px",
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <Check size={15} />
-          <span>{saveNotification}</span>
-        </div>
-      )}
-
-      {/* Mode Switcher Banner */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          backgroundColor: "var(--bg-surface)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-md)",
-          padding: "10px 16px",
-          flexWrap: "wrap",
-          gap: "10px",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text-primary)" }}>
-            Overlay Box Rendering Engine:
-          </span>
-        </div>
-
-        <div
-          style={{
-            display: "inline-flex",
-            backgroundColor: "var(--bg-app)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-sm)",
-            padding: "2px",
-            gap: "3px",
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => updateConfig({ useCustomTemplate: false })}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "5px 14px",
-              fontSize: "12px",
-              fontWeight: !config.useCustomTemplate ? 600 : 400,
-              backgroundColor: !config.useCustomTemplate ? "var(--accent-primary)" : "transparent",
-              color: !config.useCustomTemplate ? "#ffffff" : "var(--text-secondary)",
-              border: "none",
-              borderRadius: "calc(var(--radius-sm) - 2px)",
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <Palette size={13} />
-            <span>Standard Configurable Box</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => updateConfig({ useCustomTemplate: true })}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "5px 14px",
-              fontSize: "12px",
-              fontWeight: config.useCustomTemplate ? 600 : 400,
-              backgroundColor: config.useCustomTemplate ? "var(--accent-primary)" : "transparent",
-              color: config.useCustomTemplate ? "#ffffff" : "var(--text-secondary)",
-              border: "none",
-              borderRadius: "calc(var(--radius-sm) - 2px)",
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <Code size={13} />
-            <span>Custom Component & HTML/CSS Code</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Grid: Settings & Typography vs Live Monitor Preview */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "16px" }}>
-        {/* Left Column: Target Monitor, Box Sizing & Typography */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          {/* Target Monitor & Box Dimensions Card */}
-          <div className="card" style={{ margin: 0 }}>
-            <div className="card-header">
-              <span className="card-title">
-                <Monitor size={16} /> Target Monitor & Box Dimensions
-              </span>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              {/* Monitor Selector */}
-              <div>
-                <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                  Target Fullscreen Monitor
-                </label>
-                <select
-                  value={config.targetMonitor}
-                  onChange={(e) => updateConfig({ targetMonitor: e.target.value })}
-                  style={{ width: "100%" }}
-                >
-                  {monitors.map((m) => (
-                    <option key={m.name} value={m.name}>
-                      {formatMonitorLabel(m)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Box Geometry Inputs: X, Y, Width, Height */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "10px" }}>
-                <div>
-                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-                    X Pos (px)
-                  </label>
-                  <input
-                    type="number"
-                    value={config.x}
-                    onChange={(e) => updateConfig({ x: Number(e.target.value) })}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-                    Y Pos (px)
-                  </label>
-                  <input
-                    type="number"
-                    value={config.y}
-                    onChange={(e) => updateConfig({ y: Number(e.target.value) })}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-                    Width (px)
-                  </label>
-                  <input
-                    type="number"
-                    value={config.width}
-                    onChange={(e) => updateConfig({ width: Number(e.target.value) })}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-                    Base Height (px)
-                  </label>
-                  <input
-                    type="number"
-                    value={config.height}
-                    onChange={(e) => updateConfig({ height: Number(e.target.value) })}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-              </div>
-
-              {/* Vertical Auto-Expansion Banner */}
-              <div
-                style={{
-                  backgroundColor: "var(--bg-app)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "8px 12px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                <div>
-                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)", display: "block" }}>
-                    <Maximize2 size={12} style={{ display: "inline", marginRight: "4px" }} />
-                    Vertical Auto-Expansion Limit
-                  </span>
-                  <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                    Expands up to 2× base height (max {config.height * 2}px) for long dialogues, then scrolls.
-                  </span>
-                </div>
-                <span className="badge badge-neutral" style={{ fontWeight: 700 }}>
-                  2.0× Max Height
-                </span>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setIsPresetDropdownOpen(!isPresetDropdownOpen)}
+              style={{ position: "absolute", right: "8px", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "2px" }}
+            >
+              <ChevronDown size={14} />
+            </button>
           </div>
 
-          {/* Display Fields & Typography Sizing Card (Always Available in Both Modes) */}
-          <div className="card" style={{ margin: 0 }}>
-            <div className="card-header">
-              <div>
-                <span className="card-title">
-                  <Type size={16} /> Display Fields & Font Sizing
-                </span>
-                <span className="card-subtitle">
-                  Select which dialogue elements to show and adjust speaker / message font sizes
-                </span>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              {/* 4 Display Field Toggles */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.showSpeaker}
-                    onChange={(e) => updateConfig({ showSpeaker: e.target.checked })}
-                  />
-                  <span style={{ fontWeight: config.showSpeaker ? 600 : 400 }}>1. Original Speaker (JP)</span>
-                </label>
-
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.showTranslatedSpeaker}
-                    onChange={(e) => updateConfig({ showTranslatedSpeaker: e.target.checked })}
-                  />
-                  <span style={{ fontWeight: config.showTranslatedSpeaker ? 600 : 400 }}>2. Translated Speaker</span>
-                </label>
-
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.showMessage}
-                    onChange={(e) => updateConfig({ showMessage: e.target.checked })}
-                  />
-                  <span style={{ fontWeight: config.showMessage ? 600 : 400 }}>3. Original Message (JP)</span>
-                </label>
-
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.showTranslatedMessage}
-                    onChange={(e) => updateConfig({ showTranslatedMessage: e.target.checked })}
-                  />
-                  <span style={{ fontWeight: config.showTranslatedMessage ? 600 : 400 }}>4. Translated Message</span>
-                </label>
-              </div>
-
-              {/* Separate Speaker Font Size & Message Font Size */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                    <label style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Speaker Name Font Size: <strong style={{ color: "var(--text-primary)" }}>{config.speakerFontSize || 16}px</strong>
-                    </label>
-                  </div>
-                  <input
-                    type="range"
-                    min={10}
-                    max={36}
-                    value={config.speakerFontSize || 16}
-                    onChange={(e) => updateConfig({ speakerFontSize: Number(e.target.value) })}
-                    style={{ width: "100%" }}
-                  />
+          {/* Preset Dropdown Menu */}
+          {isPresetDropdownOpen && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                right: 0,
+                marginTop: "4px",
+                backgroundColor: "var(--bg-panel, #161b22)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius-sm)",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+                maxHeight: "240px",
+                overflowY: "auto",
+                zIndex: 100,
+              }}
+            >
+              {filteredPresets.length === 0 ? (
+                <div style={{ padding: "10px 12px", color: "var(--text-muted)", fontSize: "12px" }}>
+                  No presets found matching "{presetSearchQuery}"
                 </div>
-
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                    <label style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Dialogue Message Font Size: <strong style={{ color: "var(--text-primary)" }}>{config.messageFontSize || 20}px</strong>
-                    </label>
-                  </div>
-                  <input
-                    type="range"
-                    min={12}
-                    max={48}
-                    value={config.messageFontSize || 20}
-                    onChange={(e) => updateConfig({ messageFontSize: Number(e.target.value), fontSize: Number(e.target.value) })}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {config.useCustomTemplate ? (
-            <div className="card" style={{ margin: 0 }}>
-              <div className="card-header" style={{ flexWrap: "wrap", gap: "10px" }}>
-                <div>
-                  <span className="card-title">
-                    <Code size={16} color="var(--accent-primary)" /> Custom Component & Code Template
-                  </span>
-                  <span className="card-subtitle">
-                    Customize your subtitle layout, nameplates, glowing effects, borders, and animations with code.
-                  </span>
-                </div>
-
-                {/* Preset Actions & Dropdown */}
-                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                  <Sparkles size={13} color="var(--accent-gold)" />
-                  <select
-                    value={activePresetId}
-                    onChange={(e) => {
-                      const found = allPresets.find((p) => p.id === e.target.value);
-                      if (found) handleApplyPreset(found);
-                    }}
-                    style={{
-                      padding: "4px 8px",
-                      fontSize: "11.5px",
-                      backgroundColor: "var(--bg-app)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: "var(--radius-sm)",
-                      color: "var(--text-primary)",
-                      cursor: "pointer",
-                      maxWidth: "200px",
-                    }}
-                  >
-                    <optgroup label="Built-in Presets">
-                      {OVERLAY_PRESETS.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    {customPresets.length > 0 && (
-                      <optgroup label="User Custom Presets">
-                        {customPresets.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            ⭐ {p.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-
-                  {/* Preset Action Buttons: Add New, Save Update, Delete */}
-                  <button
-                    type="button"
-                    onClick={() => setIsCreatingNewPreset(true)}
-                    className="btn-secondary"
-                    style={{ padding: "4px 8px", fontSize: "11px" }}
-                    title="Save current code as a new custom preset"
-                  >
-                    <Plus size={12} />
-                    <span>New Preset</span>
-                  </button>
-
-                  {!isCurrentBuiltIn && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={handleUpdateCurrentPreset}
-                        className="btn-primary"
-                        style={{ padding: "4px 8px", fontSize: "11px", backgroundColor: "var(--accent-success)", borderColor: "#2ea043" }}
-                        title="Save changes to current custom preset"
-                      >
-                        <Save size={12} />
-                        <span>Save</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleDeleteCurrentPreset}
-                        className="btn-secondary"
-                        style={{ padding: "4px 8px", fontSize: "11px", color: "var(--accent-danger)" }}
-                        title="Delete this custom preset"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Inline Modal: Create New Preset */}
-              {isCreatingNewPreset && (
-                <div
-                  style={{
-                    backgroundColor: "var(--bg-app)",
-                    border: "1px solid var(--border-active)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "10px 14px",
-                    marginBottom: "12px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                  }}
-                >
-                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
-                    Preset Name:
-                  </span>
-                  <input
-                    type="text"
-                    value={newPresetName}
-                    onChange={(e) => setNewPresetName(e.target.value)}
-                    placeholder="e.g. My Anime Subtitles"
-                    style={{ flex: 1, fontSize: "12px", padding: "4px 8px" }}
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSaveAsNewPreset}
-                    disabled={!newPresetName.trim()}
-                    className="btn-primary"
-                    style={{ padding: "4px 12px", fontSize: "11.5px" }}
-                  >
-                    <Save size={12} />
-                    <span>Create</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsCreatingNewPreset(false);
-                      setNewPresetName("");
-                    }}
-                    className="btn-secondary"
-                    style={{ padding: "4px 8px", fontSize: "11.5px" }}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
-
-              <div style={{ marginBottom: "12px" }}>
-                <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "5px" }}>
-                  Template Variables:
-                </span>
-                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                  {[
-                    { tag: "{{speaker}}", desc: "Japanese Character Name" },
-                    { tag: "{{translatedSpeaker}}", desc: "Translated English Name" },
-                    { tag: "{{message}}", desc: "Japanese Dialogue Text" },
-                    { tag: "{{translatedMessage}}", desc: "Translated English Dialogue" },
-                    { tag: "{{speakerFontSize}}", desc: "Speaker Font Size (px)" },
-                    { tag: "{{messageFontSize}}", desc: "Message Font Size (px)" },
-                    { tag: "{{fontColor}}", desc: "Font Color Hex" },
-                  ].map((item) => (
-                    <button
-                      key={item.tag}
-                      type="button"
-                      onClick={() => navigator.clipboard.writeText(item.tag)}
-                      className="btn-secondary"
-                      style={{
-                        padding: "2px 7px",
-                        fontSize: "11px",
-                        fontFamily: "var(--font-mono)",
-                        backgroundColor: "var(--bg-app)",
-                        border: "1px solid var(--border-subtle)",
-                      }}
-                      title={item.desc}
-                    >
-                      {item.tag}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: "6px", marginBottom: "8px", borderBottom: "1px solid var(--border-subtle)", paddingBottom: "6px" }}>
-                <button
-                  type="button"
-                  onClick={() => setActiveCodeTab("html")}
-                  className={activeCodeTab === "html" ? "btn-primary" : "btn-secondary"}
-                  style={{ padding: "4px 12px", fontSize: "11.5px" }}
-                >
-                  <FileCode size={13} />
-                  <span>HTML Template</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveCodeTab("css")}
-                  className={activeCodeTab === "css" ? "btn-primary" : "btn-secondary"}
-                  style={{ padding: "4px 12px", fontSize: "11.5px" }}
-                >
-                  <Palette size={13} />
-                  <span>CSS Stylesheet</span>
-                </button>
-              </div>
-
-              {activeCodeTab === "html" ? (
-                <textarea
-                  value={config.customTemplateHtml || ""}
-                  onChange={(e) => updateConfig({ customTemplateHtml: e.target.value })}
-                  rows={12}
-                  style={{
-                    width: "100%",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "12px",
-                    backgroundColor: "var(--bg-app)",
-                    color: "var(--text-primary)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "10px",
-                    resize: "vertical",
-                  }}
-                />
               ) : (
-                <textarea
-                  value={config.customTemplateCss || ""}
-                  onChange={(e) => updateConfig({ customTemplateCss: e.target.value })}
-                  rows={12}
-                  style={{
-                    width: "100%",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "12px",
-                    backgroundColor: "var(--bg-app)",
-                    color: "#36b9cc",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "10px",
-                    resize: "vertical",
-                  }}
-                />
+                filteredPresets.map((preset) => {
+                  const isSelected = preset.id === activePresetId;
+                  return (
+                    <div
+                      key={preset.id}
+                      onClick={() => {
+                        handleApplyPreset(preset);
+                        setIsPresetDropdownOpen(false);
+                        setPresetSearchQuery("");
+                      }}
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                        backgroundColor: isSelected ? "rgba(88, 166, 255, 0.15)" : "transparent",
+                        borderBottom: "1px solid rgba(255,255,255,0.04)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) e.currentTarget.style.backgroundColor = "transparent";
+                      }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{ fontWeight: 600, color: isSelected ? "var(--accent-primary)" : "var(--text-primary)" }}>
+                            {preset.name}
+                          </span>
+                          {!isBuiltInPreset(preset.id) && (
+                            <span style={{ fontSize: "10px", padding: "1px 5px", borderRadius: "10px", backgroundColor: "rgba(227, 179, 65, 0.15)", color: "var(--accent-gold)" }}>
+                              Custom
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: "11px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {preset.description}
+                        </span>
+                      </div>
+                      {isSelected && <Check size={14} color="var(--accent-primary)" />}
+                    </div>
+                  );
+                })
               )}
             </div>
-          ) : (
-            <>
-              {/* Styling & Color Pickers Card */}
-              <div className="card" style={{ margin: 0 }}>
-                <div className="card-header">
-                  <span className="card-title">
-                    <Sliders size={16} /> Subtitle Box Styling & Colors
-                  </span>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                        Background Opacity: {Math.round(config.backgroundOpacity * 100)}%
-                      </label>
-                      <input
-                        type="range"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={config.backgroundOpacity}
-                        onChange={(e) => updateConfig({ backgroundOpacity: Number(e.target.value) })}
-                        style={{ width: "100%" }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                        Border Radius: {config.borderRadius}px
-                      </label>
-                      <input
-                        type="range"
-                        min={0}
-                        max={30}
-                        value={config.borderRadius}
-                        onChange={(e) => updateConfig({ borderRadius: Number(e.target.value) })}
-                        style={{ width: "100%" }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px" }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                        Font Color
-                      </label>
-                      <input
-                        type="color"
-                        value={config.fontColor}
-                        onChange={(e) => updateConfig({ fontColor: e.target.value })}
-                        style={{ width: "100%", height: "32px", padding: "2px", background: "none", border: "1px solid var(--border-subtle)" }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                        Outline (Stroke)
-                      </label>
-                      <input
-                        type="color"
-                        value={config.outlineColor}
-                        onChange={(e) => updateConfig({ outlineColor: e.target.value })}
-                        style={{ width: "100%", height: "32px", padding: "2px", background: "none", border: "1px solid var(--border-subtle)" }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                        Box Background
-                      </label>
-                      <input
-                        type="color"
-                        value={config.backgroundColor}
-                        onChange={(e) => updateConfig({ backgroundColor: e.target.value })}
-                        style={{ width: "100%", height: "32px", padding: "2px", background: "none", border: "1px solid var(--border-subtle)" }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </>
           )}
         </div>
 
-        {/* Right Column: Live Monitor & Subtitle Box Simulator */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          <div className="card" style={{ margin: 0, display: "flex", flexDirection: "column", height: "100%" }}>
-            <div className="card-header">
-              <div>
-                <span className="card-title">
-                  <Eye size={16} /> Live In-Game Overlay Simulator
-                </span>
-                <span className="card-subtitle">
-                  Preview on simulated 1920×1080 game screen
-                </span>
+        {/* Live Preview Screen Container */}
+        <div
+          style={{
+            position: "relative",
+            minHeight: "190px",
+            backgroundColor: "#0a0c10",
+            backgroundImage: "radial-gradient(circle at 50% 50%, rgba(30, 41, 59, 0.5) 0%, rgba(10, 12, 16, 0.9) 100%)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius-sm)",
+            padding: "28px 36px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "visible",
+            marginBottom: "14px",
+          }}
+        >
+          {/* Rendered Overlay Box */}
+          <div style={{ width: "100%", maxWidth: "800px", overflow: "visible" }} dangerouslySetInnerHTML={{ __html: compiledPreviewHtml }} />
+        </div>
+
+        {/* Display Fields & Font Adjustments Row (Under Preview) */}
+        <div
+          style={{
+            backgroundColor: "var(--bg-app)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius-sm)",
+            padding: "14px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "14px",
+          }}
+        >
+          {/* Sliders Grid: Speaker Font Size vs Message Font Size */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px" }}>
+            {/* Speaker Font Size Slider */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
+                <label style={{ fontSize: "11.5px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <Type size={12} /> Speaker Font Size:
+                </label>
+                <strong style={{ fontSize: "11.5px", color: "var(--accent-gold)" }}>{config.speakerFontSize || 16} px</strong>
               </div>
+              <input
+                type="range"
+                min={12}
+                max={32}
+                step={1}
+                value={config.speakerFontSize || 16}
+                onChange={(e) => {
+                  const sz = Number(e.target.value);
+                  updateConfig({ speakerFontSize: sz });
+                }}
+                style={{ width: "100%" }}
+              />
+            </div>
 
-              {/* Sample Dialogue Switcher */}
-              <div style={{ display: "flex", gap: "6px" }}>
-                <button
-                  onClick={() => setSampleTextType("standard")}
-                  className={sampleTextType === "standard" ? "btn-primary" : "btn-secondary"}
-                  style={{ padding: "3px 8px", fontSize: "11px" }}
-                >
-                  Short Line
-                </button>
-                <button
-                  onClick={() => setSampleTextType("long")}
-                  className={sampleTextType === "long" ? "btn-primary" : "btn-secondary"}
-                  style={{ padding: "3px 8px", fontSize: "11px" }}
-                >
-                  Long Line
-                </button>
+            {/* Message Font Size Slider */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
+                <label style={{ fontSize: "11.5px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <Type size={12} /> Dialogue Message Font Size:
+                </label>
+                <strong style={{ fontSize: "11.5px", color: "var(--accent-primary)" }}>{config.messageFontSize || config.fontSize || 20} px</strong>
               </div>
+              <input
+                type="range"
+                min={14}
+                max={40}
+                step={1}
+                value={config.messageFontSize || config.fontSize || 20}
+                onChange={(e) => {
+                  const sz = Number(e.target.value);
+                  updateConfig({ messageFontSize: sz, fontSize: sz });
+                }}
+                style={{ width: "100%" }}
+              />
             </div>
+          </div>
 
-            {/* Simulated Game Backdrop */}
-            <div
-              style={{
-                flex: 1,
-                minHeight: "360px",
-                borderRadius: "var(--radius-sm)",
-                backgroundColor: "#050608",
-                border: isEditingPosition ? "2px dashed var(--accent-gold)" : "1px solid var(--border-subtle)",
-                position: "relative",
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "flex-end",
-                padding: "20px",
-                backgroundImage: "radial-gradient(#1e293b 1.2px, transparent 1.2px)",
-                backgroundSize: "20px 20px",
-                overflow: "hidden",
-              }}
-            >
-              {config.useCustomTemplate && config.customTemplateHtml ? (
-                <div
-                  style={{
-                    width: "100%",
-                    // @ts-ignore
-                    "--speaker-font-size": `${config.speakerFontSize || 16}px`,
-                    // @ts-ignore
-                    "--message-font-size": `${config.messageFontSize || 20}px`,
-                    // @ts-ignore
-                    "--overlay-font-size": `${config.fontSize || 20}px`,
-                  }}
-                >
-                  {config.customTemplateCss && (
-                    <style dangerouslySetInnerHTML={{ __html: config.customTemplateCss }} />
-                  )}
-                  <div
-                    dangerouslySetInnerHTML={{
-                      __html: compileOverlayTemplate(config.customTemplateHtml, sampleDialogue, config),
-                    }}
-                  />
-                </div>
-              ) : (
-                <div
-                  style={{
-                    width: "100%",
-                    minHeight: `${config.height}px`,
-                    maxHeight: `${config.height * config.maxExpandRatio}px`,
-                    backgroundColor: hexToRgba(config.backgroundColor, config.backgroundOpacity),
-                    borderRadius: `${config.borderRadius}px`,
-                    padding: "12px 16px",
-                    color: config.fontColor,
-                    border: isEditingPosition
-                      ? "2px solid var(--accent-gold)"
-                      : `${config.outlineWidth}px solid ${config.outlineColor}`,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                    overflowY: "auto",
-                    transition: "all 0.2s ease",
-                  }}
-                >
-                  {(config.showSpeaker || config.showTranslatedSpeaker) && (
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                      {config.showSpeaker && (
-                        <span
-                          style={{
-                            backgroundColor: "rgba(227, 179, 65, 0.2)",
-                            color: "var(--accent-gold)",
-                            padding: "1px 7px",
-                            borderRadius: "var(--radius-sm)",
-                            fontWeight: 700,
-                            fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
-                            fontFamily: "var(--font-jp)",
-                          }}
-                        >
-                          {sampleSpeakerJP}
-                        </span>
-                      )}
+          {/* Visibility Toggles (Only 2 toggles: Show Original Japanese Text & Show Original Speaker) */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "center", borderTop: "1px solid var(--border-subtle)", paddingTop: "10px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer", color: "var(--text-secondary)" }}>
+              <input
+                type="checkbox"
+                checked={config.showMessage}
+                onChange={(e) => updateConfig({ showMessage: e.target.checked })}
+              />
+              <span>Show Original Japanese Dialogue (Raw Text)</span>
+            </label>
 
-                      {config.showTranslatedSpeaker && (
-                        <span
-                          style={{
-                            fontSize: `${config.speakerFontSize || Math.max(12, config.fontSize * 0.75)}px`,
-                            fontWeight: 600,
-                            color: "var(--text-primary)",
-                          }}
-                        >
-                          {sampleSpeakerEN}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {config.showMessage && (
-                    <div
-                      style={{
-                        fontSize: `${Math.max(12, (config.messageFontSize || config.fontSize) * 0.8)}px`,
-                        fontFamily: "var(--font-jp)",
-                        color: "var(--text-jp)",
-                        lineHeight: "1.5",
-                        borderLeft: "2px solid var(--border-active)",
-                        paddingLeft: "8px",
-                      }}
-                    >
-                      {sampleMessageJP}
-                    </div>
-                  )}
-
-                  {config.showTranslatedMessage && (
-                    <div
-                      style={{
-                        fontSize: `${config.messageFontSize || config.fontSize}px`,
-                        fontWeight: 600,
-                        lineHeight: "1.4",
-                        color: config.fontColor,
-                        textShadow: `${config.outlineWidth}px ${config.outlineWidth}px 0px ${config.outlineColor}`,
-                      }}
-                    >
-                      {sampleMessageEN}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {isEditingPosition && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "14px",
-                    left: "14px",
-                    backgroundColor: "rgba(227, 179, 65, 0.18)",
-                    border: "1px solid var(--accent-gold)",
-                    color: "var(--accent-gold)",
-                    padding: "6px 12px",
-                    borderRadius: "var(--radius-sm)",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                  }}
-                >
-                  <Move size={14} />
-                  <span>Click & Drag on actual overlay window to reposition or resize</span>
-                </div>
-              )}
-            </div>
-
-            <div style={{ marginTop: "10px", fontSize: "11px", color: "var(--text-muted)", display: "flex", justifyContent: "space-between" }}>
-              <span>Click-through passes mouse events directly to game beneath overlay</span>
-              <span>Protected from Windows Snipping Tool & OCR</span>
-            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer", color: "var(--text-secondary)" }}>
+              <input
+                type="checkbox"
+                checked={config.showSpeaker}
+                onChange={(e) => updateConfig({ showSpeaker: e.target.checked })}
+              />
+              <span>Show Original Japanese Character Name (Raw Speaker)</span>
+            </label>
           </div>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* 3. ADVANCED CUSTOM TEMPLATE & CODE ENGINE (Collapsible)                   */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
+        <div
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <Sliders size={15} color="var(--accent-primary)" />
+            <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-primary)" }}>
+              Advanced Custom Code & Template Engine
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--text-muted)", fontSize: "12px" }}>
+            <span>{showAdvanced ? "Hide" : "Expand"}</span>
+            {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </div>
+        </div>
+
+        {showAdvanced && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "14px" }}>
+            {/* Toolbar: Custom Preset Actions */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                  Editing: <strong style={{ color: "var(--text-primary)" }}>{allPresets.find((p) => p.id === activePresetId)?.name}</strong>
+                  {isCurrentBuiltIn ? " (Built-in Preset)" : " (Custom User Preset)"}
+                </span>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {!isCurrentBuiltIn && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleUpdateCurrentPreset}
+                      className="btn-primary"
+                      style={{ height: "28px", padding: "0 10px", fontSize: "11.5px" }}
+                    >
+                      <Save size={12} />
+                      <span>Save Changes</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDeleteCurrentPreset}
+                      className="btn-danger"
+                      style={{ height: "28px", padding: "0 10px", fontSize: "11.5px" }}
+                    >
+                      <Trash2 size={12} />
+                      <span>Delete Preset</span>
+                    </button>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setIsCreatingNewPreset(true)}
+                  className="btn-secondary"
+                  style={{ height: "28px", padding: "0 10px", fontSize: "11.5px" }}
+                >
+                  <Plus size={12} />
+                  <span>Save as New Preset</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Code Tabs */}
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button
+                type="button"
+                onClick={() => setActiveCodeTab("html")}
+                style={{
+                  padding: "5px 12px",
+                  fontSize: "11.5px",
+                  fontWeight: activeCodeTab === "html" ? 600 : 400,
+                  borderRadius: "var(--radius-sm)",
+                  border: `1px solid ${activeCodeTab === "html" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+                  backgroundColor: activeCodeTab === "html" ? "var(--bg-surface-elevated)" : "transparent",
+                  color: activeCodeTab === "html" ? "var(--accent-primary)" : "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                HTML Template
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveCodeTab("css")}
+                style={{
+                  padding: "5px 12px",
+                  fontSize: "11.5px",
+                  fontWeight: activeCodeTab === "css" ? 600 : 400,
+                  borderRadius: "var(--radius-sm)",
+                  border: `1px solid ${activeCodeTab === "css" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+                  backgroundColor: activeCodeTab === "css" ? "var(--bg-surface-elevated)" : "transparent",
+                  color: activeCodeTab === "css" ? "var(--accent-primary)" : "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                CSS Stylesheet
+              </button>
+            </div>
+
+            {/* Code Editor Textarea */}
+            {activeCodeTab === "html" ? (
+              <textarea
+                value={config.customTemplateHtml || ""}
+                onChange={(e) => updateConfig({ customTemplateHtml: e.target.value })}
+                rows={10}
+                style={{
+                  width: "100%",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "11.5px",
+                  lineHeight: "1.45",
+                  padding: "10px",
+                  boxSizing: "border-box",
+                }}
+                placeholder="Enter custom HTML template using {{speaker}}, {{message}}, {{translatedMessage}}..."
+              />
+            ) : (
+              <textarea
+                value={config.customTemplateCss || ""}
+                onChange={(e) => updateConfig({ customTemplateCss: e.target.value })}
+                rows={12}
+                style={{
+                  width: "100%",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "11.5px",
+                  lineHeight: "1.45",
+                  padding: "10px",
+                  boxSizing: "border-box",
+                }}
+                placeholder="Enter custom CSS rules..."
+              />
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Save as New Preset Modal */}
+      {isCreatingNewPreset && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: "var(--bg-panel, #161b22)",
+              border: "1px solid var(--border-active)",
+              borderRadius: "var(--radius-md)",
+              padding: "18px 20px",
+              width: "360px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+              boxShadow: "0 12px 36px rgba(0, 0, 0, 0.6)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <strong style={{ fontSize: "13.5px", color: "var(--text-primary)" }}>Save as New Preset</strong>
+              <button
+                type="button"
+                onClick={() => setIsCreatingNewPreset(false)}
+                style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
+                Preset Name
+              </label>
+              <input
+                type="text"
+                value={newPresetName}
+                onChange={(e) => setNewPresetName(e.target.value)}
+                placeholder="e.g. My Dark Floating Subtitle"
+                style={{ width: "100%", fontSize: "12px", height: "32px" }}
+                autoFocus
+              />
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button
+                type="button"
+                onClick={() => setIsCreatingNewPreset(false)}
+                className="btn-secondary"
+                style={{ height: "30px", fontSize: "12px" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAsNewPreset}
+                disabled={!newPresetName.trim()}
+                className="btn-primary"
+                style={{ height: "30px", fontSize: "12px" }}
+              >
+                Create Preset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -421,7 +421,7 @@ export const OverlayWindow: React.FC = () => {
             display: "flex",
             flexDirection: "column",
             gap: "6px",
-            overflowY: isEditing ? "hidden" : "auto",
+            overflow: "visible",
             cursor: isEditing ? "move" : "default",
             boxSizing: "border-box",
             pointerEvents: isEditing ? "auto" : "none",
@@ -435,10 +435,11 @@ export const OverlayWindow: React.FC = () => {
               style={{
                 width: "100%",
                 height: "100%",
+                overflow: "visible",
                 // @ts-ignore
                 "--speaker-font-size": `${config.speakerFontSize || 16}px`,
                 // @ts-ignore
-                "--message-font-size": `${config.messageFontSize || 20}px`,
+                "--message-font-size": `${config.messageFontSize || config.fontSize || 20}px`,
                 // @ts-ignore
                 "--overlay-font-size": `${config.fontSize || 20}px`,
               }}

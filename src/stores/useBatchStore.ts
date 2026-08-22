@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { BatchFileEntry, BatchProgressUpdate, BatchSettings, KeyMappingConfig } from "../services/batchTranslateService";
 
+export interface SessionUsageStats {
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+  totalCost: number;
+}
+
 export interface BatchState {
   queuedFiles: BatchFileEntry[];
   selectedFileId: string | null;
@@ -11,6 +18,7 @@ export interface BatchState {
   progressData: BatchProgressUpdate | null;
   settings: BatchSettings;
   keyMapping: KeyMappingConfig;
+  sessionStats: SessionUsageStats;
 
   // Actions
   setQueuedFiles: (files: BatchFileEntry[] | ((prev: BatchFileEntry[]) => BatchFileEntry[])) => void;
@@ -23,6 +31,7 @@ export interface BatchState {
   setProgressData: (progress: BatchProgressUpdate | null) => void;
   setSettings: (settings: Partial<BatchSettings>) => void;
   setKeyMapping: (mapping: Partial<KeyMappingConfig>) => void;
+  addSessionTokens: (promptTokens: number, completionTokens: number, cachedTokens: number, cost: number) => void;
 }
 
 export const useBatchStore = create<BatchState>((set) => {
@@ -35,9 +44,12 @@ export const useBatchStore = create<BatchState>((set) => {
   const savedAutoContinue = localStorage.getItem("vn_batch_auto_continue") !== "false";
   const savedOverrideRaw = localStorage.getItem("vn_batch_override_raw") !== "false";
   const savedOutputDir = localStorage.getItem("vn_batch_output_dir") || "";
+  const rawSrcSpk = localStorage.getItem("vn_batch_src_speaker_key");
+  const savedSrcSpk = rawSrcSpk && rawSrcSpk !== "auto" ? rawSrcSpk : "speaker";
 
-  const savedSrcSpk = localStorage.getItem("vn_batch_src_speaker_key") || "auto";
-  const savedSrcMsg = localStorage.getItem("vn_batch_src_message_key") || "auto";
+  const rawSrcMsg = localStorage.getItem("vn_batch_src_message_key");
+  const savedSrcMsg = rawSrcMsg && rawSrcMsg !== "auto" ? rawSrcMsg : "message";
+
   const savedTgtSpk = localStorage.getItem("vn_batch_tgt_speaker_key") || "translated_speaker";
   const savedTgtMsg = localStorage.getItem("vn_batch_tgt_message_key") || "translated_message";
 
@@ -73,6 +85,12 @@ export const useBatchStore = create<BatchState>((set) => {
     progressData: null,
     settings: initialSettings,
     keyMapping,
+    sessionStats: {
+      promptTokens: 0,
+      completionTokens: 0,
+      cachedTokens: 0,
+      totalCost: 0,
+    },
 
     setQueuedFiles: (filesOrFn) =>
       set((state) => ({
@@ -114,5 +132,14 @@ export const useBatchStore = create<BatchState>((set) => {
           settings: { ...state.settings, keyMapping: next },
         };
       }),
+    addSessionTokens: (promptTokens, completionTokens, cachedTokens, cost) =>
+      set((state) => ({
+        sessionStats: {
+          promptTokens: state.sessionStats.promptTokens + promptTokens,
+          completionTokens: state.sessionStats.completionTokens + completionTokens,
+          cachedTokens: state.sessionStats.cachedTokens + cachedTokens,
+          totalCost: state.sessionStats.totalCost + cost,
+        },
+      })),
   };
 });

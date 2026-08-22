@@ -1,21 +1,18 @@
 import React from "react";
 import {
   Radio,
-  FileText,
   Layers,
   BookOpen,
-  Database,
-  Terminal,
-  Cpu,
-  Scan,
-  Monitor,
   Sliders,
-  KeyRound,
   Menu,
   Languages,
-  Sparkles,
+  Bot,
 } from "lucide-react";
 import { NavigationTab } from "../../types";
+import { useTextractorStore } from "../../stores/useTextractorStore";
+import { useOcrStore } from "../../stores/useOcrStore";
+import { useTranslationStore } from "../../stores/useTranslationStore";
+import { useBatchStore } from "../../stores/useBatchStore";
 
 interface SidebarProps {
   currentTab: NavigationTab;
@@ -41,37 +38,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
 }) => {
+  const isHooked = useTextractorStore((state) => state.isHooked);
+  const isOcrScanning = useOcrStore((state) => state.isScanning);
+  const isBatchRunning = useBatchStore((state) => state.isRunning);
+  const selectedProvider = useTranslationStore((state) => state.selectedProvider);
+
+  // Status calculation (Green when live or batch active, Blue when standby)
+  const isEngineActive = isHooked || isOcrScanning || isBatchRunning;
+  let statusText = "Engine Standby";
+  if (isBatchRunning) statusText = "Batch Translating";
+  else if (isHooked) statusText = "Live Hook Active";
+  else if (isOcrScanning) statusText = "Live OCR Active";
+
+  // Friendly model name formatting
+  const formatModelName = (id: string) => {
+    if (!id || id === "mt:google-translate") return "Google Translate";
+    if (id.startsWith("openrouter:")) {
+      const clean = id.replace("openrouter:", "");
+      const parts = clean.split("/");
+      return parts[parts.length - 1]
+        .split("-")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+    }
+    const parts = id.split("/");
+    return parts[parts.length - 1]
+      .split("-")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  };
+
+  const modelDisplayName = formatModelName(selectedProvider);
+
   const sections: NavSection[] = [
     {
-      title: "Translation",
+      title: "Workspace",
       items: [
-        { id: "live-translate", label: "Live Translate", icon: <Radio size={16} /> },
-        { id: "manual-translate", label: "Manual Translate", icon: <FileText size={16} /> },
-        { id: "batch-translate", label: "Batch Translate", icon: <Layers size={16} /> },
-        { id: "glossary-manager", label: "Glossary Manager", icon: <BookOpen size={16} /> },
-        { id: "script-manager", label: "Script Manager", icon: <Database size={16} /> },
-        { id: "logs", label: "Logs", icon: <Terminal size={16} /> },
+        { id: "live-game", label: "Live Game", icon: <Radio size={16} /> },
+        { id: "batch-translate", label: "Batch Script", icon: <Layers size={16} /> },
       ],
     },
     {
-      title: "Input",
+      title: "Data & Config",
       items: [
-        { id: "textractor", label: "Textractor", icon: <Cpu size={16} /> },
-        { id: "ocr", label: "OCR", icon: <Scan size={16} /> },
-      ],
-    },
-    {
-      title: "Overlay",
-      items: [
-        { id: "overlay-settings", label: "Overlay Settings", icon: <Monitor size={16} /> },
-      ],
-    },
-    {
-      title: "Settings",
-      items: [
-        { id: "text-preprocessing", label: "Text Preprocessing", icon: <Sparkles size={16} /> },
-        { id: "general-settings", label: "General", icon: <Sliders size={16} /> },
-        { id: "translation-providers", label: "Translation Providers", icon: <KeyRound size={16} /> },
+        { id: "knowledge-base", label: "Knowledge Base", icon: <BookOpen size={16} /> },
+        { id: "settings", label: "Settings", icon: <Sliders size={16} /> },
       ],
     },
   ];
@@ -236,23 +247,90 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ))}
       </div>
 
-      {/* Footer Info */}
+      {/* Live System Status & App Footer */}
       <div
         style={{
-          padding: isCollapsed ? "10px 4px" : "12px 14px",
+          padding: isCollapsed ? "12px 6px" : "12px 14px",
           borderTop: "1px solid var(--border-subtle)",
-          fontSize: "11px",
-          color: "var(--text-muted)",
-          textAlign: isCollapsed ? "center" : "left",
+          backgroundColor: "rgba(0, 0, 0, 0.15)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
         }}
       >
         {!isCollapsed ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-            <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>Pure Translator</span>
-            <span>Non-invasive • v0.1.0</span>
-          </div>
+          <>
+            {/* 1. Status Engine */}
+            <div style={{ display: "grid", gridTemplateColumns: "18px 1fr", alignItems: "center", gap: "8px", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "18px" }}>
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    backgroundColor: isEngineActive ? "var(--accent-success, #3fb950)" : "var(--accent-primary, #58a6ff)",
+                    boxShadow: isEngineActive
+                      ? "0 0 8px rgba(63, 185, 80, 0.6)"
+                      : "0 0 8px rgba(88, 166, 255, 0.6)",
+                  }}
+                />
+              </div>
+              <span
+                style={{
+                  fontSize: "11.5px",
+                  fontWeight: 600,
+                  color: isEngineActive ? "var(--accent-success, #3fb950)" : "var(--text-primary)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {statusText}
+              </span>
+            </div>
+
+            {/* 2. Model */}
+            <div style={{ display: "grid", gridTemplateColumns: "18px 1fr", alignItems: "center", gap: "8px", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "18px" }}>
+                <Bot size={14} color="var(--text-muted)" />
+              </div>
+              <span
+                style={{
+                  fontSize: "11px",
+                  color: "var(--text-secondary)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={modelDisplayName}
+              >
+                {modelDisplayName}
+              </span>
+            </div>
+
+            {/* Divider & App Version */}
+            <div style={{ borderTop: "1px solid var(--border-subtle)", marginTop: "2px", paddingTop: "6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "10.5px", color: "var(--text-muted)", fontWeight: 500 }}>
+                VN Translator v0.1.0
+              </span>
+            </div>
+          </>
         ) : (
-          <span>v0.1</span>
+          /* Collapsed Mini Mode */
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "6px" }} title={`${statusText} • ${modelDisplayName} • v0.1.0`}>
+            <span
+              style={{
+                width: "8px",
+                height: "8px",
+                borderRadius: "50%",
+                backgroundColor: isEngineActive ? "var(--accent-success, #3fb950)" : "var(--accent-primary, #58a6ff)",
+                boxShadow: isEngineActive
+                  ? "0 0 8px rgba(63, 185, 80, 0.6)"
+                  : "0 0 8px rgba(88, 166, 255, 0.6)",
+              }}
+            />
+            <span style={{ fontSize: "9px", color: "var(--text-muted)", fontWeight: 600 }}>v0.1</span>
+          </div>
         )}
       </div>
     </aside>

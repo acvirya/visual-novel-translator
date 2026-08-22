@@ -7,6 +7,22 @@ interface HeaderProps {
 }
 
 const tabTitles: Record<NavigationTab, { title: string; subtitle: string }> = {
+  "live-game": {
+    title: "Live Game Translation",
+    subtitle: "End-to-end game dialogue capture, streaming translation, and in-game overlay",
+  },
+  "batch-translate": {
+    title: "Batch Script Translator",
+    subtitle: "Translate entire script files (.jsonl, .json, .csv, .txt) concurrently",
+  },
+  "knowledge-base": {
+    title: "Knowledge Base",
+    subtitle: "Character glossary, custom terminology, and offline script matching memory",
+  },
+  "settings": {
+    title: "Settings & AI Configuration",
+    subtitle: "AI language models, text preprocessing master pipeline, hotkeys, and system logs",
+  },
   "live-translate": {
     title: "Live Translate",
     subtitle: "Real-time hooked dialogue stream & automatic translation",
@@ -14,10 +30,6 @@ const tabTitles: Record<NavigationTab, { title: string; subtitle: string }> = {
   "manual-translate": {
     title: "Manual Translate",
     subtitle: "Translate custom Japanese text or scripts interactively",
-  },
-  "batch-translate": {
-    title: "Batch Translate",
-    subtitle: "Translate entire script files (.jsonl, .txt) simultaneously",
   },
   "glossary-manager": {
     title: "Glossary Manager",
