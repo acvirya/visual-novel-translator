@@ -105,6 +105,8 @@ export const GeneralSettingsView: React.FC = () => {
         "vn_user_style_presets_v1",
         "vn_batch_selected_model",
         "vn_batch_lines_per_batch",
+        "vn_batch_max_batch_context",
+        "vn_batch_retain_batch_context",
         "vn_batch_max_context_lines",
         "vn_batch_retain_context_lines",
         "vn_batch_concurrency",

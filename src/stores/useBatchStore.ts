@@ -12,7 +12,7 @@ export interface BatchState {
   queuedFiles: BatchFileEntry[];
   selectedFileId: string | null;
   searchFilter: string;
-  statusFilter: "all" | "completed" | "untranslated";
+  statusFilter: "all" | "completed" | "untranslated" | "explicit";
   isRunning: boolean;
   isPaused: boolean;
   progressData: BatchProgressUpdate | null;
@@ -25,7 +25,7 @@ export interface BatchState {
   updateFile: (file: BatchFileEntry) => void;
   setSelectedFileId: (id: string | null) => void;
   setSearchFilter: (query: string) => void;
-  setStatusFilter: (filter: "all" | "completed" | "untranslated") => void;
+  setStatusFilter: (filter: "all" | "completed" | "untranslated" | "explicit") => void;
   setIsRunning: (running: boolean) => void;
   setIsPaused: (paused: boolean) => void;
   setProgressData: (progress: BatchProgressUpdate | null) => void;
@@ -37,11 +37,17 @@ export interface BatchState {
 export const useBatchStore = create<BatchState>((set) => {
   const savedModel = localStorage.getItem("vn_batch_selected_model") || "openai/gpt-4o-mini";
   const savedLines = Number(localStorage.getItem("vn_batch_lines_per_batch")) || 10;
-  const savedMaxCtx = Number(localStorage.getItem("vn_batch_max_context_lines")) || 10;
-  const savedRetainCtx = Number(localStorage.getItem("vn_batch_retain_context_lines")) || 3;
+  const rawMaxBatch = localStorage.getItem("vn_batch_max_batch_context") ?? localStorage.getItem("vn_batch_max_context_lines");
+  const savedMaxBatchCtx = rawMaxBatch !== null && !isNaN(Number(rawMaxBatch)) ? Number(rawMaxBatch) : 2;
+
+  const rawRetainBatch = localStorage.getItem("vn_batch_retain_batch_context") ?? localStorage.getItem("vn_batch_retain_context_lines");
+  const savedRetainBatchCtx = rawRetainBatch !== null && !isNaN(Number(rawRetainBatch)) ? Number(rawRetainBatch) : 1;
+
   const savedConcurrency = Number(localStorage.getItem("vn_batch_concurrency")) || 2;
   const savedDelay = Number(localStorage.getItem("vn_batch_delay_ms")) || 300;
+  const savedTimeoutMinutes = Number(localStorage.getItem("vn_batch_timeout_minutes")) || 10;
   const savedAutoContinue = localStorage.getItem("vn_batch_auto_continue") !== "false";
+  const savedTranslateExplicitOnly = localStorage.getItem("vn_batch_translate_explicit_only") === "true";
   const savedOverrideRaw = localStorage.getItem("vn_batch_override_raw") !== "false";
   const savedOutputDir = localStorage.getItem("vn_batch_output_dir") || "";
   const rawSrcSpk = localStorage.getItem("vn_batch_src_speaker_key");
@@ -62,13 +68,15 @@ export const useBatchStore = create<BatchState>((set) => {
 
   const initialSettings: BatchSettings = {
     linesPerBatch: savedLines,
-    maxContextLines: savedMaxCtx,
-    retainContextLines: savedRetainCtx,
+    maxBatchContext: savedMaxBatchCtx,
+    retainBatchContext: savedRetainBatchCtx,
     concurrency: savedConcurrency,
     modelId: savedModel,
     temperature: 0.3,
     delayMs: savedDelay,
+    timeoutMinutes: savedTimeoutMinutes,
     autoContinueUntilCompleted: savedAutoContinue,
+    translateExplicitOnly: savedTranslateExplicitOnly,
     overrideRawWithPreprocessed: savedOverrideRaw,
     outputDir: savedOutputDir,
     fileSuffix: "_translated",
@@ -111,8 +119,8 @@ export const useBatchStore = create<BatchState>((set) => {
         const next = { ...state.settings, ...partial };
         if (partial.modelId !== undefined) localStorage.setItem("vn_batch_selected_model", partial.modelId);
         if (partial.linesPerBatch !== undefined) localStorage.setItem("vn_batch_lines_per_batch", String(partial.linesPerBatch));
-        if (partial.maxContextLines !== undefined) localStorage.setItem("vn_batch_max_context_lines", String(partial.maxContextLines));
-        if (partial.retainContextLines !== undefined) localStorage.setItem("vn_batch_retain_context_lines", String(partial.retainContextLines));
+        if (partial.maxBatchContext !== undefined) localStorage.setItem("vn_batch_max_batch_context", String(partial.maxBatchContext));
+        if (partial.retainBatchContext !== undefined) localStorage.setItem("vn_batch_retain_batch_context", String(partial.retainBatchContext));
         if (partial.concurrency !== undefined) localStorage.setItem("vn_batch_concurrency", String(partial.concurrency));
         if (partial.delayMs !== undefined) localStorage.setItem("vn_batch_delay_ms", String(partial.delayMs));
         if (partial.autoContinueUntilCompleted !== undefined) localStorage.setItem("vn_batch_auto_continue", String(partial.autoContinueUntilCompleted));

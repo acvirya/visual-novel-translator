@@ -18,6 +18,10 @@ import {
   Activity,
   SlidersHorizontal,
   ExternalLink,
+  FileText,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import { KeySelectorCombobox } from "../common/KeySelectorCombobox";
@@ -27,6 +31,7 @@ import {
   BatchSettings,
   KeyMappingConfig,
   isGenuinelyTranslated,
+  isExplicitTagged,
 } from "../../services/batchTranslateService";
 import { useBatchStore } from "../../stores/useBatchStore";
 
@@ -65,37 +70,48 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
   const [linesPerBatch, setLinesPerBatch] = useState<number>(() => {
     const val = parseInt(localStorage.getItem("vn_batch_lines_per_batch") || "10", 10);
-    return isNaN(val) ? 10 : val;
+    return isNaN(val) || val < 1 ? 10 : val;
   });
   const [linesPerBatchInput, setLinesPerBatchInput] = useState<string>(String(linesPerBatch));
 
-  const [maxContextLines, setMaxContextLines] = useState<number>(() => {
-    const val = parseInt(localStorage.getItem("vn_batch_max_context_lines") || "10", 10);
-    return isNaN(val) ? 10 : val;
+  const [maxBatchContext, setMaxBatchContext] = useState<number>(() => {
+    const raw = localStorage.getItem("vn_batch_max_batch_context") ?? localStorage.getItem("vn_batch_max_context_lines");
+    const val = raw !== null ? parseInt(raw, 10) : 2;
+    return isNaN(val) || val < 0 ? 2 : val;
   });
-  const [maxContextLinesInput, setMaxContextLinesInput] = useState<string>(String(maxContextLines));
+  const [maxBatchContextInput, setMaxBatchContextInput] = useState<string>(String(maxBatchContext));
 
-  const [retainContextLines, setRetainContextLines] = useState<number>(() => {
-    const val = parseInt(localStorage.getItem("vn_batch_retain_context_lines") || "3", 10);
-    return isNaN(val) ? 3 : val;
+  const [retainBatchContext, setRetainBatchContext] = useState<number>(() => {
+    const raw = localStorage.getItem("vn_batch_retain_batch_context") ?? localStorage.getItem("vn_batch_retain_context_lines");
+    const val = raw !== null ? parseInt(raw, 10) : 1;
+    return isNaN(val) || val < 0 ? 1 : val;
   });
-  const [retainContextLinesInput, setRetainContextLinesInput] = useState<string>(String(retainContextLines));
+  const [retainBatchContextInput, setRetainBatchContextInput] = useState<string>(String(retainBatchContext));
 
   const [concurrency, setConcurrency] = useState<number>(() => {
     const val = parseInt(localStorage.getItem("vn_batch_concurrency") || "2", 10);
-    return isNaN(val) ? 2 : val;
+    return isNaN(val) || val < 1 ? 2 : val;
   });
   const [concurrencyInput, setConcurrencyInput] = useState<string>(String(concurrency));
 
   const [delayMs, setDelayMs] = useState<number>(() => {
     const val = parseInt(localStorage.getItem("vn_batch_delay_ms") || "300", 10);
-    return isNaN(val) ? 300 : val;
+    return isNaN(val) || val < 0 ? 300 : val;
   });
   const [delayMsInput, setDelayMsInput] = useState<string>(String(delayMs));
+
+  const [timeoutMinutes, setTimeoutMinutes] = useState<number>(() => {
+    const val = parseInt(localStorage.getItem("vn_batch_timeout_minutes") || "10", 10);
+    return isNaN(val) || val < 1 ? 10 : val;
+  });
+  const [timeoutMinutesInput, setTimeoutMinutesInput] = useState<string>(String(timeoutMinutes));
 
   const [autoContinue, setAutoContinue] = useState<boolean>(() => {
     const val = localStorage.getItem("vn_batch_auto_continue");
     return val === null ? true : val === "true";
+  });
+  const [translateExplicitOnly, setTranslateExplicitOnly] = useState<boolean>(() => {
+    return localStorage.getItem("vn_batch_translate_explicit_only") === "true";
   });
   const [overrideRawWithPreprocessed, setOverrideRawWithPreprocessed] = useState<boolean>(() => {
     const val = localStorage.getItem("vn_batch_override_raw");
@@ -140,18 +156,20 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   useEffect(() => {
     localStorage.setItem("vn_batch_selected_model", selectedEngine);
     localStorage.setItem("vn_batch_lines_per_batch", String(linesPerBatch));
-    localStorage.setItem("vn_batch_max_context_lines", String(maxContextLines));
-    localStorage.setItem("vn_batch_retain_context_lines", String(retainContextLines));
+    localStorage.setItem("vn_batch_max_batch_context", String(maxBatchContext));
+    localStorage.setItem("vn_batch_retain_batch_context", String(retainBatchContext));
     localStorage.setItem("vn_batch_concurrency", String(concurrency));
     localStorage.setItem("vn_batch_delay_ms", String(delayMs));
+    localStorage.setItem("vn_batch_timeout_minutes", String(timeoutMinutes));
     localStorage.setItem("vn_batch_auto_continue", String(autoContinue));
+    localStorage.setItem("vn_batch_translate_explicit_only", String(translateExplicitOnly));
     localStorage.setItem("vn_batch_override_raw", String(overrideRawWithPreprocessed));
     localStorage.setItem("vn_batch_output_dir", outputDir);
     localStorage.setItem("vn_batch_src_speaker_key", sourceSpeakerKey);
     localStorage.setItem("vn_batch_src_message_key", sourceMessageKey);
     localStorage.setItem("vn_batch_tgt_speaker_key", targetSpeakerKey);
     localStorage.setItem("vn_batch_tgt_message_key", targetMessageKey);
-  }, [selectedEngine, linesPerBatch, maxContextLines, retainContextLines, concurrency, delayMs, autoContinue, overrideRawWithPreprocessed, outputDir, sourceSpeakerKey, sourceMessageKey, targetSpeakerKey, targetMessageKey]);
+  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, autoContinue, translateExplicitOnly, overrideRawWithPreprocessed, outputDir, sourceSpeakerKey, sourceMessageKey, targetSpeakerKey, targetMessageKey]);
 
   // Auto-select first file if none selected
   useEffect(() => {
@@ -197,7 +215,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   }, []);
 
   const totalLines = queuedFiles.reduce((acc, f) => acc + f.totalLines, 0);
-  const completedLines = queuedFiles.reduce((acc, f) => acc + f.completedLines, 0);
+  const completedLines = queuedFiles.reduce((acc, f) => acc + f.items.filter((it) => isGenuinelyTranslated(it)).length, 0);
+  const explicitLines = queuedFiles.reduce((acc, f) => acc + f.items.filter((it) => isExplicitTagged(it)).length, 0);
   const progressPercent = totalLines > 0 ? Math.min(100, Math.round((completedLines / totalLines) * 100)) : 0;
 
   // Active Selected File
@@ -211,9 +230,11 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     let list = activeFile.items;
 
     if (statusFilter === "completed") {
-      list = list.filter((it) => isGenuinelyTranslated(it));
+      list = list.filter((it) => isGenuinelyTranslated(it) && !isExplicitTagged(it));
     } else if (statusFilter === "untranslated") {
       list = list.filter((it) => !isGenuinelyTranslated(it));
+    } else if (statusFilter === "explicit") {
+      list = list.filter((it) => isExplicitTagged(it));
     }
 
     if (searchFilter.trim()) {
@@ -230,6 +251,19 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
     return list;
   }, [activeFile, statusFilter, searchFilter]);
+
+  const PAGE_SIZE = 100;
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedFileId, statusFilter, searchFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(displayedItems.length / PAGE_SIZE));
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return displayedItems.slice(start, start + PAGE_SIZE);
+  }, [displayedItems, currentPage]);
 
   const handleAddFiles = async () => {
     try {
@@ -319,13 +353,15 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
     const settings: BatchSettings = {
       linesPerBatch,
-      maxContextLines,
-      retainContextLines,
+      maxBatchContext,
+      retainBatchContext,
       concurrency,
       modelId: selectedEngine,
       temperature: 0.3,
       delayMs,
+      timeoutMinutes,
       autoContinueUntilCompleted: autoContinue,
+      translateExplicitOnly,
       overrideRawWithPreprocessed,
       outputDir,
       fileSuffix,
@@ -334,7 +370,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
     try {
       await batchTranslateService.runBatchTranslation(queuedFiles, settings, (updatedFile) => {
-        setQueuedFiles((prev) => prev.map((f) => (f.id === updatedFile.id ? updatedFile : f)));
+        setQueuedFiles((prev) => prev.map((f) => (f.id === updatedFile.id ? { ...updatedFile } : f)));
       });
     } finally {
       setIsRunning(false);
@@ -359,44 +395,60 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     setIsPaused(false);
   };
 
-  // Clamping Handlers for Numeric Inputs
+  // Validation Handlers for Numeric Inputs (No upper maximum caps)
   const handleCommitLinesPerBatch = () => {
     const parsed = parseInt(linesPerBatchInput, 10);
-    const valid = isNaN(parsed) ? 10 : Math.max(1, Math.min(200, parsed));
+    const valid = isNaN(parsed) || parsed < 1 ? 10 : parsed;
     setLinesPerBatch(valid);
     setLinesPerBatchInput(String(valid));
   };
 
-  const handleCommitMaxContext = () => {
-    const parsed = parseInt(maxContextLinesInput, 10);
-    const valid = isNaN(parsed) ? 10 : Math.max(0, Math.min(500, parsed));
-    setMaxContextLines(valid);
-    setMaxContextLinesInput(String(valid));
-    if (retainContextLines > valid) {
-      setRetainContextLines(valid);
-      setRetainContextLinesInput(String(valid));
+  const handleCommitMaxBatchContext = () => {
+    const parsed = parseInt(maxBatchContextInput, 10);
+    const valid = isNaN(parsed) || parsed < 0 ? 2 : parsed;
+    setMaxBatchContext(valid);
+    setMaxBatchContextInput(String(valid));
+    if (valid > 0 && retainBatchContext > valid) {
+      setRetainBatchContext(valid);
+      setRetainBatchContextInput(String(valid));
     }
   };
 
-  const handleCommitRetainContext = () => {
-    const parsed = parseInt(retainContextLinesInput, 10);
-    const valid = isNaN(parsed) ? 3 : Math.max(0, Math.min(maxContextLines, parsed));
-    setRetainContextLines(valid);
-    setRetainContextLinesInput(String(valid));
+  const handleCommitRetainBatchContext = () => {
+    const parsed = parseInt(retainBatchContextInput, 10);
+    const valid = isNaN(parsed) || parsed < 0 ? 1 : (maxBatchContext > 0 ? Math.min(maxBatchContext, parsed) : 0);
+    setRetainBatchContext(valid);
+    setRetainBatchContextInput(String(valid));
   };
 
   const handleCommitConcurrency = () => {
     const parsed = parseInt(concurrencyInput, 10);
-    const valid = isNaN(parsed) ? 2 : Math.max(1, Math.min(10, parsed));
+    const valid = isNaN(parsed) || parsed < 1 ? 2 : parsed;
     setConcurrency(valid);
     setConcurrencyInput(String(valid));
   };
 
   const handleCommitDelayMs = () => {
     const parsed = parseInt(delayMsInput, 10);
-    const valid = isNaN(parsed) ? 300 : Math.max(0, Math.min(10000, parsed));
+    const valid = isNaN(parsed) || parsed < 0 ? 0 : parsed;
     setDelayMs(valid);
     setDelayMsInput(String(valid));
+  };
+
+  const handleCommitTimeoutMinutes = () => {
+    const parsed = parseInt(timeoutMinutesInput, 10);
+    const valid = isNaN(parsed) || parsed < 1 ? 10 : parsed;
+    setTimeoutMinutes(valid);
+    setTimeoutMinutesInput(String(valid));
+  };
+
+  const handleOpenDebugLog = async () => {
+    try {
+      const logPath = outputDir && outputDir.trim() ? `${outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/batch_debug_log.txt` : "batch_debug_log.txt";
+      await invoke("open_file_in_default_app", { path: logPath });
+    } catch (err) {
+      console.warn("Failed to open debug log in default editor:", err);
+    }
   };
 
   return (
@@ -471,30 +523,43 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
           </div>
         </div>
 
-        {/* Right Side: Incremental Session Statistics Badge (Never resets until app exit) */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            backgroundColor: "var(--bg-app)",
-            padding: "4px 10px",
-            borderRadius: "20px",
-            border: "1px solid var(--border-subtle)",
-            fontSize: "11px",
-            flexWrap: "wrap",
-          }}
-        >
-          <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
-            <Activity size={12} color="var(--accent-primary)" /> Session Tokens:
-          </span>
-          <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{sessionStats.promptTokens.toLocaleString()}</strong></span>
-          <span style={{ color: "var(--border-subtle)" }}>•</span>
-          <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{sessionStats.completionTokens.toLocaleString()}</strong></span>
-          <span style={{ color: "var(--border-subtle)" }}>•</span>
-          <span>Cached: <strong style={{ color: "var(--accent-success)" }}>{sessionStats.cachedTokens.toLocaleString()}</strong></span>
-          <span style={{ color: "var(--border-subtle)" }}>•</span>
-          <span>Cost: <strong style={{ color: "#38ef7d" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong></span>
+        {/* Right Side: Incremental Session Statistics Badge & Debug Log Button */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleOpenDebugLog}
+            className="btn-secondary"
+            style={{ padding: "4px 9px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+            title="Open batch_debug_log.txt in Notepad / default editor to inspect full prompt and raw model output"
+          >
+            <FileText size={12} color="var(--accent-cyan)" />
+            <span>Debug Log</span>
+          </button>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              backgroundColor: "var(--bg-app)",
+              padding: "4px 10px",
+              borderRadius: "20px",
+              border: "1px solid var(--border-subtle)",
+              fontSize: "11px",
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
+              <Activity size={12} color="var(--accent-primary)" /> Session Tokens:
+            </span>
+            <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{sessionStats.promptTokens.toLocaleString()}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{sessionStats.completionTokens.toLocaleString()}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Cached: <strong style={{ color: "var(--accent-success)" }}>{sessionStats.cachedTokens.toLocaleString()}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Cost: <strong style={{ color: "#38ef7d" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong></span>
+          </div>
         </div>
       </div>
 
@@ -572,8 +637,13 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   Queued Files ({queuedFiles.length})
                 </span>
                 {queuedFiles.length > 0 && (
-                  <span style={{ fontSize: "11.5px", color: "var(--text-muted)", marginLeft: "4px" }}>
-                    • Total: <strong style={{ color: "var(--text-primary)" }}>{completedLines}</strong> / {totalLines} lines ({progressPercent}%)
+                  <span style={{ fontSize: "11.5px", color: "var(--text-muted)", marginLeft: "4px", display: "inline-flex", alignItems: "center", gap: "5px", flexWrap: "wrap" }}>
+                    • Total: <strong style={{ color: "var(--accent-success)" }}>{completedLines}</strong> / {totalLines} lines ({progressPercent}%)
+                    {explicitLines > 0 && (
+                      <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                        • <AlertTriangle size={11} /> {explicitLines} explicit
+                      </span>
+                    )}
                   </span>
                 )}
               </div>
@@ -656,7 +726,9 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               >
                 {queuedFiles.map((file) => {
                   const isSelected = file.id === (activeFile?.id);
-                  const filePercent = file.totalLines > 0 ? Math.round((file.completedLines / file.totalLines) * 100) : 0;
+                  const fileDone = file.items.filter((it) => isGenuinelyTranslated(it)).length;
+                  const fileExp = file.items.filter((it) => isExplicitTagged(it)).length;
+                  const filePercent = file.totalLines > 0 ? Math.round((fileDone / file.totalLines) * 100) : 0;
                   return (
                     <div
                       key={file.id}
@@ -696,18 +768,27 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                           {file.name}
                         </div>
                         <div style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px", marginTop: "2px" }}>
-                          <span>{file.completedLines}/{file.totalLines} lines ({filePercent}%)</span>
+                          <span>{fileDone}/{file.totalLines} lines ({filePercent}%)</span>
+                          {fileExp > 0 && (
+                            <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "2px" }}>
+                              <AlertTriangle size={10} /> {fileExp} explicit
+                            </span>
+                          )}
                           <span>•</span>
                           <span>{(file.sizeBytes / 1024).toFixed(1)} KB</span>
-                          {file.status === "processing" && (
+                          {file.status === "completed" || (file.totalLines > 0 && fileDone + fileExp >= file.totalLines) ? (
+                            fileExp > 0 ? (
+                              <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "2px" }}>
+                                <AlertTriangle size={10} /> Done ({fileExp} Explicit)
+                              </span>
+                            ) : (
+                              <span style={{ color: "var(--accent-success)", fontWeight: 700 }}>Completed</span>
+                            )
+                          ) : file.status === "processing" ? (
                             <span style={{ color: "var(--accent-cyan)", fontWeight: 700 }}>Translating...</span>
-                          )}
-                          {file.status === "completed" && (
-                            <span style={{ color: "var(--accent-success)", fontWeight: 700 }}>Completed</span>
-                          )}
-                          {file.status === "error" && (
+                          ) : file.status === "error" ? (
                             <span style={{ color: "var(--accent-danger)", fontWeight: 700 }}>Halted / Error</span>
-                          )}
+                          ) : null}
                         </div>
                       </div>
 
@@ -834,7 +915,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 <input
                   type="number"
                   min={1}
-                  max={200}
                   className="input-field"
                   value={linesPerBatchInput}
                   disabled={isRunning}
@@ -844,51 +924,49 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600 }}
                 />
                 <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                  Number of dialogue lines grouped into each prompt turn (Default: 10-25).
+                  Number of dialogue lines grouped into each prompt turn (e.g. 25, 50, 100).
                 </span>
               </div>
 
-              {/* Max Context Window */}
+              {/* Max Batch Context */}
               <div>
                 <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
-                  Max Context Window (lines):
+                  Max Batch Context (batches):
                 </label>
                 <input
                   type="number"
                   min={0}
-                  max={500}
                   className="input-field"
-                  value={maxContextLinesInput}
+                  value={maxBatchContextInput}
                   disabled={isRunning}
-                  onChange={(e) => setMaxContextLinesInput(e.target.value)}
-                  onBlur={handleCommitMaxContext}
-                  onKeyDown={(e) => e.key === "Enter" && handleCommitMaxContext()}
+                  onChange={(e) => setMaxBatchContextInput(e.target.value)}
+                  onBlur={handleCommitMaxBatchContext}
+                  onKeyDown={(e) => e.key === "Enter" && handleCommitMaxBatchContext()}
                   style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600 }}
                 />
                 <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                  Preceding dialogue lines remembered (0 = context disabled).
+                  Preceding dialogue batches remembered in context (0 = context disabled).
                 </span>
               </div>
 
-              {/* Retained Lines After Cut */}
+              {/* Retained Batches After Cut */}
               <div>
                 <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
-                  Retained Lines After Cut:
+                  Retained Batches After Cut:
                 </label>
                 <input
                   type="number"
                   min={0}
-                  max={maxContextLines}
                   className="input-field"
-                  value={retainContextLinesInput}
-                  disabled={isRunning || maxContextLines === 0}
-                  onChange={(e) => setRetainContextLinesInput(e.target.value)}
-                  onBlur={handleCommitRetainContext}
-                  onKeyDown={(e) => e.key === "Enter" && handleCommitRetainContext()}
+                  value={retainBatchContextInput}
+                  disabled={isRunning || maxBatchContext === 0}
+                  onChange={(e) => setRetainBatchContextInput(e.target.value)}
+                  onBlur={handleCommitRetainBatchContext}
+                  onKeyDown={(e) => e.key === "Enter" && handleCommitRetainBatchContext()}
                   style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600 }}
                 />
                 <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                  Lines kept in sliding buffer when context exceeds max.
+                  Batches kept in sliding buffer when context reaches max batch context.
                 </span>
               </div>
 
@@ -900,7 +978,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 <input
                   type="number"
                   min={1}
-                  max={8}
                   className="input-field"
                   value={concurrencyInput}
                   disabled={isRunning}
@@ -922,7 +999,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 <input
                   type="number"
                   min={0}
-                  max={5000}
                   step={50}
                   className="input-field"
                   value={delayMsInput}
@@ -934,6 +1010,28 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 />
                 <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
                   Rate-limit protection pause between chunk requests.
+                </span>
+              </div>
+
+              {/* Request Timeout (Minutes) */}
+              <div>
+                <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  API Timeout (Minutes):
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  className="input-field"
+                  value={timeoutMinutesInput}
+                  disabled={isRunning}
+                  onChange={(e) => setTimeoutMinutesInput(e.target.value)}
+                  onBlur={handleCommitTimeoutMinutes}
+                  onKeyDown={(e) => e.key === "Enter" && handleCommitTimeoutMinutes()}
+                  style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600 }}
+                />
+                <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
+                  Max wait duration before timing out (ideal for reasoning models e.g. 10m).
                 </span>
               </div>
 
@@ -1003,10 +1101,10 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                     htmlFor="auto-continue-checkbox"
                     style={{ fontSize: "12px", fontWeight: 700, color: autoContinue ? "var(--accent-cyan)" : "var(--text-primary)", cursor: "pointer" }}
                   >
-                    Auto-Continue Until 100% Completed
+                    Auto-Retry Until 100% Completed
                   </label>
                   <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                    Automatically retries transient rate limits and pauses until all files are fully translated.
+                    Keeps retrying failed batches in-place until the file reaches 100% completion before proceeding to next file.
                   </span>
                 </div>
                 <input
@@ -1049,6 +1147,40 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   disabled={isRunning}
                   onChange={(e) => setOverrideRawWithPreprocessed(e.target.checked)}
                   style={{ accentColor: "var(--accent-gold)", transform: "scale(1.2)", marginTop: "2px", cursor: "pointer" }}
+                />
+              </div>
+
+              <div
+                style={{
+                  backgroundColor: translateExplicitOnly ? "rgba(244, 63, 94, 0.08)" : "var(--bg-surface-elevated)",
+                  border: translateExplicitOnly ? "1px solid rgba(244, 63, 94, 0.35)" : "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "10px 12px",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: "8px",
+                }}
+              >
+                <div>
+                  <label
+                    htmlFor="translate-explicit-checkbox"
+                    style={{ fontSize: "12px", fontWeight: 700, color: translateExplicitOnly ? "#fb7185" : "var(--text-primary)", cursor: "pointer", display: "flex", alignItems: "center", gap: "5px" }}
+                  >
+                    <AlertTriangle size={13} color="#fb7185" />
+                    Re-translate Explicit Flagged Lines Only
+                  </label>
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
+                    Slices batches starting from explicit flagged lines, updating only flagged lines while preserving existing translations.
+                  </span>
+                </div>
+                <input
+                  id="translate-explicit-checkbox"
+                  type="checkbox"
+                  checked={translateExplicitOnly}
+                  disabled={isRunning}
+                  onChange={(e) => setTranslateExplicitOnly(e.target.checked)}
+                  style={{ accentColor: "#fb7185", transform: "scale(1.2)", marginTop: "2px", cursor: "pointer" }}
                 />
               </div>
             </div>
@@ -1124,11 +1256,15 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                     onChange={(e) => setSelectedFileId(e.target.value)}
                     style={{ fontSize: "12px", padding: "4px 8px", maxWidth: "260px", fontWeight: 600 }}
                   >
-                    {queuedFiles.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name} ({f.completedLines}/{f.totalLines} lines) {f.status === "completed" ? "✓" : ""}
-                      </option>
-                    ))}
+                    {queuedFiles.map((f) => {
+                      const fDone = f.items.filter((it) => isGenuinelyTranslated(it)).length;
+                      const fExp = f.items.filter((it) => isExplicitTagged(it)).length;
+                      return (
+                        <option key={f.id} value={f.id}>
+                          {f.name} ({fDone}/{f.totalLines} lines{fExp > 0 ? `, ${fExp} explicit` : ""}) {f.status === "completed" ? (fExp > 0 ? "⚠️" : "✓") : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                 ) : (
                   <span style={{ fontSize: "12px", color: "var(--text-muted)", fontStyle: "italic" }}>
@@ -1162,8 +1298,13 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               )}
 
               {activeFile && (
-                <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "4px" }}>
-                  ({activeFile.completedLines}/{activeFile.totalLines} lines translated)
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "4px", display: "inline-flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
+                  <span>({activeFile.items.filter((it) => isGenuinelyTranslated(it)).length}/{activeFile.totalLines} lines translated)</span>
+                  {activeFile.items.some((it) => isExplicitTagged(it)) && (
+                    <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "2px", marginLeft: "4px" }}>
+                      <AlertTriangle size={11} /> {activeFile.items.filter((it) => isExplicitTagged(it)).length} explicit
+                    </span>
+                  )}
                 </span>
               )}
             </div>
@@ -1191,6 +1332,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 <option value="all">All Lines</option>
                 <option value="completed">Translated Only</option>
                 <option value="untranslated">Untranslated Only</option>
+                <option value="explicit">Explicit Flagged Only</option>
               </select>
 
               {progressData && progressData.currentBatch > 0 && (
@@ -1241,7 +1383,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {displayedItems.map((item) => {
+                  {pagedItems.map((item) => {
                     const isTranslated = isGenuinelyTranslated(item);
                     return (
                       <tr
@@ -1276,9 +1418,34 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                         </td>
                         <td style={{ padding: "8px 10px", lineHeight: 1.5 }}>
                           {isTranslated ? (
-                            <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
-                              {item.translatedMessage}
-                            </span>
+                            item.translatedMessage && item.translatedMessage.includes("[EXPLICIT CONTENT]") ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    width: "fit-content",
+                                    backgroundColor: "rgba(244, 63, 94, 0.12)",
+                                    color: "#fb7185",
+                                    border: "1px solid rgba(244, 63, 94, 0.3)",
+                                    borderRadius: "3px",
+                                    padding: "1px 6px",
+                                    fontSize: "10.5px",
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  <AlertTriangle size={11} /> Explicit / Safety Skipped
+                                </span>
+                                <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "12px" }}>
+                                  {item.originalMessage}
+                                </span>
+                              </div>
+                            ) : (
+                              <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+                                {item.translatedMessage}
+                              </span>
+                            )
                           ) : (
                             <span style={{ color: "var(--text-muted)", fontStyle: "italic", opacity: 0.5 }}>
                               Pending translation...
@@ -1287,10 +1454,17 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                         </td>
                         <td style={{ padding: "8px 10px", textAlign: "center" }}>
                           {isTranslated ? (
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--accent-success)", fontWeight: 600 }}>
-                              <CheckCircle2 size={13} />
-                              <span>Done</span>
-                            </span>
+                            item.translatedMessage && item.translatedMessage.includes("[EXPLICIT CONTENT]") ? (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "10px", color: "#fb7185", fontWeight: 700 }} title="Skipped due to LLM content safety policy">
+                                <AlertTriangle size={12} />
+                                <span>Explicit</span>
+                              </span>
+                            ) : (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--accent-success)", fontWeight: 600 }}>
+                                <CheckCircle2 size={13} />
+                                <span>Done</span>
+                              </span>
+                            )
                           ) : isRunning && activeFile.status === "processing" ? (
                             <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--accent-cyan)" }}>
                               <Clock size={13} />
@@ -1309,6 +1483,56 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               </table>
             )}
           </div>
+
+          {/* Pagination Footer */}
+          {activeFile && displayedItems.length > PAGE_SIZE && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "6px 12px",
+                backgroundColor: "var(--bg-surface)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "11.5px",
+                color: "var(--text-secondary)",
+                flexShrink: 0,
+              }}
+            >
+              <span>
+                Showing <strong>{(currentPage - 1) * PAGE_SIZE + 1}</strong> - <strong>{Math.min(currentPage * PAGE_SIZE, displayedItems.length)}</strong> of <strong>{displayedItems.length}</strong> lines
+              </span>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage <= 1}
+                  className="btn-secondary"
+                  style={{ padding: "3px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "2px" }}
+                >
+                  <ChevronLeft size={13} />
+                  <span>Prev</span>
+                </button>
+
+                <span style={{ fontWeight: 600, padding: "0 6px" }}>
+                  Page {currentPage} of {totalPages}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                  className="btn-secondary"
+                  style={{ padding: "3px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "2px" }}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={13} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

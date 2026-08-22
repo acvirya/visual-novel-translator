@@ -34,6 +34,14 @@ export interface OpenRouterTestResult {
   keyInfo?: OpenRouterKeyInfo;
 }
 
+export interface OpenRouterCompletionResponse {
+  content: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  cost: number;
+}
+
 export interface PromptStylePreset {
   id: string;
   name: string;
@@ -199,8 +207,8 @@ export function buildCompleteSystemPrompt(options: BuildSystemPromptOptions): st
 
   // 1. Part 1: Role & Language Declaration
   const part1 = mode === "live"
-    ? `You are an expert Visual Novel localizer translating dialogue from ${srcName} to natural ${tgtName}.`
-    : `You are an expert Visual Novel script translator processing multiple dialogue entries from ${srcName} to natural ${tgtName}.\nTranslate each dialogue line accurately while maintaining strict character voice consistency and context continuity across lines.`;
+    ? `You are an expert Visual Novel localizer translating dialogue from ${srcName} to natural ${tgtName}.\nContext: This is an 18+ rated fictional visual novel for adult audiences. All characters are consenting adults (18+). Translate all narrative and dialogue accurately and faithfully.`
+    : `You are an expert Visual Novel script translator processing multiple dialogue entries from ${srcName} to natural ${tgtName}.\nContext: This is an 18+ rated fictional fantasy visual novel for adult audiences. All characters depicted are consenting adults (18+). Translate each dialogue line accurately and faithfully while maintaining strict character voice consistency and context continuity across lines.`;
 
   // 2. Part 2: Translation Style & Tone
   const cleanStyle = styleInstructions.trim();
@@ -225,23 +233,37 @@ You MUST ALWAYS respond with a valid, clean JSON object matching this schema:
 3. **Strict JSON Only**: Do NOT include commentary, explanations, work logs, or markdown fences outside the JSON object.`;
   } else {
     part4 = `\n\n### Batch Output Schema:
-You MUST return a JSON object containing the "translations" array for all input items:
+You MUST ALWAYS return a JSON object with the "translations" array containing every input item:
 {
   "translations": [
     {
       "id": 1,
-      "translated_speaker": "Character name in ${tgtName} (or null)",
-      "translated_message": "${tgtName} dialogue translation"
+      "translated_speaker": "Thunder God Resheph",
+      "translated_message": "Do not flock together."
+    },
+    {
+      "id": 2,
+      "translated_speaker": "Markus",
+      "translated_message": "Wh-what is this...!?"
+    },
+    {
+      "id": 3,
+      "translated_speaker": null,
+      "translated_message": "A six-pronged bolt of lightning split apart the ground beneath our feet."
     }
   ]
 }
 
-### CRITICAL PRESERVATION & BATCH RULES (MANDATORY):
-1. **NEVER Skip Any Line ID**: You MUST include and translate EVERY single input line with its exact matching "id" in the "translations" array. NEVER skip, omit, merge, drop, or reorder any line IDs under any circumstances.
-2. **NEVER Skip Punctuation, Sound Effects, or Silence Lines**: Even if a line has nothing that needs translation (such as 「......」, 「……」, "...", "!?"), NEVER skip it—output the exact punctuation/silence as-is with its exact matching "id".
-3. **NEVER Skip Text Already in ${tgtName}**: If a character name or dialogue line is already in ${tgtName} (e.g. English names, loanwords, or phrases), DO NOT skip or drop it—preserve and output it as-is with its exact matching "id".
-4. **Preserve Schema Structure**: Preserve JSON schema keys and line structure identically without omitting or modifying structure.
-5. **Strict JSON Only**: DO NOT return meta summaries, explanations, work logs, or markdown wrapper outside the JSON object.`;
+### CRITICAL BATCH RULES (MANDATORY):
+1. **Translate EVERY Single Line**: You MUST include EVERY input line ID in "translations" (from id: 1 to id: N). NEVER skip, merge, omit, or leave "translated_message" empty for any line ID!
+2. **Dialogue Format & Quote Marks**:
+   - Strip Japanese quote brackets (「...」, 『...』).
+   - Write dialogue directly into "translated_message" without wrapping the whole value in outer quotation marks like ""..."" or \\"...\\".
+   - If dialogue contains quotes within speech, use curly quotes “...” or single quotes '...'.
+3. **Punctuation, Reactions & Silence Lines**: Even if a line consists only of ellipsis, groans, shouts, or reactions (e.g. 「......」, 「──!」, 「っ──!?」, 「うわあああ────!」), output the corresponding English punctuation/reaction in "translated_message" (e.g. "......", "──!", "Ghk──!?", "Uwaaaaah────!"). NEVER leave "translated_message" as an empty string ("")!
+4. **Speaker Formatting**: If the input has a speaker, translate the speaker name in "translated_speaker". If no speaker (narration), set "translated_speaker": null.
+5. **Adult & Explicit Content Handling**: If your safety guidelines restrict you from translating explicit adult/sexual lines, DO NOT abort or refuse the entire batch. Instead, preserve the line ID and output 'translated_message': '[EXPLICIT CONTENT]' while translating all other lines normally.
+6. **Strict Valid JSON Only**: Output only valid JSON without any reasoning, markdown code fences, or explanations.`;
   }
 
   return `${part1}${part2}${part3}${part4}`;
@@ -544,14 +566,10 @@ export async function translateWithOpenRouter(options: {
         includeGlossary: true,
       });
 
-  // 2. Format Structured JSON Prompt
-  const promptText = formatStructuredDialogueInput(speaker, message);
+  // Construct Multi-turn Chat Message array
+  const messages: ChatMessage[] = [{ role: "system", content: fullSystemPrompt }];
 
-  // 3. Assemble Message History for Multi-Turn Context
-  const messages: ChatMessage[] = [
-    { role: "system", content: fullSystemPrompt },
-  ];
-
+  // Append history turns (up to max configured context window)
   if (Array.isArray(contextHistory) && contextHistory.length > 0) {
     for (const turn of contextHistory) {
       if (turn.user && turn.assistant) {
@@ -561,8 +579,9 @@ export async function translateWithOpenRouter(options: {
     }
   }
 
-  // Append current user turn
-  messages.push({ role: "user", content: promptText });
+  // Active dialogue line turn
+  const activeUserPayload = speaker ? `[Speaker: ${speaker}]\n${message}` : message;
+  messages.push({ role: "user", content: activeUserPayload });
 
   logger.info(
     "OpenRouter::API",
@@ -576,15 +595,15 @@ export async function translateWithOpenRouter(options: {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const nativeRes = await invoke<string>("openrouter_chat_completion", {
+      const nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
         apiKey: cleanKey,
         modelId,
         messagesJson: JSON.stringify(messages),
         temperature,
       });
 
-      if (nativeRes && nativeRes.trim()) {
-        content = nativeRes.trim();
+      if (nativeRes && nativeRes.content) {
+        content = nativeRes.content.trim();
         const elapsed = Date.now() - startTime;
         logger.info(
           "OpenRouter::API",
@@ -673,19 +692,34 @@ export function calculateUsageCost(
   completionTokens: number,
   cachedTokens: number = 0
 ): number {
-  const cachedListStr = localStorage.getItem("openrouter_available_models");
+  if (!modelId || modelId.startsWith("mt:") || modelId.toLowerCase().includes(":free")) {
+    return 0;
+  }
+
+  let models = cachedModels;
+  if (!models || models.length === 0) {
+    const stored = localStorage.getItem("vn_cached_openrouter_models") || localStorage.getItem("openrouter_available_models");
+    if (stored) {
+      try {
+        models = JSON.parse(stored);
+      } catch {}
+    }
+  }
+
   let promptPrice = 0.00000015; // default fallback ($0.15 / 1M tokens)
   let compPrice = 0.0000006;   // default fallback ($0.60 / 1M tokens)
 
-  if (cachedListStr) {
-    try {
-      const models: OpenRouterModel[] = JSON.parse(cachedListStr);
-      const m = models.find((x) => x.id === modelId);
-      if (m?.pricing) {
-        promptPrice = parseFloat(m.pricing.prompt) || promptPrice;
-        compPrice = parseFloat(m.pricing.completion) || compPrice;
-      }
-    } catch {}
+  const m = models?.find((x) => x.id.toLowerCase() === modelId.toLowerCase());
+  if (m?.pricing) {
+    const parsedPrompt = parseFloat(m.pricing.prompt);
+    const parsedComp = parseFloat(m.pricing.completion);
+    if (!isNaN(parsedPrompt)) promptPrice = parsedPrompt;
+    if (!isNaN(parsedComp)) compPrice = parsedComp;
+
+    // If both prompt and completion prices are 0, this model is 100% free!
+    if (promptPrice === 0 && compPrice === 0) {
+      return 0;
+    }
   }
 
   const nonCachedPrompt = Math.max(0, promptTokens - cachedTokens);

@@ -338,17 +338,9 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
     };
   }
 
-  // 4. Newline separator: First line is short name (< 15 chars), followed by dialogue lines
-  const lines = trimmed.split(/\r?\n/);
-  if (lines.length >= 2 && lines[0].trim().length >= 1 && lines[0].trim().length <= 15 && !lines[0].includes("。")) {
-    return {
-      speaker: lines[0].trim(),
-      message: lines.slice(1).join("\n").trim(),
-    };
-  }
-
-  // 5. Suffix speaker at the end: 「セリフ」――遥月 or 「セリフ」 (遥月) or 「セリフ」【遥月】
-  const suffixDashMatch = trimmed.match(/^([\s\S]+?[」』）\)])\s*(?:――|——|--)\s*([^「」\r\n]{1,20})$/);
+  // 4. Suffix speaker at the end:
+  // 4a. Dash separator: 「セリフ」――遥月 or 「セリフ」--遥月
+  const suffixDashMatch = trimmed.match(/^([\s\S]+?[」』）\)])\s*(?:――|——|--)\s*([^「」『』\r\n]{1,20})$/);
   if (suffixDashMatch) {
     return {
       speaker: suffixDashMatch[2].trim(),
@@ -356,11 +348,30 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
     };
   }
 
+  // 4b. Bracket/Paren suffix: 「セリフ」(遥月) or 「セリフ」【遥月】 or 「セリフ」[遥月]
   const suffixParenMatch = trimmed.match(/^([\s\S]+?[」』])\s*[（(【\[]([^）)\]】\r\n]{1,20})[）)\]】]$/);
   if (suffixParenMatch) {
     return {
       speaker: suffixParenMatch[2].trim(),
       message: suffixParenMatch[1].trim(),
+    };
+  }
+
+  // 4c. Direct trailing speaker after closing quote: 「セリフ」ソーマ or 『セリフ』ソーマ
+  const suffixDirectQuoteMatch = trimmed.match(/^([「『][\s\S]+?[」』])\s*([^「」『』\r\n。、!?！？]{1,20})$/);
+  if (suffixDirectQuoteMatch) {
+    return {
+      speaker: suffixDirectQuoteMatch[2].trim(),
+      message: suffixDirectQuoteMatch[1].trim(),
+    };
+  }
+
+  // 5. Newline separator: First line is short name (< 15 chars), followed by dialogue lines
+  const lines = trimmed.split(/\r?\n/);
+  if (lines.length >= 2 && lines[0].trim().length >= 1 && lines[0].trim().length <= 15 && !lines[0].includes("。")) {
+    return {
+      speaker: lines[0].trim(),
+      message: lines.slice(1).join("\n").trim(),
     };
   }
 

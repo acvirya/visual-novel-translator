@@ -15,12 +15,11 @@ static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 fn get_http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .timeout(std::time::Duration::from_secs(1800)) // 30 min ceiling timeout
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+            .pool_idle_timeout(std::time::Duration::from_secs(180))
             .pool_max_idle_per_host(10)
-            .gzip(true)
-            .brotli(true)
-            .deflate(true)
             .build()
             .expect("Failed to initialize shared HTTP client")
     })
@@ -440,14 +439,58 @@ fn show_pick_directory_dialog() -> Result<Option<String>, String> {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenRouterCompletionResponse {
+    pub content: String,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub cached_tokens: u32,
+    pub cost: f64,
+}
+
+fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> Result<OpenRouterCompletionResponse, String> {
+    let content = if let Some(content) = parsed["choices"][0]["message"]["content"].as_str() {
+        if !content.trim().is_empty() {
+            Some(content.trim().to_string())
+        } else {
+            None
+        }
+    } else if let Some(reasoning) = parsed["choices"][0]["message"]["reasoning"].as_str() {
+        if !reasoning.trim().is_empty() {
+            Some(reasoning.trim().to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let content = content.ok_or_else(|| format!("Empty or unexpected OpenRouter response payload: {}", raw_body))?;
+
+    let prompt_tokens = parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+    let completion_tokens = parsed["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+    let cached_tokens = parsed["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
+    let cost = parsed["usage"]["cost"].as_f64().unwrap_or(0.0);
+
+    Ok(OpenRouterCompletionResponse {
+        content,
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens,
+        cost,
+    })
+}
+
 #[tauri::command]
 async fn openrouter_chat_completion(
     api_key: String,
     model_id: String,
     messages_json: String,
     temperature: f64,
-) -> Result<String, String> {
+    timeout_seconds: Option<u64>,
+) -> Result<OpenRouterCompletionResponse, String> {
     let client = get_http_client();
+    let timeout_duration = std::time::Duration::from_secs(timeout_seconds.unwrap_or(600)); // Default 10 min
 
     let messages: serde_json::Value = serde_json::from_str(&messages_json)
         .map_err(|e| format!("Invalid messages JSON: {}", e))?;
@@ -461,8 +504,10 @@ async fn openrouter_chat_completion(
 
     let resp = client
         .post("https://openrouter.ai/api/v1/chat/completions")
+        .timeout(timeout_duration)
         .header("Authorization", format!("Bearer {}", api_key.trim()))
         .header("Content-Type", "application/json")
+        .header("Accept-Encoding", "identity")
         .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
         .header("X-Title", "VN Translator Desktop")
         .json(&payload)
@@ -471,8 +516,7 @@ async fn openrouter_chat_completion(
         .map_err(|e| format!("Failed to connect to OpenRouter API: {}", e))?;
 
     let status = resp.status();
-    let body_bytes = resp.bytes().await.map_err(|e| format!("Failed to read OpenRouter response bytes: {}", e))?;
-    let body_text = String::from_utf8_lossy(&body_bytes).to_string();
+    let body_text = resp.text().await.map_err(|e| format!("Failed to read OpenRouter response text: {}", e))?;
 
     if !status.is_success() {
         // If the model rejected json_object parameter specifically (HTTP 400), retry without response_format
@@ -490,8 +534,10 @@ async fn openrouter_chat_completion(
             });
             let retry_resp = client
                 .post("https://openrouter.ai/api/v1/chat/completions")
+                .timeout(timeout_duration)
                 .header("Authorization", format!("Bearer {}", api_key.trim()))
                 .header("Content-Type", "application/json")
+                .header("Accept-Encoding", "identity")
                 .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
                 .header("X-Title", "VN Translator Desktop")
                 .json(&fallback_payload)
@@ -500,16 +546,13 @@ async fn openrouter_chat_completion(
                 .map_err(|e| format!("Failed to connect to OpenRouter API (retry): {}", e))?;
 
             let retry_status = retry_resp.status();
-            let retry_bytes = retry_resp.bytes().await.map_err(|e| format!("Failed to read retry response bytes: {}", e))?;
-            let retry_body = String::from_utf8_lossy(&retry_bytes).to_string();
+            let retry_body = retry_resp.text().await.map_err(|e| format!("Failed to read retry response text: {}", e))?;
             if !retry_status.is_success() {
                 return Err(format!("OpenRouter API error (HTTP {}): {}", retry_status, retry_body));
             }
             let parsed: serde_json::Value = serde_json::from_str(&retry_body)
                 .map_err(|e| format!("Failed to parse OpenRouter response: {}", e))?;
-            if let Some(content) = parsed["choices"][0]["message"]["content"].as_str() {
-                return Ok(content.trim().to_string());
-            }
+            return parse_openrouter_payload(&parsed, &retry_body);
         }
         return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
     }
@@ -517,10 +560,26 @@ async fn openrouter_chat_completion(
     let parsed: serde_json::Value = serde_json::from_str(&body_text)
         .map_err(|e| format!("Failed to parse OpenRouter response: {}", e))?;
 
-    if let Some(content) = parsed["choices"][0]["message"]["content"].as_str() {
-        Ok(content.trim().to_string())
+    parse_openrouter_payload(&parsed, &body_text)
+}
+
+#[tauri::command]
+fn resolve_safe_log_path(file_name: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(file_name);
+    if p.is_absolute() {
+        p.to_path_buf()
     } else {
-        Err(format!("Empty or unexpected OpenRouter response payload: {}", body_text))
+        // If relative path, write to workspace root (parent of src-tauri) to prevent triggering Tauri dev file watcher
+        if let Ok(cwd) = std::env::current_dir() {
+            if cwd.ends_with("src-tauri") {
+                if let Some(parent) = cwd.parent() {
+                    return parent.join(file_name);
+                }
+            }
+            cwd.join(file_name)
+        } else {
+            std::env::temp_dir().join(file_name)
+        }
     }
 }
 
@@ -528,18 +587,20 @@ async fn openrouter_chat_completion(
 fn append_debug_log(file_name: String, content: String) -> Result<(), String> {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use std::path::{Component, Path};
+    use std::path::Component;
 
-    let log_path = Path::new(&file_name);
+    let raw_path = std::path::Path::new(&file_name);
 
     // Disallow path traversal components ('..')
-    for component in log_path.components() {
+    for component in raw_path.components() {
         if component == Component::ParentDir {
             return Err("Invalid file path: path traversal is not permitted".to_string());
         }
     }
 
-    if let Some(parent) = log_path.parent() {
+    let final_path = resolve_safe_log_path(&file_name);
+
+    if let Some(parent) = final_path.parent() {
         if !parent.as_os_str().is_empty() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -548,13 +609,43 @@ fn append_debug_log(file_name: String, content: String) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&file_name)
-        .map_err(|e| format!("Failed to open log file {}: {}", file_name, e))?;
+        .open(&final_path)
+        .map_err(|e| format!("Failed to open log file {:?}: {}", final_path, e))?;
 
     file.write_all(content.as_bytes())
         .map_err(|e| format!("Failed to write to log file: {}", e))?;
 
     Ok(())
+}
+
+#[tauri::command]
+fn open_file_in_default_app(path: String) -> Result<(), String> {
+    let final_path = resolve_safe_log_path(&path);
+
+    if !final_path.exists() {
+        if let Some(parent) = final_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        let _ = std::fs::write(&final_path, "[BATCH TRANSLATE DEBUG LOG INITIALIZED]\nNo errors recorded yet.\n");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let win_path = final_path.to_string_lossy().to_string();
+        Command::new("cmd")
+            .args(&["/C", "start", "", &win_path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = open::that(&final_path);
+        Ok(())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -610,7 +701,8 @@ pub fn run() {
             show_pick_files_dialog,
             show_pick_directory_dialog,
             openrouter_chat_completion,
-            append_debug_log
+            append_debug_log,
+            open_file_in_default_app
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

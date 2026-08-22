@@ -1,10 +1,12 @@
 /**
  * Free Machine Translation (MT) Service
  * Implements Google Translate Free & DeepL Free translation with structured "Speaker: Dialogue" packing & parsing.
+ * Automatically normalizes suffix speaker names (e.g. 「セリフ」ソーマ -> 【ソーマ】「セリフ」)
  * Uses native Rust command via Tauri to bypass CORS and webview network limits.
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 
 export interface FreeMtTranslateOptions {
   speaker?: string;
@@ -26,24 +28,49 @@ export interface FreeMtTranslateResult {
   error?: string;
 }
 
+export interface FormattedPayloadResult {
+  formattedText: string;
+  effectiveSpeaker?: string;
+  effectiveMessage: string;
+}
+
 /**
- * Packs speaker and message into a robust Japanese bracket format for MT engines:
+ * Normalizes and packs speaker and message into a robust Japanese bracket format for MT engines:
  * "【Speaker】 Message" if speaker is present, or just "Message" for narration.
+ * If speaker is at the back of the message (e.g. 「セリフ」ソーマ), it normalizes it to the front!
  */
-export function formatSpeakerMessage(speaker: string | undefined, message: string): string {
-  const cleanMsg = message.trim();
-  const cleanSpk = speaker?.trim().replace(/^[【\[［<〈〔]|[\】\]］>〉〕]$/g, "").trim();
+export function formatSpeakerMessage(speaker: string | undefined, message: string): FormattedPayloadResult {
+  let cleanMsg = message.trim();
+  let cleanSpk = speaker?.trim().replace(/^[【\[［<〈〔]|[\】\]］>〉〕]$/g, "").trim();
+
+  // If speaker was not explicitly passed, or if message itself contains speaker at front or back
+  if (!cleanSpk) {
+    const extracted = extractSpeakerAndDialogue(cleanMsg);
+    if (extracted.speaker) {
+      cleanSpk = extracted.speaker.replace(/^[【\[［<〈〔]|[\】\]］>〉〕]$/g, "").trim();
+      cleanMsg = extracted.message.trim();
+    }
+  }
 
   if (cleanSpk) {
-    return `【${cleanSpk}】 ${cleanMsg}`;
+    return {
+      formattedText: `【${cleanSpk}】 ${cleanMsg}`,
+      effectiveSpeaker: cleanSpk,
+      effectiveMessage: cleanMsg,
+    };
   }
-  return cleanMsg;
+
+  return {
+    formattedText: cleanMsg,
+    effectiveSpeaker: undefined,
+    effectiveMessage: cleanMsg,
+  };
 }
 
 /**
  * Splits translated response into translatedSpeaker and translatedMessage
  * Safely parses bracketed speaker: 【Speaker】 Message, [Speaker] Message, etc.
- * Delimiter colons inside dialogue (e.g. 12:30 or Chapter 1: Prologue) will never be corrupted!
+ * Supports prefix colon, suffix names, and fallback preservation.
  */
 export function parseSpeakerMessageTranslation(
   rawTranslation: string,
@@ -52,6 +79,14 @@ export function parseSpeakerMessageTranslation(
   const text = rawTranslation.trim();
 
   if (!originalSpeaker || !originalSpeaker.trim()) {
+    // If no original speaker was expected, check if the MT output contains a speaker structure
+    const extracted = extractSpeakerAndDialogue(text);
+    if (extracted.speaker) {
+      return {
+        translatedSpeaker: extracted.speaker,
+        translatedMessage: extracted.message,
+      };
+    }
     return {
       translatedSpeaker: undefined,
       translatedMessage: text,
@@ -79,7 +114,24 @@ export function parseSpeakerMessageTranslation(
     };
   }
 
-  // 3. Fallback if MT stripped the bracket wrapper
+  // 3. Suffix speaker fallback in translated text: "Dialogue" - Speaker, "Dialogue" Speaker
+  const suffixDashMatch = text.match(/^([\s\S]+?["”』」\)])\s*(?:――|——|--|-)\s*([^"”『」\r\n]{1,30})$/);
+  if (suffixDashMatch) {
+    return {
+      translatedSpeaker: suffixDashMatch[2].trim() || originalSpeaker.trim(),
+      translatedMessage: suffixDashMatch[1].trim(),
+    };
+  }
+
+  const suffixQuoteMatch = text.match(/^([“"『「][\s\S]+?["”』」])\s*([^"”『」\r\n.!?]{1,30})$/);
+  if (suffixQuoteMatch) {
+    return {
+      translatedSpeaker: suffixQuoteMatch[2].trim() || originalSpeaker.trim(),
+      translatedMessage: suffixQuoteMatch[1].trim(),
+    };
+  }
+
+  // 4. Fallback if MT stripped the bracket wrapper
   return {
     translatedSpeaker: originalSpeaker.trim(),
     translatedMessage: text,
@@ -171,11 +223,11 @@ export async function translateWithFreeMt(
     };
   }
 
-  // 1. Format payload: "Speaker: Dialogue"
-  const formattedInput = formatSpeakerMessage(speaker, message);
+  // 1. Format payload: Normalizes name at the end/inside to "【Speaker】 Message" at the front
+  const { formattedText, effectiveSpeaker, effectiveMessage } = formatSpeakerMessage(speaker, message);
 
   // 2. Call Native Rust command first (Bypasses webview CORS restrictions)
-  let translationRes = await translateWithNativeRust(formattedInput, sourceLang, targetLang, provider);
+  let translationRes = await translateWithNativeRust(formattedText, sourceLang, targetLang, provider);
   let providerLabel = provider === "deepl" ? "DeepL Free" : "Google Translate (Free)";
 
   // Fallback to fetch if native call failed
@@ -183,7 +235,7 @@ export async function translateWithFreeMt(
     if (provider === "deepl") {
       providerLabel = "Google Translate (DeepL Fallback)";
     }
-    translationRes = await translateWithGoogleFetch(formattedInput, sourceLang, targetLang);
+    translationRes = await translateWithGoogleFetch(formattedText, sourceLang, targetLang);
   }
 
   const durationMs = Date.now() - startTime;
@@ -191,10 +243,10 @@ export async function translateWithFreeMt(
   if (translationRes.error || !translationRes.text) {
     return {
       success: false,
-      speaker: speaker || undefined,
-      translatedSpeaker: speaker || undefined,
-      message,
-      translatedMessage: message, // fallback to original
+      speaker: effectiveSpeaker || undefined,
+      translatedSpeaker: effectiveSpeaker || undefined,
+      message: effectiveMessage,
+      translatedMessage: effectiveMessage, // fallback to original
       rawResponse: translationRes.text,
       provider: providerLabel,
       durationMs,
@@ -205,14 +257,14 @@ export async function translateWithFreeMt(
   // 3. Parse formatted response back to speaker & message
   const { translatedSpeaker, translatedMessage } = parseSpeakerMessageTranslation(
     translationRes.text,
-    speaker
+    effectiveSpeaker
   );
 
   return {
     success: true,
-    speaker: speaker || undefined,
+    speaker: effectiveSpeaker || undefined,
     translatedSpeaker,
-    message,
+    message: effectiveMessage,
     translatedMessage,
     rawResponse: translationRes.text,
     provider: providerLabel,
