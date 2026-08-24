@@ -39,6 +39,7 @@ export class OcrService {
     regions: OcrRegion[]
   ): Promise<{ [regionId: string]: string }> {
     useOcrStore.getState().setIsLoadingSnapshot(true);
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1.0 : 1.0;
     try {
       const previews = await invoke<{ [regionId: string]: string }>(
         "capture_regions_preview",
@@ -51,10 +52,10 @@ export class OcrService {
             y: Math.round(r.y),
             width: Math.round(r.width),
             height: Math.round(r.height),
-            physicalX: r.physicalX ? Math.round(r.physicalX) : null,
-            physicalY: r.physicalY ? Math.round(r.physicalY) : null,
-            physicalWidth: r.physicalWidth ? Math.round(r.physicalWidth) : null,
-            physicalHeight: r.physicalHeight ? Math.round(r.physicalHeight) : null,
+            physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
+            physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
+            physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
+            physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
           })),
         }
       );
@@ -78,6 +79,7 @@ export class OcrService {
     customPath?: string,
     stabilityConfig?: OcrStabilityConfig
   ): Promise<OcrScanResult> {
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1.0 : 1.0;
     try {
       const result = await invoke<OcrScanResult>("run_oneocr_scan", {
         regions: regions.map((r) => ({
@@ -88,10 +90,10 @@ export class OcrService {
           y: Math.round(r.y),
           width: Math.round(r.width),
           height: Math.round(r.height),
-          physicalX: r.physicalX ? Math.round(r.physicalX) : null,
-          physicalY: r.physicalY ? Math.round(r.physicalY) : null,
-          physicalWidth: r.physicalWidth ? Math.round(r.physicalWidth) : null,
-          physicalHeight: r.physicalHeight ? Math.round(r.physicalHeight) : null,
+          physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
+          physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
+          physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
+          physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
         })),
         scalePercent: Math.max(10, Math.min(300, scalePercent)),
         customPath: customPath || null,

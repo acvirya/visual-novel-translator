@@ -110,7 +110,9 @@ export const RegionSelectionOverlay: React.FC = () => {
   } | null>(null);
 
   const computeRegionsWithPhysical = (regs: OcrRegion[]): OcrRegion[] => {
+    const currentTarget = localStorage.getItem("vn_ocr_target_monitor");
     const activeMonitor =
+      monitors.find((m) => m.name === currentTarget) ||
       monitors.find((m) => m.name === targetMonitorName) ||
       monitors.find((m) => m.is_primary) ||
       monitors[0] || {
@@ -133,7 +135,7 @@ export const RegionSelectionOverlay: React.FC = () => {
       physicalY: Math.round(monY + r.y * scale),
       physicalWidth: Math.round(r.width * scale),
       physicalHeight: Math.round(r.height * scale),
-      targetMonitor: activeMonitor.name || targetMonitorName,
+      targetMonitor: activeMonitor.name || currentTarget || targetMonitorName,
     }));
   };
 

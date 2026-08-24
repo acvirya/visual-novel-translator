@@ -121,6 +121,8 @@ export function applyPreprocessingStep(text: string, step: PreprocessingStep): s
       if (opts.stripRubyBrackets !== false) {
         result = result.replace(/([\u4E00-\u9FAF\u3400-\u4DBF々])\[[\u3040-\u309F\u30A0-\u30FF]+\]/g, "$1");
       }
+      // 4. Strip Kanji《kana》 -> Kanji (e.g. 漢字《かんじ》 -> 漢字)
+      result = result.replace(/([\u4E00-\u9FAF\u3400-\u4DBF々])《[\u3040-\u309F\u30A0-\u30FF]+》/g, "$1");
       break;
     }
 
@@ -298,6 +300,12 @@ export function executePreprocessingPipeline(
   }
 }
 
+// Japanese particle / verb endings that prove a prefix is narration/sentence fragment, NOT a character speaker name
+const NARRATION_PREFIX_ENDINGS = /(?:で|を|に|から|と|へ|より|まで|も|の|は|が|した|する|して|された|ている|ていた|あった|ある|ない|なった|なる|だ|です|である|ながら|けれど|けど|ので|そして|また|だが)$/;
+
+// Formatting / engine tags that should never be mistaken for speaker brackets (e.g. <r...>, <ruby>, <font>, <color>, [r], \c[1])
+const INLINE_TAG_PREFIX = /^<(?:r|ruby|font|color|b|i|u|size|img|style|\/)[^>]*>/i;
+
 export interface ExtractedDialogue {
   speaker: string;
   message: string;
@@ -310,37 +318,17 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   const trimmed = text.trim();
   if (!trimmed) return { speaker: "", message: "" };
 
-  // 1. Bracketed Speaker prefix: 【遥月】セリフ, [遥月] セリフ, ［遥月］セリフ, <遥月> セリフ, 〈遥月〉セリフ
-  const bracketMatch = trimmed.match(/^[【\[［<〈]([^【\]］>〉\r\n]{1,20})[】\]］>〉]\s*[:：]?\s*([\s\S]+)$/);
-  if (bracketMatch) {
+  // Guard: If text starts with ruby or formatting tag (<r...>, <ruby...>), do not treat as speaker bracket!
+  if (INLINE_TAG_PREFIX.test(trimmed)) {
     return {
-      speaker: bracketMatch[1].trim(),
-      message: bracketMatch[2].trim(),
+      speaker: "",
+      message: trimmed,
     };
   }
 
-  // 2. Name before Japanese quotation mark: 遥月「セリフ」 or 遥月『セリフ』 or 遥月（セリフ）
-  // Speaker name is typically 1 to 15 characters before 「 or 『
-  const quoteMatch = trimmed.match(/^([^「『（\r\n]{1,20})\s*([「『（][\s\S]+)$/);
-  if (quoteMatch) {
-    return {
-      speaker: quoteMatch[1].trim(),
-      message: quoteMatch[2].trim(),
-    };
-  }
-
-  // 3. Colon separator: 遥月: セリフ or 遥月：セリフ
-  const colonMatch = trimmed.match(/^([^:：\r\n]{1,20})[:：]\s*([\s\S]+)$/);
-  if (colonMatch) {
-    return {
-      speaker: colonMatch[1].trim(),
-      message: colonMatch[2].trim(),
-    };
-  }
-
-  // 4. Suffix speaker at the end:
-  // 4a. Dash separator: 「セリフ」――遥月 or 「セリフ」--遥月
-  const suffixDashMatch = trimmed.match(/^([\s\S]+?[」』）\)])\s*(?:――|——|--)\s*([^「」『』\r\n]{1,20})$/);
+  // 1. Suffix speaker at the end of dialogue or monologue
+  // 1a. Suffix Dash separator: 「セリフ」――ソーマ or (モノローグ)--ソーマ
+  const suffixDashMatch = trimmed.match(/^([\s\S]+?[」』）\)】\]〕”"])\s*(?:――|——|--)\s*([^「」『』\r\n]{1,20})$/);
   if (suffixDashMatch) {
     return {
       speaker: suffixDashMatch[2].trim(),
@@ -348,8 +336,8 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
     };
   }
 
-  // 4b. Bracket/Paren suffix: 「セリフ」(遥月) or 「セリフ」【遥月】 or 「セリフ」[遥月]
-  const suffixParenMatch = trimmed.match(/^([\s\S]+?[」』])\s*[（(【\[]([^）)\]】\r\n]{1,20})[）)\]】]$/);
+  // 1b. Bracket/Paren suffix: 「セリフ」(ソーマ) or 「セリフ」【ソーマ】
+  const suffixParenMatch = trimmed.match(/^([\s\S]+?[」』）\)])\s*[（(【\[［]([^）)\]】］\r\n]{1,20})[）)\]】］]$/);
   if (suffixParenMatch) {
     return {
       speaker: suffixParenMatch[2].trim(),
@@ -357,8 +345,8 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
     };
   }
 
-  // 4c. Direct trailing speaker after closing quote: 「セリフ」ソーマ or 『セリフ』ソーマ
-  const suffixDirectQuoteMatch = trimmed.match(/^([「『][\s\S]+?[」』])\s*([^「」『』\r\n。、!?！？]{1,20})$/);
+  // 1c. Direct trailing speaker after closing quote/monologue: 「セリフ」ソーマ, 『セリフ』ソーマ, (モノローグ)ソーマ, （モノローグ）ソーマ
+  const suffixDirectQuoteMatch = trimmed.match(/^([「『（\(〔“][\s\S]+?[」』）\)〕”])\s*([^「」『』（\)\r\n。、!?！？:：]{1,20})$/);
   if (suffixDirectQuoteMatch) {
     return {
       speaker: suffixDirectQuoteMatch[2].trim(),
@@ -366,9 +354,54 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
     };
   }
 
+  // 2. Bracketed Speaker prefix: 【遥月】セリフ, [遥月] セリフ, ［遥月］セリフ, 〈遥月〉セリフ, 〔遥月〕セリフ
+  // (Excludes <...> to avoid collision with HTML/ruby tags, and checks bracket validity)
+  const bracketMatch = trimmed.match(/^[【\[［〈〔]([^【\]］〉〕\r\n]{1,20})[】\]］〉〕]\s*[:：]?\s*([\s\S]+)$/);
+  if (bracketMatch) {
+    return {
+      speaker: bracketMatch[1].trim(),
+      message: bracketMatch[2].trim(),
+    };
+  }
+
+  // 3. Name before Japanese quotation mark: 遥月「セリフ」 or 遥月『セリフ』
+  // Checks that:
+  // - Name is 1 to 15 characters
+  // - Name does NOT end in particles or verb conjugations (e.g. 獲得した, で, を, に, etc.)
+  // - The text after closing quote does not continue as a narrative sentence (e.g. 『サラマンダの鱗』が彼女を守っていた。)
+  const quoteMatch = trimmed.match(/^([^「『（\r\n]{1,15})\s*([「『][\s\S]+?[」』])\s*([\s\S]*)$/);
+  if (quoteMatch) {
+    const potentialSpeaker = quoteMatch[1].trim();
+    const dialoguePart = quoteMatch[2].trim();
+    const trailingPart = quoteMatch[3].trim();
+
+    const isNarrationEnding = NARRATION_PREFIX_ENDINGS.test(potentialSpeaker);
+    // If there is trailing text after quote starting with particle (e.g. が, を, に, は, で, の) or verb, it's narration!
+    const isNarrationTrailing = trailingPart.length > 0 && /^(?:[がをにはでのへとより]|守っ|受け|持っ|使っ|言っ|見|思|知|走|立|座|な|だ|で|さ)/.test(trailingPart);
+
+    if (!isNarrationEnding && !isNarrationTrailing) {
+      return {
+        speaker: potentialSpeaker,
+        message: trailingPart ? `${dialoguePart} ${trailingPart}` : dialoguePart,
+      };
+    }
+  }
+
+  // 4. Colon separator: 遥月: セリフ or 遥月：セリフ
+  const colonMatch = trimmed.match(/^([^:：\r\n]{1,15})[:：]\s*([\s\S]+)$/);
+  if (colonMatch) {
+    const potentialSpeaker = colonMatch[1].trim();
+    if (!potentialSpeaker.startsWith("http") && !potentialSpeaker.startsWith("<") && !NARRATION_PREFIX_ENDINGS.test(potentialSpeaker)) {
+      return {
+        speaker: potentialSpeaker,
+        message: colonMatch[2].trim(),
+      };
+    }
+  }
+
   // 5. Newline separator: First line is short name (< 15 chars), followed by dialogue lines
   const lines = trimmed.split(/\r?\n/);
-  if (lines.length >= 2 && lines[0].trim().length >= 1 && lines[0].trim().length <= 15 && !lines[0].includes("。")) {
+  if (lines.length >= 2 && lines[0].trim().length >= 1 && lines[0].trim().length <= 15 && !lines[0].includes("。") && !NARRATION_PREFIX_ENDINGS.test(lines[0].trim())) {
     return {
       speaker: lines[0].trim(),
       message: lines.slice(1).join("\n").trim(),

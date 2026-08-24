@@ -1,15 +1,38 @@
-/**
- * Script Manager Service
- * Manages active Visual Novel script database (.json / .jsonl), matching engine, native Windows Explorer dialogs, and file autosave.
- */
-
 import { invoke } from "@tauri-apps/api/core";
+import { extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 
 export function generateUniqueId(prefix = "entry"): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return `${prefix}_${crypto.randomUUID()}`;
   }
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Fast Levenshtein distance for short strings (<= 3 chars)
+ */
+export function calcLevenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const row = Array.from({ length: a.length + 1 }, (_, i) => i);
+
+  for (let i = 1; i <= b.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= a.length; j++) {
+      let val: number;
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        val = row[j - 1];
+      } else {
+        val = Math.min(row[j - 1] + 1, prev + 1, row[j] + 1);
+      }
+      row[j - 1] = prev;
+      prev = val;
+    }
+    row[a.length] = prev;
+  }
+  return row[a.length];
 }
 
 export interface ScriptEntry {
@@ -20,6 +43,12 @@ export interface ScriptEntry {
   translated_message: string;
   matchedCount?: number;
   lastUsed?: string;
+  // Precomputed index cache (O(1) lookups during searches)
+  _normSpeaker?: string;
+  _normMessage?: string;
+  _canonicalKey?: string;
+  _bigramCounts?: Map<string, number>;
+  _numBigrams?: number;
 }
 
 export interface ScriptDatabaseState {
@@ -38,56 +67,97 @@ class ScriptManagerService {
   private matchThreshold = 0.85;
   private listeners: ((state: ScriptDatabaseState) => void)[] = [];
   private saveDebounceTimer: any = null;
-  private exactIndex: Map<string, ScriptEntry> = new Map();
-  private normalizedIndex: Map<string, ScriptEntry> = new Map();
+  private canonicalIndex: Map<string, ScriptEntry[]> = new Map();
+  private messageOnlyIndex: Map<string, ScriptEntry[]> = new Map();
   private ngramIndex: Map<string, Set<ScriptEntry>> = new Map();
 
   constructor() {
     this.loadPersistedState();
   }
 
-  public normalizeForIndex(t: string): string {
-    const res = t
-      .replace(/[\u3000\s\r\n\t]/g, "")
-      .replace(/[「」『』【】（）()〈〉《》""''“”]/g, "")
-      .replace(/[、，,]/g, "")
-      .replace(/[。．\.]+/g, "")
-      .replace(/[…‥・―ー\-~〜]/g, "")
-      .replace(/[！!]/g, "！")
-      .replace(/[？?]/g, "？")
-      .replace(/《[^》]+》/g, "")
+  public normalizeSpeaker(s?: string): string {
+    if (!s) return "";
+    return s
+      .normalize("NFKC")
+      .replace(/[\u3000\s【】「」『』()（）\[\]{}<>《》:：#@]/g, "")
       .toLowerCase()
       .trim();
-    return res || (t.trim().length > 0 ? "..." : "");
+  }
+
+  public normalizeMessage(m: string): string {
+    if (!m) return "";
+    const res = m
+      .normalize("NFKC")
+      .replace(/[\u3000\s\r\n\t]/g, "")
+      .replace(/[「」『』【】（）()〈〉""''“”]/g, "")
+      .replace(/([\u4E00-\u9FAF\u3400-\u4DBF々])《[\u3040-\u309F\u30A0-\u30FF]+》/g, "$1") // Strip furigana reading when attached to Kanji
+      .replace(/[《》]/g, "") // Strip emphasis brackets without deleting term inside (e.g. 《聖剣》 -> 聖剣)
+      .replace(/[、，,]/g, "")
+      .replace(/[。．\.]+/g, "")
+      .replace(/[…‥・―—–~〜\-]/g, "")
+      .replace(/ー{2,}/g, "ー") // Collapse repeated chōonpu (あーーー -> あー) while strictly preserving single phonemic ー!
+      .replace(/[！!]/g, "！")
+      .replace(/[？?]/g, "？")
+      .toLowerCase()
+      .trim();
+    return res || (m.trim().length > 0 ? "..." : "");
+  }
+
+  public buildCanonicalKey(speaker?: string, message?: string): string {
+    const normSpk = this.normalizeSpeaker(speaker);
+    const normMsg = this.normalizeMessage(message || "");
+    return `${normSpk}:::${normMsg}`;
   }
 
   public insertEntryIntoIndexes(item: ScriptEntry) {
-    const trimmed = item.message.trim();
-    if (trimmed && !this.exactIndex.has(trimmed)) {
-      this.exactIndex.set(trimmed, item);
-    }
-    const norm = this.normalizeForIndex(trimmed);
-    if (norm && !this.normalizedIndex.has(norm)) {
-      this.normalizedIndex.set(norm, item);
+    // 1. Precompute normalized values once
+    const normSpk = this.normalizeSpeaker(item.speaker);
+    const normMsg = this.normalizeMessage(item.message);
+    const canonicalKey = `${normSpk}:::${normMsg}`;
+
+    item._normSpeaker = normSpk;
+    item._normMessage = normMsg;
+    item._canonicalKey = canonicalKey;
+
+    if (canonicalKey) {
+      let canonList = this.canonicalIndex.get(canonicalKey);
+      if (!canonList) {
+        canonList = [];
+        this.canonicalIndex.set(canonicalKey, canonList);
+      }
+      canonList.push(item);
     }
 
-    // Build Inverted Bigram Index for instant candidate retrieval
-    if (norm.length >= 2) {
-      for (let i = 0; i < norm.length - 1; i++) {
-        const bg = norm.slice(i, i + 2);
-        let set = this.ngramIndex.get(bg);
-        if (!set) {
-          set = new Set();
-          this.ngramIndex.set(bg, set);
-        }
-        set.add(item);
+    if (normMsg) {
+      let msgList = this.messageOnlyIndex.get(normMsg);
+      if (!msgList) {
+        msgList = [];
+        this.messageOnlyIndex.set(normMsg, msgList);
       }
+      msgList.push(item);
+
+      // Precompute Bag-of-Bigrams (frequency map) for multiset Dice calculation
+      const bigramCounts = new Map<string, number>();
+      if (normMsg.length >= 2) {
+        for (let i = 0; i < normMsg.length - 1; i++) {
+          const bg = normMsg.slice(i, i + 2);
+          bigramCounts.set(bg, (bigramCounts.get(bg) || 0) + 1);
+          let set = this.ngramIndex.get(bg);
+          if (!set) {
+            set = new Set();
+            this.ngramIndex.set(bg, set);
+          }
+          set.add(item);
+        }
+      }
+      item._bigramCounts = bigramCounts;
+      item._numBigrams = Math.max(0, normMsg.length - 1);
     }
   }
 
   private rebuildIndexes() {
-    this.exactIndex.clear();
-    this.normalizedIndex.clear();
+    this.canonicalIndex.clear();
+    this.messageOnlyIndex.clear();
     this.ngramIndex.clear();
 
     for (const item of this.entries) {
@@ -136,7 +206,7 @@ class ScriptManagerService {
     this.notify();
   }
 
-  private saveState() {
+  private saveState(skipRebuild = false) {
     try {
       if (this.activeFileName) {
         if (this.activeFilePath) {
@@ -155,7 +225,9 @@ class ScriptManagerService {
       console.warn("Failed to autosave script settings to storage:", e);
     }
 
-    this.rebuildIndexes();
+    if (!skipRebuild) {
+      this.rebuildIndexes();
+    }
 
     // Auto-save to physical disk file if filePath exists (debounced)
     if (this.activeFilePath) {
@@ -390,11 +462,23 @@ class ScriptManagerService {
         obj.translatedName ??
         undefined;
 
+      let extractedSpk = spk ? String(spk).trim() : undefined;
+      let finalMsg = String(msg).trim();
+
+      // Auto-extract embedded speaker if speaker key wasn't explicitly defined
+      if (!extractedSpk) {
+        const ext = extractSpeakerAndDialogue(finalMsg);
+        if (ext.speaker) {
+          extractedSpk = ext.speaker;
+          finalMsg = ext.message;
+        }
+      }
+
       return {
         id: obj.id || generateUniqueId(`entry_${idx}`),
-        speaker: spk ? String(spk).trim() : undefined,
+        speaker: extractedSpk || undefined,
         translated_speaker: transSpk && transSpk !== "null" ? String(transSpk).trim() : undefined,
-        message: String(msg).trim(),
+        message: finalMsg,
         translated_message: transMsg !== undefined && transMsg !== null && transMsg !== "null" ? String(transMsg).trim() : "",
         matchedCount: obj.matchedCount || 0,
         lastUsed: obj.lastUsed,
@@ -429,7 +513,7 @@ class ScriptManagerService {
         } catch {}
       } else {
         // Plain text line
-        const ext = this.extractSpeakerAndDialogue(line);
+        const ext = extractSpeakerAndDialogue(line);
         if (ext.message) {
           results.push({
             id: generateUniqueId(`entry_${idx}`),
@@ -443,21 +527,6 @@ class ScriptManagerService {
     }
 
     return results;
-  }
-
-  private extractSpeakerAndDialogue(raw: string): { speaker: string | null; message: string } {
-    const trimmed = raw.trim();
-    if (!trimmed) return { speaker: null, message: "" };
-
-    const bracketMatch = trimmed.match(/^[【\[]([^】\]]+)[】\]]\s*(.*)$/);
-    if (bracketMatch) {
-      return {
-        speaker: bracketMatch[1].trim(),
-        message: bracketMatch[2].trim(),
-      };
-    }
-
-    return { speaker: null, message: trimmed };
   }
 
   /**
@@ -491,7 +560,8 @@ class ScriptManagerService {
     };
 
     this.entries = [newEntry, ...this.entries];
-    this.saveState();
+    this.insertEntryIntoIndexes(newEntry);
+    this.saveState(true);
     return true;
   }
 
@@ -562,7 +632,7 @@ class ScriptManagerService {
       existing.translated_speaker = item.translated_speaker?.trim() || undefined;
       existing.matchedCount = (existing.matchedCount || 0) + 1;
       existing.lastUsed = new Date().toLocaleTimeString();
-      this.saveState();
+      this.saveState(true);
       return true;
     }
 
@@ -578,7 +648,7 @@ class ScriptManagerService {
 
     this.entries = [newEntry, ...this.entries];
     this.insertEntryIntoIndexes(newEntry);
-    this.saveState();
+    this.saveState(true);
     return true;
   }
 
@@ -594,132 +664,183 @@ class ScriptManagerService {
       return { matched: false, similarityScore: 0 };
     }
 
-    const cleanMsg = message.trim();
+    let cleanMsg = message.trim();
     if (!cleanMsg) return { matched: false, similarityScore: 0 };
-    const cleanSpk = speaker?.trim() || undefined;
-    const threshold = customThreshold ?? this.matchThreshold;
+    let cleanSpk = speaker?.trim() || undefined;
 
-    // Normalizers
-    const normalizeSpeaker = (s?: string) =>
-      (s || "")
-        .replace(/[\u3000\s【】「」『』()（）\[\]{}<>《》:：#@0-9]/g, "")
-        .toLowerCase()
-        .trim();
-
-    const normCleanSpk = normalizeSpeaker(cleanSpk);
-
-    const speakerMatches = (spk1Norm: string, itemSpk?: string): boolean => {
-      if (!spk1Norm || !itemSpk) return true; // If one side has no speaker tag, allow match
-      const normItemSpk = normalizeSpeaker(itemSpk);
-      if (!normItemSpk) return true;
-      if (spk1Norm === normItemSpk) return true;
-      // Partial / substring match for noisy speaker tags (e.g. "Hazuki 1" vs "Hazuki")
-      if (spk1Norm.includes(normItemSpk) || normItemSpk.includes(spk1Norm)) return true;
-      return false;
-    };
-
-    // Helper to calculate Sørensen–Dice bigram similarity
-    const calcBigramDice = (s1: string, s2: string): number => {
-      if (s1 === s2) return 1.0;
-      if (s1.length < 2 || s2.length < 2) return s1 === s2 ? 1.0 : s1.includes(s2) || s2.includes(s1) ? 0.75 : 0;
-      const bg1 = new Map<string, number>();
-      for (let i = 0; i < s1.length - 1; i++) {
-        const b = s1.slice(i, i + 2);
-        bg1.set(b, (bg1.get(b) || 0) + 1);
-      }
-      let matches = 0;
-      for (let j = 0; j < s2.length - 1; j++) {
-        const b = s2.slice(j, j + 2);
-        const count = bg1.get(b) || 0;
-        if (count > 0) {
-          matches++;
-          bg1.set(b, count - 1);
-        }
-      }
-      return (2 * matches) / (s1.length - 1 + (s2.length - 1));
-    };
-
-    // 1. Fast Index Exact Match (O(1))
-    const exactHit = this.exactIndex.get(cleanMsg);
-    if (exactHit) {
-      if (speakerMatches(normCleanSpk, exactHit.speaker) || threshold <= 0.99) {
-        exactHit.matchedCount = (exactHit.matchedCount || 0) + 1;
-        exactHit.lastUsed = new Date().toLocaleTimeString();
-        return {
-          matched: true,
-          entry: exactHit,
-          similarityScore: speakerMatches(normCleanSpk, exactHit.speaker) ? 1.0 : 0.99,
-        };
+    // If query speaker is missing, try auto-extracting from query message
+    if (!cleanSpk) {
+      const ext = extractSpeakerAndDialogue(cleanMsg);
+      if (ext.speaker) {
+        cleanSpk = ext.speaker;
+        cleanMsg = ext.message;
       }
     }
 
-    // 2. Fast Index Normalized Match (O(1))
-    const normalizedQuery = this.normalizeForIndex(cleanMsg);
-    if (normalizedQuery.length > 0) {
-      const normHit = this.normalizedIndex.get(normalizedQuery);
-      if (normHit && threshold <= 0.98) {
-        normHit.matchedCount = (normHit.matchedCount || 0) + 1;
-        normHit.lastUsed = new Date().toLocaleTimeString();
-        return {
-          matched: true,
-          entry: normHit,
-          similarityScore: speakerMatches(normCleanSpk, normHit.speaker) ? 0.98 : 0.97,
-        };
+    const threshold = customThreshold ?? this.matchThreshold;
+
+    const normCleanSpk = this.normalizeSpeaker(cleanSpk);
+    const normCleanMsg = this.normalizeMessage(cleanMsg);
+    if (!normCleanMsg) return { matched: false, similarityScore: 0 };
+
+    // Dynamic threshold: prevent particle-collision false positives on short strings
+    let effectiveThreshold = threshold;
+    if (normCleanMsg.length <= 4) {
+      effectiveThreshold = Math.max(threshold, 0.90);
+    } else if (normCleanMsg.length <= 6) {
+      effectiveThreshold = Math.max(threshold, 0.88);
+    }
+
+    const canonicalKey = this.buildCanonicalKey(cleanSpk, cleanMsg);
+
+    const isExactSpeakerMatch = (itemSpk?: string): boolean => {
+      const normItemSpk = this.normalizeSpeaker(itemSpk);
+      return Boolean(normCleanSpk && normItemSpk && normCleanSpk === normItemSpk);
+    };
+
+    const isCompatibleSpeaker = (itemSpk?: string): boolean => {
+      const normItemSpk = this.normalizeSpeaker(itemSpk);
+      // If neither has a speaker, they match
+      if (!normCleanSpk && !normItemSpk) return true;
+      // If one side has no speaker, it's compatible
+      if (!normCleanSpk || !normItemSpk) return true;
+      // Exact match
+      if (normCleanSpk === normItemSpk) return true;
+      // Substring match for noisy speaker tags (e.g. "Hazuki 1" vs "Hazuki")
+      if (normCleanSpk.includes(normItemSpk) || normItemSpk.includes(normCleanSpk)) return true;
+      return false;
+    };
+
+    const isConflictingSpeaker = (itemSpk?: string): boolean => {
+      const normItemSpk = this.normalizeSpeaker(itemSpk);
+      if (!normCleanSpk || !normItemSpk) return false;
+      return normCleanSpk !== normItemSpk && !normCleanSpk.includes(normItemSpk) && !normItemSpk.includes(normCleanSpk);
+    };
+
+    // =========================================================================
+    // Tier 1: Exact Canonical Match (O(1)) - Speaker + Message
+    // =========================================================================
+    if (canonicalKey) {
+      const canonList = this.canonicalIndex.get(canonicalKey);
+      if (canonList && canonList.length > 0) {
+        const hit = canonList[0];
+        hit.matchedCount = (hit.matchedCount || 0) + 1;
+        hit.lastUsed = new Date().toLocaleTimeString();
+        return { matched: true, entry: hit, similarityScore: 1.0 };
+      }
+    }
+
+    // =========================================================================
+    // Tier 2: Normalized Message Match (O(1)) with Speaker Priority
+    // =========================================================================
+    const msgHits = this.messageOnlyIndex.get(normCleanMsg);
+    if (msgHits && msgHits.length > 0) {
+      // 2a. Exact speaker match
+      const exactSpkHit = msgHits.find((e) => isExactSpeakerMatch(e.speaker));
+      if (exactSpkHit) {
+        exactSpkHit.matchedCount = (exactSpkHit.matchedCount || 0) + 1;
+        exactSpkHit.lastUsed = new Date().toLocaleTimeString();
+        return { matched: true, entry: exactSpkHit, similarityScore: 1.0 };
       }
 
-      // 3. Substring / Prefix / Suffix match if longer than 5 characters
-      if (threshold <= 0.90 && normalizedQuery.length >= 5) {
-        let substrFallback: ScriptEntry | null = null;
-        for (const item of this.entries) {
-          const normItem = this.normalizeForIndex(item.message);
-          if (normItem.length >= 5) {
-            if (normItem.includes(normalizedQuery) || normalizedQuery.includes(normItem)) {
-              if (speakerMatches(normCleanSpk, item.speaker)) {
-                item.matchedCount = (item.matchedCount || 0) + 1;
-                item.lastUsed = new Date().toLocaleTimeString();
-                return { matched: true, entry: item, similarityScore: 0.90 };
-              } else if (!substrFallback) {
-                substrFallback = item;
-              }
+      // 2b. Compatible speaker (one side is narration / speaker omitted in capture)
+      const compatibleHit = msgHits.find((e) => isCompatibleSpeaker(e.speaker));
+      if (compatibleHit && threshold <= 0.98) {
+        compatibleHit.matchedCount = (compatibleHit.matchedCount || 0) + 1;
+        compatibleHit.lastUsed = new Date().toLocaleTimeString();
+        return { matched: true, entry: compatibleHit, similarityScore: 0.98 };
+      }
+
+      // 2c. If query is narration and threshold is lenient (<= 0.85), allow first match
+      if (!normCleanSpk && threshold <= 0.85) {
+        const fallback = msgHits[0];
+        fallback.matchedCount = (fallback.matchedCount || 0) + 1;
+        fallback.lastUsed = new Date().toLocaleTimeString();
+        return { matched: true, entry: fallback, similarityScore: 0.95 };
+      }
+    }
+
+    // =========================================================================
+    // Tier 3: Substring / Overlap Match (Protected & Evenly Sampled Inverted-Index Filter)
+    // Only triggers for text of reasonable length (>= 6 chars) and very close length (diff <= 3)
+    // =========================================================================
+    if (threshold <= 0.90 && normCleanMsg.length >= 6) {
+      let bestSubstrItem: ScriptEntry | null = null;
+      let bestSubstrScore = 0;
+
+      // Fast inverted-index retrieval: sample bigrams evenly across the entire message
+      const substrCandidates = new Set<ScriptEntry>();
+      const totalBigrams = normCleanMsg.length - 1;
+      const sampleIndices = new Set<number>();
+      const step = Math.max(1, Math.floor(totalBigrams / 5));
+      for (let i = 0; i < totalBigrams; i += step) {
+        sampleIndices.add(i);
+      }
+      sampleIndices.add(Math.max(0, totalBigrams - 1));
+
+      for (const idx of sampleIndices) {
+        const bg = normCleanMsg.slice(idx, idx + 2);
+        const hits = this.ngramIndex.get(bg);
+        if (hits) {
+          for (const entry of hits) {
+            substrCandidates.add(entry);
+          }
+        }
+      }
+
+      for (const item of substrCandidates) {
+        const itemSpk = item._normSpeaker ?? this.normalizeSpeaker(item.speaker);
+        if (isConflictingSpeaker(itemSpk)) continue; // Never cross-contaminate different named speakers
+
+        const normItem = item._normMessage ?? this.normalizeMessage(item.message);
+        if (normItem.length >= 6 && Math.abs(normItem.length - normCleanMsg.length) <= 3) {
+          if (normItem.includes(normCleanMsg) || normCleanMsg.includes(normItem)) {
+            const overlapScore = Math.min(normItem.length, normCleanMsg.length) / Math.max(normItem.length, normCleanMsg.length);
+            const isSpkMatch = isExactSpeakerMatch(itemSpk);
+            const finalScore = overlapScore + (isSpkMatch ? 0.05 : 0);
+
+            if (finalScore >= Math.max(effectiveThreshold, 0.90) && finalScore > bestSubstrScore) {
+              bestSubstrScore = finalScore;
+              bestSubstrItem = item;
             }
           }
         }
-
-        if (substrFallback) {
-          substrFallback.matchedCount = (substrFallback.matchedCount || 0) + 1;
-          substrFallback.lastUsed = new Date().toLocaleTimeString();
-          return { matched: true, entry: substrFallback, similarityScore: 0.88 };
-        }
       }
 
-      // 4. Fuzzy Similarity matching (Inverted Bigram Index + Dice coefficient) with Speaker Preference
-      let bestMatch: ScriptEntry | null = null;
-      let bestScore = 0;
-
-      // Fast candidate retrieval via inverted index
-      let candidates: Set<ScriptEntry> = new Set();
-      if (normalizedQuery.length >= 2) {
-        for (let i = 0; i < normalizedQuery.length - 1; i++) {
-          const bg = normalizedQuery.slice(i, i + 2);
-          const hits = this.ngramIndex.get(bg);
-          if (hits) {
-            hits.forEach((item) => candidates.add(item));
-          }
-        }
+      if (bestSubstrItem && bestSubstrScore >= effectiveThreshold) {
+        bestSubstrItem.matchedCount = (bestSubstrItem.matchedCount || 0) + 1;
+        bestSubstrItem.lastUsed = new Date().toLocaleTimeString();
+        return { matched: true, entry: bestSubstrItem, similarityScore: Math.min(0.95, parseFloat(bestSubstrScore.toFixed(3))) };
       }
+    }
 
-      // If no bigram matches (e.g. single character queries or unindexed items), fallback to direct list
-      const candidateList = candidates.size > 0 ? Array.from(candidates) : this.entries;
+    // =========================================================================
+    // Tier 4: Fuzzy Matching
+    // - Short text (<= 2 chars): Exact match only (bypassed in fuzzy to prevent false positives like はい vs いい)
+    // - 3-character text: Normalized Levenshtein Distance
+    // - Longer text (>= 4 chars): Bag-of-Bigrams (Multiset) Inverted Index with Mathematical Length Bounds
+    // =========================================================================
+    let bestMatch: ScriptEntry | null = null;
+    let bestScore = 0;
 
-      for (const item of candidateList) {
-        const normItem = this.normalizeForIndex(item.message);
-        if (Math.abs(normItem.length - normalizedQuery.length) > 15) continue;
-        const rawScore = calcBigramDice(normalizedQuery, normItem);
+    if (normCleanMsg.length <= 2) {
+      // 4a. Short text (1-2 chars): Exact normalized match already handled in Tier 1 & Tier 2.
+      // Bypass fuzzy matching because distance 1 changes 50-100% of lexical meaning.
+    } else if (normCleanMsg.length === 3) {
+      // 4b. 3-character text (e.g. "そうだ", "違うよ"): Normalized Levenshtein Distance
+      for (const item of this.entries) {
+        const itemSpk = item._normSpeaker ?? this.normalizeSpeaker(item.speaker);
+        if (isConflictingSpeaker(itemSpk)) continue;
 
-        if (rawScore >= threshold) {
-          const isSpkMatch = speakerMatches(normCleanSpk, item.speaker);
-          // Bonus weight for matching speaker (+0.03) to break ties favorably
-          const weightedScore = rawScore + (isSpkMatch ? 0.03 : 0);
+        const normItem = item._normMessage ?? this.normalizeMessage(item.message);
+        if (normItem.length !== 3) continue;
+
+        const levDist = calcLevenshteinDistance(normCleanMsg, normItem);
+        const levScore = 1.0 - levDist / 3;
+
+        if (levScore >= effectiveThreshold) {
+          const isSpkMatch = isExactSpeakerMatch(itemSpk);
+          const weightedScore = levScore + (isSpkMatch ? 0.04 : 0);
 
           if (weightedScore > bestScore) {
             bestScore = weightedScore;
@@ -727,16 +848,83 @@ class ScriptManagerService {
           }
         }
       }
-
-      if (bestMatch && bestScore >= threshold) {
-        bestMatch.matchedCount = (bestMatch.matchedCount || 0) + 1;
-        bestMatch.lastUsed = new Date().toLocaleTimeString();
-        return {
-          matched: true,
-          entry: bestMatch,
-          similarityScore: Math.min(1.0, parseFloat(bestScore.toFixed(3))),
-        };
+    } else {
+      // 4c. Longer text (>= 4 chars): Bag-of-Bigrams Multiset Intersection
+      const queryBigramCounts = new Map<string, number>();
+      let queryTotalBigrams = 0;
+      for (let i = 0; i < normCleanMsg.length - 1; i++) {
+        const bg = normCleanMsg.slice(i, i + 2);
+        queryBigramCounts.set(bg, (queryBigramCounts.get(bg) || 0) + 1);
+        queryTotalBigrams++;
       }
+
+      // Mathematical length bounds:
+      const queryLen = normCleanMsg.length;
+      const minAllowedLen = Math.max(2, Math.floor((threshold / (2 - threshold)) * queryLen));
+      const maxAllowedLen = Math.ceil(((2 - threshold) / threshold) * queryLen);
+
+      // Collect candidate items from inverted index
+      const candidates = new Set<ScriptEntry>();
+      for (const bg of queryBigramCounts.keys()) {
+        const hits = this.ngramIndex.get(bg);
+        if (hits) {
+          for (const entry of hits) {
+            const itemSpk = entry._normSpeaker ?? this.normalizeSpeaker(entry.speaker);
+            if (!isConflictingSpeaker(itemSpk)) {
+              candidates.add(entry);
+            }
+          }
+        }
+      }
+
+      for (const entry of candidates) {
+        const normItem = entry._normMessage ?? this.normalizeMessage(entry.message);
+        const itemLen = normItem.length;
+
+        // Prune immediately if candidate length violates theoretical bounds
+        if (itemLen < minAllowedLen || itemLen > maxAllowedLen) continue;
+
+        const candidateBigrams = entry._numBigrams ?? Math.max(1, itemLen - 1);
+        const candidateBigramCounts = entry._bigramCounts;
+
+        // Calculate true Bag-of-Bigrams (multiset) intersection: sum(min(count_Q, count_C))
+        let sharedMatches = 0;
+        if (candidateBigramCounts) {
+          for (const [bg, qCount] of queryBigramCounts.entries()) {
+            const cCount = candidateBigramCounts.get(bg);
+            if (cCount) {
+              sharedMatches += Math.min(qCount, cCount);
+            }
+          }
+        }
+
+        // Candidate-specific exact minimum shared bigrams required:
+        const minRequiredShared = Math.ceil((threshold * (queryTotalBigrams + candidateBigrams)) / 2);
+        if (sharedMatches < minRequiredShared) continue;
+
+        const rawScore = (2 * sharedMatches) / (queryTotalBigrams + candidateBigrams);
+
+        if (rawScore >= effectiveThreshold) {
+          const itemSpk = entry._normSpeaker ?? this.normalizeSpeaker(entry.speaker);
+          const isSpkMatch = isExactSpeakerMatch(itemSpk);
+          const weightedScore = rawScore + (isSpkMatch ? 0.04 : 0);
+
+          if (weightedScore > bestScore) {
+            bestScore = weightedScore;
+            bestMatch = entry;
+          }
+        }
+      }
+    }
+
+    if (bestMatch && bestScore >= effectiveThreshold) {
+      bestMatch.matchedCount = (bestMatch.matchedCount || 0) + 1;
+      bestMatch.lastUsed = new Date().toLocaleTimeString();
+      return {
+        matched: true,
+        entry: bestMatch,
+        similarityScore: Math.min(1.0, parseFloat(bestScore.toFixed(3))),
+      };
     }
 
     return { matched: false, similarityScore: 0 };

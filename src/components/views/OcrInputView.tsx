@@ -87,7 +87,7 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
     refreshSnapshots();
   }, []);
 
-  // Load monitors from Tauri backend
+  // Load monitors from Tauri backend and sync OCR regions across windows
   useEffect(() => {
     invoke<MonitorInfo[]>("get_monitors")
       .then((m) => {
@@ -100,6 +100,34 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
         }
       })
       .catch(() => {});
+
+    const channel = new BroadcastChannel("vn_ocr_channel");
+    channel.onmessage = (event) => {
+      if (event.data?.type === "REGIONS_UPDATED" && Array.isArray(event.data?.regions)) {
+        setRegions(event.data.regions);
+        refreshSnapshots(event.data.regions);
+      }
+    };
+
+    const handleFocus = () => {
+      try {
+        const saved = localStorage.getItem("vn_ocr_regions");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setRegions(parsed);
+            refreshSnapshots(parsed);
+          }
+        }
+      } catch {}
+    };
+
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      channel.close();
+      window.removeEventListener("focus", handleFocus);
+    };
   }, []);
 
   // Open Region Selector Overlay Window on selected target monitor
