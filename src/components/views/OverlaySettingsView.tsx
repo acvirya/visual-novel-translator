@@ -7,6 +7,7 @@ import {
 import {
   OVERLAY_PRESETS,
   compileOverlayTemplate,
+  getOverlayAnimationCss,
   TemplatePreset,
   loadUserCustomPresets,
   saveUserCustomPresets,
@@ -32,6 +33,9 @@ import {
   ChevronUp,
   Type,
   Search,
+  Film,
+  RotateCcw,
+  Zap,
 } from "lucide-react";
 import { SegmentedControl } from "../common/SegmentedControl";
 
@@ -312,17 +316,101 @@ export const OverlaySettingsView: React.FC = () => {
     translatedMessage: sampleMessageEN,
   };
 
+  // Real-time animated dialogue state for sandbox preview
+  const [previewDialogue, setPreviewDialogue] = useState(sampleDialogue);
+  const [previewAnimTick, setPreviewAnimTick] = useState<number>(0);
+  const [previewAnimManualTrigger, setPreviewAnimManualTrigger] = useState<number>(0);
+
+  // Trigger preview animation with automatic 5s post-completion looping
+  useEffect(() => {
+    const mode = config.textAnimation || "none";
+    if (mode === "none") {
+      setPreviewDialogue(sampleDialogue);
+      return;
+    }
+
+    let isMounted = true;
+    let typeTimer: any = null;
+    let loopTimeout: any = null;
+
+    const runAnimation = () => {
+      if (!isMounted) return;
+
+      if (mode === "typewriter") {
+        const speed = Math.max(5, Math.min(100, config.animationSpeedMs || 25));
+        const targetTrans = sampleDialogue.translatedMessage || "";
+        const targetOrig = sampleDialogue.message || "";
+        const maxLen = Math.max(targetTrans.length, targetOrig.length);
+
+        if (maxLen === 0) {
+          setPreviewDialogue(sampleDialogue);
+          return;
+        }
+
+        let currentIdx = 1;
+        setPreviewDialogue({
+          ...sampleDialogue,
+          message: targetOrig.slice(0, 1),
+          translatedMessage: targetTrans.slice(0, 1),
+        });
+
+        if (typeTimer) clearInterval(typeTimer);
+        typeTimer = setInterval(() => {
+          if (!isMounted) return;
+          currentIdx++;
+          setPreviewDialogue({
+            ...sampleDialogue,
+            message: targetOrig.slice(0, currentIdx),
+            translatedMessage: targetTrans.slice(0, currentIdx),
+          });
+
+          if (currentIdx >= maxLen) {
+            clearInterval(typeTimer);
+            typeTimer = null;
+            // 5-second delay calculated after typewriter animation fully finishes
+            loopTimeout = setTimeout(() => {
+              if (isMounted) runAnimation();
+            }, 5000);
+          }
+        }, speed);
+      } else {
+        // CSS Transition modes (fade / blur)
+        setPreviewDialogue(sampleDialogue);
+        setPreviewAnimTick(Date.now());
+        const duration = config.animationSpeedMs || (mode === "blur" ? 350 : 250);
+        // 5-second delay calculated after CSS text transition finishes
+        loopTimeout = setTimeout(() => {
+          if (isMounted) runAnimation();
+        }, duration + 5000);
+      }
+    };
+
+    runAnimation();
+
+    return () => {
+      isMounted = false;
+      if (typeTimer) clearInterval(typeTimer);
+      if (loopTimeout) clearTimeout(loopTimeout);
+    };
+  }, [sampleTextType, config.textAnimation, config.animationSpeedMs, previewAnimManualTrigger]);
+
+  const handleReplayPreview = () => {
+    setPreviewAnimManualTrigger(Date.now());
+  };
+
   // Compile real-time preview
   const speakerSize = config.speakerFontSize || 16;
   const messageSize = config.messageFontSize || config.fontSize || 20;
   const compiledHtml = compileOverlayTemplate(
     config.customTemplateHtml || OVERLAY_PRESETS[0].html,
-    sampleDialogue,
+    previewDialogue,
     config
   );
   const compiledCss = config.customTemplateCss || OVERLAY_PRESETS[0].css;
+  const animCss = getOverlayAnimationCss(config.textAnimation, config.animationSpeedMs);
   const rootVars = `:root { --speaker-font-size: ${speakerSize}px; --message-font-size: ${messageSize}px; --font-size: ${messageSize}px; }`;
-  const compiledPreviewHtml = `<style>${rootVars}\n${compiledCss}</style>${compiledHtml}`;
+  const animClass = config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : "";
+  const compiledPreviewHtml = `<style>${rootVars}\n${animCss}\n${compiledCss}</style><div class="${animClass}">${compiledHtml}</div>`;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "14px", width: "100%", minWidth: 0 }}>
@@ -606,7 +694,7 @@ export const OverlaySettingsView: React.FC = () => {
           }}
         >
           {/* Rendered Overlay Box */}
-          <div style={{ width: "100%", maxWidth: "800px", overflow: "visible" }} dangerouslySetInnerHTML={{ __html: compiledPreviewHtml }} />
+          <div key={previewAnimTick} style={{ width: "100%", maxWidth: "800px", overflow: "visible" }} dangerouslySetInnerHTML={{ __html: compiledPreviewHtml }} />
         </div>
 
         {/* Display Fields & Font Adjustments Row (Under Preview) */}
@@ -692,7 +780,119 @@ export const OverlaySettingsView: React.FC = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* 3. ADVANCED CUSTOM TEMPLATE & CODE ENGINE (Collapsible)                   */}
+      {/* 3. DIALOGUE TEXT ANIMATION & STREAMING EFFECTS                            */}
+      {/* ========================================================================= */}
+      <div className="card" style={{ margin: 0 }}>
+        <div className="card-header" style={{ marginBottom: "12px" }}>
+          <div>
+            <span className="card-title">
+              <Film size={16} color="var(--accent-cyan)" /> Subtitle Text Animation
+            </span>
+            <span className="card-subtitle">
+              Choose how translated dialogue text appears on screen (Typewriter stream or CSS transitions)
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleReplayPreview}
+            className="btn-secondary"
+            style={{ height: "28px", padding: "0 10px", fontSize: "11.5px" }}
+            title="Replay the animation in the live preview sandbox above"
+          >
+            <RotateCcw size={12} color="var(--accent-cyan)" />
+            <span>Replay Animation</span>
+          </button>
+        </div>
+
+        {/* Animation Mode Selector */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <SegmentedControl<"none" | "typewriter" | "fade" | "blur">
+              options={[
+                { id: "none", label: "None (Instant)" },
+                { id: "typewriter", label: "Typewriter (VN Stream)" },
+                { id: "fade", label: "Smooth Text Fade" },
+                { id: "blur", label: "Blur Reveal Text" },
+              ]}
+              value={config.textAnimation || "none"}
+              onChange={(mode) => updateConfig({ textAnimation: mode })}
+              size="md"
+            />
+          </div>
+
+          {/* Speed / Duration Slider (When animation is enabled) */}
+          {config.textAnimation && config.textAnimation !== "none" && (
+            <div
+              style={{
+                backgroundColor: "var(--bg-app)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius-sm)",
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+              }}
+            >
+              {config.textAnimation === "typewriter" ? (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "4px" }}>
+                      <Zap size={13} color="var(--accent-gold)" /> Typewriter Speed (Per Character):
+                    </label>
+                    <strong style={{ fontSize: "12px", color: "var(--accent-gold)" }}>
+                      {config.animationSpeedMs || 25} ms / char{" "}
+                      <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 400 }}>
+                        ({(config.animationSpeedMs || 25) <= 15 ? "Fast" : (config.animationSpeedMs || 25) <= 35 ? "Normal" : "Slow"})
+                      </span>
+                    </strong>
+                  </div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={80}
+                    step={1}
+                    value={config.animationSpeedMs || 25}
+                    onChange={(e) => updateConfig({ animationSpeedMs: Number(e.target.value) })}
+                    style={{ width: "100%" }}
+                  />
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-muted)", marginTop: "2px" }}>
+                    <span>5ms (Ultra Fast)</span>
+                    <span>80ms (Slow)</span>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <label style={{ fontSize: "12px", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: "4px" }}>
+                      <Zap size={13} color="var(--accent-cyan)" /> Text Transition Duration:
+                    </label>
+                    <strong style={{ fontSize: "12px", color: "var(--accent-cyan)" }}>
+                      {config.animationSpeedMs || (config.textAnimation === "blur" ? 350 : 250)} ms
+                    </strong>
+                  </div>
+                  <input
+                    type="range"
+                    min={100}
+                    max={600}
+                    step={50}
+                    value={config.animationSpeedMs || (config.textAnimation === "blur" ? 350 : 250)}
+                    onChange={(e) => updateConfig({ animationSpeedMs: Number(e.target.value) })}
+                    style={{ width: "100%" }}
+                  />
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-muted)", marginTop: "2px" }}>
+                    <span>100ms (Snappy)</span>
+                    <span>600ms (Cinematic)</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 4. ADVANCED CUSTOM TEMPLATE & CODE ENGINE (Collapsible)                   */}
       {/* ========================================================================= */}
       <div className="card" style={{ margin: 0 }}>
         <div

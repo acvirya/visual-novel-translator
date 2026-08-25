@@ -964,3 +964,41 @@ export function isBuiltInPreset(presetId: string): boolean {
   return OVERLAY_PRESETS.some((p) => p.id === presetId);
 }
 
+/**
+ * Standard CSS Keyframes for Subtitle Text Animation (Targets text nodes only, preserving box backdrop)
+ */
+export function getOverlayAnimationCss(animationMode?: string, speedMs?: number): string {
+  const duration = speedMs || (animationMode === "blur" ? 350 : 250);
+  return `
+@keyframes vnTextFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vnTextBlurReveal {
+  from { opacity: 0; filter: blur(6px); }
+  to { opacity: 1; filter: blur(0); }
+}
+
+.vn-anim-fade .vn-message-trans,
+.vn-anim-fade .vn-message-jp,
+.vn-anim-fade .vn-text-anim-target,
+.vn-anim-fade [class*="message"],
+.vn-anim-fade [class*="dialogue"],
+.vn-anim-fade [class*="text"],
+.vn-anim-fade [class*="content"] {
+  animation: vnTextFadeIn ${duration}ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.vn-anim-blur .vn-message-trans,
+.vn-anim-blur .vn-message-jp,
+.vn-anim-blur .vn-text-anim-target,
+.vn-anim-blur [class*="message"],
+.vn-anim-blur [class*="dialogue"],
+.vn-anim-blur [class*="text"],
+.vn-anim-blur [class*="content"] {
+  animation: vnTextBlurReveal ${duration}ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+`;
+}
+

@@ -5,7 +5,7 @@ import {
   OverlayDialogueMessage,
   OverlayEvent,
 } from "../../utils/overlayChannel";
-import { compileOverlayTemplate } from "../../utils/overlayTemplateEngine";
+import { compileOverlayTemplate, getOverlayAnimationCss } from "../../utils/overlayTemplateEngine";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, X, Move } from "lucide-react";
 
@@ -292,12 +292,67 @@ export const OverlayWindow: React.FC = () => {
     }
   };
 
+  const [displayedDialogue, setDisplayedDialogue] = useState<OverlayDialogueMessage>(EMPTY_DIALOGUE);
+  const [animTick, setAnimTick] = useState<number>(0);
+
+  // Handle Text Animation Subsystem (Typewriter streaming & CSS keyframes)
+  useEffect(() => {
+    if (isEditing) {
+      setDisplayedDialogue(SAMPLE_EDIT_DIALOGUE);
+      return;
+    }
+
+    const mode = config.textAnimation || "none";
+    if (mode === "none" || (!dialogue.message && !dialogue.translatedMessage)) {
+      setDisplayedDialogue(dialogue);
+      return;
+    }
+
+    if (mode === "typewriter") {
+      const speed = Math.max(5, Math.min(100, config.animationSpeedMs || 25));
+      const targetTrans = dialogue.translatedMessage || "";
+      const targetOrig = dialogue.message || "";
+      const maxLen = Math.max(targetTrans.length, targetOrig.length);
+
+      if (maxLen === 0) {
+        setDisplayedDialogue(dialogue);
+        return;
+      }
+
+      let currentIdx = 1;
+      setDisplayedDialogue({
+        ...dialogue,
+        message: targetOrig.slice(0, 1),
+        translatedMessage: targetTrans.slice(0, 1),
+      });
+
+      const timer = setInterval(() => {
+        currentIdx++;
+        setDisplayedDialogue({
+          ...dialogue,
+          message: targetOrig.slice(0, currentIdx),
+          translatedMessage: targetTrans.slice(0, currentIdx),
+        });
+
+        if (currentIdx >= maxLen) {
+          clearInterval(timer);
+        }
+      }, speed);
+
+      return () => clearInterval(timer);
+    } else {
+      // CSS Transitions (Fade / Slide / Blur)
+      setDisplayedDialogue(dialogue);
+      setAnimTick(Date.now());
+    }
+  }, [dialogue, isEditing, config.textAnimation, config.animationSpeedMs]);
+
   const currentX = isEditing ? boxRect.x : config.x;
   const currentY = isEditing ? boxRect.y : config.y;
   const currentW = isEditing ? boxRect.width : config.width;
   const currentH = isEditing ? boxRect.height : config.height;
 
-  const activeDialogue = isEditing ? SAMPLE_EDIT_DIALOGUE : dialogue;
+  const activeDialogue = isEditing ? SAMPLE_EDIT_DIALOGUE : displayedDialogue;
   const hasText = Boolean(
     activeDialogue.speaker ||
     activeDialogue.translatedSpeaker ||
@@ -444,16 +499,16 @@ export const OverlayWindow: React.FC = () => {
                 "--overlay-font-size": `${config.fontSize || 20}px`,
               }}
             >
-              {/* Inject Scoped CSS */}
-              {config.customTemplateCss && (
-                <style
-                  dangerouslySetInnerHTML={{
-                    __html: config.customTemplateCss,
-                  }}
-                />
-              )}
+              {/* Inject Scoped CSS & Animation Keyframes */}
+              <style
+                dangerouslySetInnerHTML={{
+                  __html: `${getOverlayAnimationCss(config.textAnimation, config.animationSpeedMs)}\n${config.customTemplateCss || ""}`,
+                }}
+              />
               {/* Render Compiled Template HTML with reactive config */}
               <div
+                key={animTick}
+                className={config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : ""}
                 dangerouslySetInnerHTML={{
                   __html: compileOverlayTemplate(config.customTemplateHtml, activeDialogue, config),
                 }}
@@ -461,7 +516,16 @@ export const OverlayWindow: React.FC = () => {
             </div>
           ) : (
             /* Standard Configurable Subtitle Box */
-            <>
+            <div
+              key={animTick}
+              className={config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : ""}
+              style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%" }}
+            >
+              <style
+                dangerouslySetInnerHTML={{
+                  __html: getOverlayAnimationCss(config.textAnimation, config.animationSpeedMs),
+                }}
+              />
               {/* Speaker Name Row (JP & Translated) */}
               {(config.showSpeaker || config.showTranslatedSpeaker) && (activeDialogue.speaker || activeDialogue.translatedSpeaker) && (
                 <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
@@ -498,6 +562,7 @@ export const OverlayWindow: React.FC = () => {
               {/* Message (Source Text / Dialogue) */}
               {(config.showMessage || !activeDialogue.translatedMessage) && activeDialogue.message && (
                 <div
+                  className="vn-text-anim-target"
                   style={{
                     fontSize: `${config.messageFontSize || config.fontSize}px`,
                     fontFamily: "var(--font-jp)",
@@ -514,6 +579,7 @@ export const OverlayWindow: React.FC = () => {
               {/* Translated Message */}
               {config.showTranslatedMessage && activeDialogue.translatedMessage && (
                 <div
+                  className="vn-text-anim-target"
                   style={{
                     fontSize: `${config.messageFontSize || config.fontSize}px`,
                     fontWeight: 600,
@@ -526,7 +592,7 @@ export const OverlayWindow: React.FC = () => {
                   {activeDialogue.translatedMessage}
                 </div>
               )}
-            </>
+            </div>
           )}
 
           {/* 8-Way Resize Handles in Edit Mode */}

@@ -163,6 +163,10 @@ export interface OverlayConfig {
   templatePreset?: string; // "classic" | "glassmorphism" | "cyberpunk" | "cinematic" | "rpg" | "custom"
   customTemplateHtml?: string;
   customTemplateCss?: string;
+
+  // Text Animation Subsystem
+  textAnimation?: "none" | "typewriter" | "fade" | "blur";
+  animationSpeedMs?: number; // Speed in ms (typewriter: ms/char [10-80], css: duration [100-600])
 }
 
 export interface NGramSettings {
