@@ -106,7 +106,9 @@ export const useBatchStore = create<BatchState>((set) => {
       })),
     updateFile: (file) =>
       set((state) => ({
-        queuedFiles: state.queuedFiles.map((f) => (f.id === file.id ? { ...file } : f)),
+        queuedFiles: state.queuedFiles.map((f) =>
+          f.id === file.id ? { ...file, items: Array.isArray(file.items) ? [...file.items] : [] } : f
+        ),
       })),
     setSelectedFileId: (selectedFileId) => set({ selectedFileId }),
     setSearchFilter: (searchFilter) => set({ searchFilter }),

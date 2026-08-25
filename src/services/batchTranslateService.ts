@@ -4,6 +4,7 @@ import { buildCompleteSystemPrompt, ChatMessage, calculateUsageCost, OpenRouterC
 import { extractSpeakerAndDialogue, executePreprocessingPipeline } from "../utils/textPreprocessor";
 import { logger } from "./loggerService";
 import { useBatchStore } from "../stores/useBatchStore";
+import { settingsManager } from "./settingsManager";
 
 export interface BatchItem {
   id: number;
@@ -79,7 +80,9 @@ export interface BatchProgressUpdate {
   };
 }
 
-const JAPANESE_CHAR_REGEX = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/;
+// Comprehensive East Asian character detection covering Hiragana, Katakana, CJK Unified Ideographs, Extensions, Compatibility, and Hangul
+const SOURCE_EAST_ASIAN_CHAR_REGEX =
+  /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/;
 
 export function isExplicitTagged(item: { translatedMessage?: string; translatedSpeaker?: string }): boolean {
   const msg = (item.translatedMessage || "").trim().toUpperCase();
@@ -117,9 +120,9 @@ export function isGenuinelyTranslated(item: {
   }
 
   // If the translated message is identical to the raw original message:
-  // - If the original contains Japanese characters, then identical text means un-translated fallback copas (false).
-  // - If the original has NO Japanese characters (e.g. "...", "……", "!? ", "OK", "Yes"), then identical text is VALID (true)!
-  if (transMsg === rawMsg && JAPANESE_CHAR_REGEX.test(rawMsg)) {
+  // - If the original contains East Asian / source characters, then identical text means un-translated fallback copas (false).
+  // - If the original has NO source characters (e.g. "...", "……", "!? ", "OK", "Yes"), then identical text is VALID (true)!
+  if (transMsg === rawMsg && SOURCE_EAST_ASIAN_CHAR_REGEX.test(rawMsg)) {
     return false;
   }
 
@@ -135,9 +138,23 @@ export function isProcessed(item: {
   return isGenuinelyTranslated(item) || isExplicitTagged(item);
 }
 
+export function cancellableSleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const timer = setTimeout(() => resolve(), ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+}
+
 class BatchTranslateService {
   private isRunning = false;
-  private isPaused = false;
   private abortController: AbortController | null = null;
   private listeners: ((progress: BatchProgressUpdate) => void)[] = [];
 
@@ -157,19 +174,16 @@ class BatchTranslateService {
     return this.isRunning;
   }
 
-  public isPausedState(): boolean {
-    return this.isPaused;
-  }
-
   /**
-   * Computes the target absolute output path for a given source script file
+   * Computes the target absolute output path for a given source script file preserving its original extension
    */
   public calculateOutputPath(sourcePath: string, outputDir?: string, fileSuffix = "_translated"): string {
     const cleanSource = sourcePath.replace(/\\/g, "/");
     const fileName = cleanSource.split("/").pop() || "script.jsonl";
-    const baseName = fileName.replace(/\.[^/.]+$/, "");
-    const ext = fileName.endsWith(".json") ? ".json" : ".jsonl";
-    const outFileName = `${baseName}${fileSuffix || "_translated"}${ext}`;
+    const lastDot = fileName.lastIndexOf(".");
+    const baseName = lastDot !== -1 ? fileName.substring(0, lastDot) : fileName;
+    const originalExt = lastDot !== -1 ? fileName.substring(lastDot) : ".jsonl";
+    const outFileName = `${baseName}${fileSuffix || "_translated"}${originalExt}`;
 
     if (outputDir && outputDir.trim()) {
       const dir = outputDir.trim().replace(/\\/g, "/").replace(/\/$/, "");
@@ -200,23 +214,35 @@ class BatchTranslateService {
         if (Array.isArray(existingItems) && existingItems.length > 0) {
           let translatedCount = 0;
           let explicitCount = 0;
-
-          file.items.forEach((item, idx) => {
-            const found = existingItems.find((e) => e.id === item.id) || existingItems[idx];
+          const existingMap = new Map<number, BatchItem>(existingItems.map((e) => [e.id, e]));
+          const hydratedItems = file.items.map((item, idx) => {
+            const found = existingMap.get(item.id) || existingItems[idx];
             if (found && isGenuinelyTranslated(found)) {
-              item.translatedSpeaker = found.translatedSpeaker || undefined;
-              item.translatedMessage = found.translatedMessage;
               translatedCount++;
+              return {
+                ...item,
+                translatedSpeaker: found.translatedSpeaker || undefined,
+                translatedMessage: found.translatedMessage,
+                rawJson: item.rawJson && found.rawJson ? { ...item.rawJson, ...found.rawJson } : item.rawJson,
+              };
             } else if (found && isExplicitTagged(found)) {
-              item.translatedSpeaker = found.translatedSpeaker || undefined;
-              item.translatedMessage = found.translatedMessage;
               explicitCount++;
+              return {
+                ...item,
+                translatedSpeaker: found.translatedSpeaker || undefined,
+                translatedMessage: found.translatedMessage,
+                rawJson: item.rawJson && found.rawJson ? { ...item.rawJson, ...found.rawJson } : item.rawJson,
+              };
             } else {
-              item.translatedSpeaker = undefined;
-              item.translatedMessage = undefined;
+              return {
+                ...item,
+                translatedSpeaker: undefined,
+                translatedMessage: undefined,
+              };
             }
           });
 
+          file.items = hydratedItems;
           file.completedLines = translatedCount;
           file.explicitLines = explicitCount;
           if (translatedCount >= file.totalLines && file.totalLines > 0 && explicitCount === 0) {
@@ -229,7 +255,7 @@ class BatchTranslateService {
             "BatchTranslate",
             `[Hydrate] Verified existing output file on disk for "${file.name}" (${translatedCount}/${file.totalLines} lines genuinely translated, ${explicitCount} explicit).`
           );
-          return { ...file };
+          return { ...file, items: [...hydratedItems] };
         }
       }
     } catch (err) {
@@ -365,27 +391,29 @@ class BatchTranslateService {
       } catch {}
     }
 
-    // 2. Try JSONL format (line-by-line JSON)
-    const lines = trimmed.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+    // 2. Line-by-line parser for JSONL, text dialogue, and standard script formats
+    const rawLines = trimmed.split(/\r?\n/);
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i].trim();
       if (!line) continue;
 
+      // Fast single-line JSON parsing
       if (line.startsWith("{") && line.endsWith("}")) {
         try {
           const obj = JSON.parse(line);
           items.push(extractFromObject(obj, items.length));
+          continue;
         } catch {}
-      } else {
-        // Plain text line
-        const ext = extractSpeakerAndDialogue(line);
-        items.push({
-          id: items.length + 1,
-          originalSpeaker: ext.speaker || undefined,
-          originalMessage: ext.message,
-          translatedMessage: !ext.message ? "" : undefined,
-        });
       }
+
+      // Plain text or standard script line format
+      const ext = extractSpeakerAndDialogue(line);
+      items.push({
+        id: items.length + 1,
+        originalSpeaker: ext.speaker || undefined,
+        originalMessage: ext.message,
+        translatedMessage: !ext.message ? "" : undefined,
+      });
     }
 
     return items;
@@ -398,13 +426,12 @@ class BatchTranslateService {
   ): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
-    this.isPaused = false;
     this.abortController = new AbortController();
     useBatchStore.getState().setIsRunning(true);
     useBatchStore.getState().setIsPaused(false);
 
     try {
-      const apiKey = localStorage.getItem("vn_openrouter_api_key") || "";
+      const apiKey = settingsManager.getOpenRouterApiKey() || localStorage.getItem("vn_openrouter_api_key") || "";
       const concurrency = Math.max(1, Math.min(8, settings.concurrency || 2));
 
       logger.info(
@@ -416,13 +443,56 @@ class BatchTranslateService {
       for (const f of files) {
         if (f.status !== "completed" || settings.translateExplicitOnly || f.items.some((it) => isExplicitTagged(it))) {
           await this.hydrateExistingTranslationFromDisk(f, settings.outputDir, settings.fileSuffix, settings.keyMapping);
-          onFileUpdated({ ...f });
+          onFileUpdated({ ...f, items: [...f.items] });
         }
       }
 
-      let totalAllLines = files.reduce((acc, f) => acc + f.totalLines, 0);
-      let completedAllLines = files.reduce((acc, f) => acc + f.completedLines, 0);
-      let completedFilesCount = files.filter((f) => (f.status as string) === "completed").length;
+      // Central progress map to ensure atomic and flicker-free updates across concurrent workers
+      const progressMap = new Map<string, { total: number; completed: number; explicit: number; status: string }>();
+      files.forEach((f) => {
+        progressMap.set(f.id, {
+          total: f.totalLines,
+          completed: f.completedLines,
+          explicit: f.explicitLines || 0,
+          status: f.status,
+        });
+      });
+
+      const sendProgressUpdate = (activeFile: BatchFileEntry, recentLine?: BatchProgressUpdate["recentLine"]) => {
+        progressMap.set(activeFile.id, {
+          total: activeFile.totalLines,
+          completed: activeFile.completedLines,
+          explicit: activeFile.explicitLines || 0,
+          status: activeFile.status,
+        });
+
+        let totalAll = 0;
+        let completedAll = 0;
+        let explicitAll = 0;
+        let completedFiles = 0;
+
+        for (const stats of progressMap.values()) {
+          totalAll += stats.total;
+          completedAll += stats.completed;
+          explicitAll += stats.explicit;
+          if (stats.status === "completed") {
+            completedFiles++;
+          }
+        }
+
+        this.notify({
+          activeFileId: activeFile.id,
+          activeFileName: activeFile.name,
+          totalFiles: files.length,
+          completedFiles,
+          totalLines: totalAll,
+          completedLines: completedAll,
+          explicitLines: explicitAll,
+          currentBatch: 0,
+          totalBatches: 0,
+          recentLine,
+        });
+      };
 
       let loopPass = 0;
       while (!this.abortController?.signal.aborted) {
@@ -449,42 +519,52 @@ class BatchTranslateService {
           );
         }
 
+        // Thread-safe atomic file queue using shift() to prevent index shifting during parallel execution
         const uncompletedQueue = [...uncompletedFiles];
-        const getNextFile = () => uncompletedQueue.shift();
+        const activeFileIds = new Set<string>();
+
+        const getNextFile = () => {
+          while (uncompletedQueue.length > 0) {
+            const candidate = uncompletedQueue.shift()!;
+            if (!activeFileIds.has(candidate.id)) {
+              activeFileIds.add(candidate.id);
+              return candidate;
+            }
+          }
+          return null;
+        };
 
         const worker = async (_workerId: number) => {
           while (!this.abortController?.signal.aborted) {
             const file = getNextFile();
             if (!file) break;
-            if (settings.translateExplicitOnly && !file.items.some((it) => isExplicitTagged(it))) continue;
-            if (!settings.translateExplicitOnly && (file.status as string) === "completed") continue;
+            if (settings.translateExplicitOnly && !file.items.some((it) => isExplicitTagged(it))) {
+              activeFileIds.delete(file.id);
+              continue;
+            }
+            if (!settings.translateExplicitOnly && (file.status as string) === "completed") {
+              activeFileIds.delete(file.id);
+              continue;
+            }
 
-            await this.processSingleFile(
-              file,
-              files.indexOf(file),
-              files.length,
-              settings,
-              apiKey,
-              () => {
-                completedAllLines = files.reduce((acc, f) => acc + f.completedLines, 0);
-                completedFilesCount = files.filter((f) => (f.status as string) === "completed").length;
-                this.notify({
-                  activeFileId: file.id,
-                  activeFileName: file.name,
-                  totalFiles: files.length,
-                  completedFiles: completedFilesCount,
-                  totalLines: totalAllLines,
-                  completedLines: completedAllLines,
-                  currentBatch: 0,
-                  totalBatches: 0,
-                });
-              },
-              (f) => {
-                onFileUpdated({ ...f });
-              }
-            );
-
-            completedFilesCount = files.filter((f) => (f.status as string) === "completed").length;
+            try {
+              const fileIdx = files.findIndex((f) => f.id === file.id);
+              await this.processSingleFile(
+                file,
+                fileIdx !== -1 ? fileIdx : 0,
+                files.length,
+                settings,
+                apiKey,
+                (recentLine) => {
+                  sendProgressUpdate(file, recentLine);
+                },
+                (f) => {
+                  onFileUpdated({ ...f, items: [...f.items] });
+                }
+              );
+            } finally {
+              activeFileIds.delete(file.id);
+            }
           }
         };
 
@@ -519,14 +599,12 @@ class BatchTranslateService {
           `[Auto-Continue] ${stillRemaining.length} file(s) incomplete after pass ${loopPass}. Cooling down 5s before auto-continuing...`
         );
 
-        for (let s = 5; s > 0; s--) {
-          if (this.abortController?.signal.aborted) break;
-          await new Promise((r) => setTimeout(r, 1000));
-        }
+        await cancellableSleep(5000, this.abortController?.signal);
       }
 
-      completedAllLines = files.reduce((acc, f) => acc + f.completedLines, 0);
-      completedFilesCount = files.filter((f) => (f.status as string) === "completed").length;
+      const totalAllLines = files.reduce((acc, f) => acc + f.totalLines, 0);
+      const completedAllLines = files.reduce((acc, f) => acc + f.completedLines, 0);
+      const completedFilesCount = files.filter((f) => (f.status as string) === "completed").length;
 
       logger.info(
         "BatchTranslate",
@@ -534,7 +612,6 @@ class BatchTranslateService {
       );
     } finally {
       this.isRunning = false;
-      this.isPaused = false;
       useBatchStore.getState().setIsRunning(false);
       useBatchStore.getState().setIsPaused(false);
     }
@@ -546,7 +623,7 @@ class BatchTranslateService {
     totalFilesCount: number,
     settings: BatchSettings,
     apiKey: string,
-    onLineTranslated: () => void,
+    onLineTranslated: (recentLine?: BatchProgressUpdate["recentLine"]) => void,
     onFileUpdated: (file: BatchFileEntry) => void
   ): Promise<void> {
     file.status = "processing";
@@ -586,10 +663,6 @@ class BatchTranslateService {
 
       while (true) {
         if (this.abortController?.signal.aborted) return;
-        while (this.isPaused) {
-          await new Promise((r) => setTimeout(r, 300));
-          if (this.abortController?.signal.aborted) return;
-        }
 
         // Dynamically find the first line still tagged explicit that has NOT been attempted in this pass
         const startIdx = file.items.findIndex(
@@ -635,8 +708,8 @@ class BatchTranslateService {
                 translated_message: it.translatedMessage,
               }));
               contextHistory.push({
-                userContent: JSON.stringify(uJson, null, 2),
-                assistantContent: JSON.stringify(aJson, null, 2),
+                userContent: JSON.stringify({ lines: uJson }),
+                assistantContent: JSON.stringify(aJson),
                 lineCount: chunk.length,
               });
             }
@@ -652,15 +725,17 @@ class BatchTranslateService {
           if (this.abortController?.signal.aborted) break;
           if (!isInfiniteRetry && retryAttempts >= maxRetries) break;
 
-          while (this.isPaused) {
-            await new Promise((r) => setTimeout(r, 300));
-            if (this.abortController?.signal.aborted) break;
-          }
-          if (this.abortController?.signal.aborted) break;
-
           try {
             if (isLlm) {
-              const activeContext = retryAttempts >= 2 ? [] : contextHistory;
+              const isParsingError =
+                lastErrorMessage.includes("JSON") ||
+                lastErrorMessage.includes("syntax") ||
+                lastErrorMessage.includes("schema") ||
+                lastErrorMessage.includes("validation");
+
+              // Only isolate context for this retry turn if poisoned by a parsing hallucination;
+              // Preserve context history across rate-limit (429) or transient network/server errors (502/503)
+              const activeContext = retryAttempts >= 2 && isParsingError ? [] : contextHistory;
 
               const resultTurn = await this.translateBatchLlm(
                 chunkItems,
@@ -699,39 +774,42 @@ class BatchTranslateService {
                   }
                   item.translatedSpeaker = res.translatedSpeaker || cleanSpk;
                   item.translatedMessage = res.translatedMessage;
-                  onLineTranslated();
+                  onLineTranslated({
+                    id: item.id,
+                    fileName: file.name,
+                    speaker: cleanSpk,
+                    translatedSpeaker: item.translatedSpeaker,
+                    original: cleanMsg,
+                    translated: item.translatedMessage,
+                  });
                 }
               }
             }
 
             batchSuccess = true;
             file.error = undefined;
+            // Clone items immutably so React/Zustand memoized row components trigger re-render
+            file.items = file.items.map((it) => {
+              const match = chunkItems.find((ci) => ci.id === it.id);
+              return match ? { ...match } : it;
+            });
             file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
             file.explicitLines = file.items.filter((it) => isExplicitTagged(it)).length;
             await this.saveTranslatedFile(file, settings);
-            onFileUpdated(file);
+            onFileUpdated({ ...file, items: [...file.items] });
 
-            this.notify({
-              activeFileId: file.id,
-              activeFileName: file.name,
-              totalFiles: totalFilesCount,
-              completedFiles: 0,
-              totalLines: file.totalLines,
-              completedLines: file.completedLines,
-              explicitLines: file.explicitLines,
-              currentBatch: explicitBatchNum,
-              totalBatches: 0,
-              recentLine: chunkItems[0]
-                ? {
-                    id: chunkItems[0].id,
-                    fileName: file.name,
-                    speaker: chunkItems[0].originalSpeaker,
-                    translatedSpeaker: chunkItems[0].translatedSpeaker,
-                    original: chunkItems[0].originalMessage,
-                    translated: chunkItems[0].translatedMessage || "",
-                  }
-                : undefined,
-            });
+            const recentLine = chunkItems[0]
+              ? {
+                  id: chunkItems[0].id,
+                  fileName: file.name,
+                  speaker: chunkItems[0].originalSpeaker,
+                  translatedSpeaker: chunkItems[0].translatedSpeaker,
+                  original: chunkItems[0].originalMessage,
+                  translated: chunkItems[0].translatedMessage || "",
+                }
+              : undefined;
+
+            onLineTranslated(recentLine);
           } catch (err: any) {
             if (this.abortController?.signal.aborted) break;
             retryAttempts++;
@@ -739,10 +817,12 @@ class BatchTranslateService {
             const isRateLimit =
               lastErrorMessage.includes("429") ||
               lastErrorMessage.toLowerCase().includes("rate-limit") ||
-              lastErrorMessage.toLowerCase().includes("too many requests");
+              lastErrorMessage.toLowerCase().includes("too many requests") ||
+              lastErrorMessage.toLowerCase().includes("quota");
+
             const backoffMs = isRateLimit
-              ? Math.min(30000, 2000 * Math.pow(1.5, Math.min(retryAttempts, 8)))
-              : Math.min(10000, 1500 + Math.min(retryAttempts, 8) * 1000);
+              ? Math.min(120000, 2000 * Math.pow(1.6, Math.min(retryAttempts, 10)) + Math.random() * 2000)
+              : Math.min(15000, 1500 + Math.min(retryAttempts, 8) * 1000 + Math.random() * 500);
             const attemptInfo = isInfiniteRetry ? `Retry #${retryAttempts}` : `Attempt ${retryAttempts}/${maxRetries}`;
 
             logger.warn(
@@ -752,8 +832,8 @@ class BatchTranslateService {
 
             file.status = "processing";
             file.error = `Retrying explicit batch #${explicitBatchNum} (${attemptInfo}): ${lastErrorMessage.slice(0, 70)}`;
-            onFileUpdated(file);
-            await new Promise((r) => setTimeout(r, backoffMs));
+            onFileUpdated({ ...file, items: [...file.items] });
+            await cancellableSleep(backoffMs, this.abortController?.signal);
           }
         }
 
@@ -773,7 +853,7 @@ class BatchTranslateService {
         }
 
         if (settings.delayMs > 0 && isLlm) {
-          await new Promise((r) => setTimeout(r, settings.delayMs));
+          await cancellableSleep(settings.delayMs, this.abortController?.signal);
         }
       }
 
@@ -847,8 +927,8 @@ class BatchTranslateService {
             translated_message: it.translatedMessage,
           }));
           contextHistory.push({
-            userContent: JSON.stringify(uJson, null, 2),
-            assistantContent: JSON.stringify(aJson, null, 2),
+            userContent: JSON.stringify({ lines: uJson }),
+            assistantContent: JSON.stringify(aJson),
             lineCount: chunk.length,
           });
         }
@@ -860,11 +940,6 @@ class BatchTranslateService {
 
     for (let bIdx = 0; bIdx < batchChunks.length; bIdx++) {
       if (this.abortController?.signal.aborted) return;
-
-      while (this.isPaused) {
-        await new Promise((r) => setTimeout(r, 300));
-        if (this.abortController?.signal.aborted) return;
-      }
 
       const chunkIndices = batchChunks[bIdx];
       const chunkItems = chunkIndices.map((idx) => file.items[idx]);
@@ -878,16 +953,17 @@ class BatchTranslateService {
         if (this.abortController?.signal.aborted) break;
         if (!isInfiniteRetry && retryAttempts >= maxRetries) break;
 
-        while (this.isPaused) {
-          await new Promise((r) => setTimeout(r, 300));
-          if (this.abortController?.signal.aborted) break;
-        }
-        if (this.abortController?.signal.aborted) break;
-
         try {
           if (isLlm) {
-            // On repeated retries (>= 2), clear previous context turns to break out of context-poisoned hallucination loops
-            const activeContext = retryAttempts >= 2 ? [] : contextHistory;
+            const isParsingError =
+              lastErrorMessage.includes("JSON") ||
+              lastErrorMessage.includes("syntax") ||
+              lastErrorMessage.includes("schema") ||
+              lastErrorMessage.includes("validation");
+
+            // Only isolate context for this retry turn if poisoned by a parsing hallucination;
+            // Preserve context history across rate-limit (429) or transient network/server errors (502/503)
+            const activeContext = retryAttempts >= 2 && isParsingError ? [] : contextHistory;
 
             const resultTurn = await this.translateBatchLlm(
               chunkItems,
@@ -933,25 +1009,13 @@ class BatchTranslateService {
               item.translatedMessage = res.translatedMessage;
 
               file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
-              onLineTranslated();
-
-              this.notify({
-                activeFileId: file.id,
-                activeFileName: file.name,
-                totalFiles: totalFilesCount,
-                completedFiles: 0,
-                totalLines: 0,
-                completedLines: 0,
-                currentBatch: bIdx + 1,
-                totalBatches: batchChunks.length,
-                recentLine: {
-                  id: item.id,
-                  fileName: file.name,
-                  speaker: item.originalSpeaker,
-                  translatedSpeaker: item.translatedSpeaker,
-                  original: item.originalMessage,
-                  translated: item.translatedMessage,
-                },
+              onLineTranslated({
+                id: item.id,
+                fileName: file.name,
+                speaker: item.originalSpeaker,
+                translatedSpeaker: item.translatedSpeaker,
+                original: item.originalMessage,
+                translated: item.translatedMessage,
               });
 
               if (settings.delayMs > 0) {
@@ -962,6 +1026,11 @@ class BatchTranslateService {
 
           batchSuccess = true;
           file.error = undefined;
+          // Clone items immutably so React/Zustand memoized row components trigger re-render
+          file.items = file.items.map((it) => {
+            const match = chunkItems.find((ci) => ci.id === it.id);
+            return match ? { ...match } : it;
+          });
           file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
           file.explicitLines = file.items.filter((it) => isExplicitTagged(it)).length;
           if (file.completedLines + (file.explicitLines || 0) >= file.totalLines && file.totalLines > 0) {
@@ -969,7 +1038,20 @@ class BatchTranslateService {
           }
           // Synchronize output file to disk progressively
           await this.saveTranslatedFile(file, settings);
-          onFileUpdated({ ...file });
+          onFileUpdated({ ...file, items: [...file.items] });
+
+          const recentLine = chunkItems[0]
+            ? {
+                id: chunkItems[0].id,
+                fileName: file.name,
+                speaker: chunkItems[0].originalSpeaker,
+                translatedSpeaker: chunkItems[0].translatedSpeaker,
+                original: chunkItems[0].originalMessage,
+                translated: chunkItems[0].translatedMessage || "",
+              }
+            : undefined;
+
+          onLineTranslated(recentLine);
         } catch (err: any) {
           if (this.abortController?.signal.aborted) break;
 
@@ -979,11 +1061,12 @@ class BatchTranslateService {
           const isRateLimit =
             lastErrorMessage.includes("429") ||
             lastErrorMessage.toLowerCase().includes("rate-limit") ||
-            lastErrorMessage.toLowerCase().includes("too many requests");
+            lastErrorMessage.toLowerCase().includes("too many requests") ||
+            lastErrorMessage.toLowerCase().includes("quota");
 
           const backoffMs = isRateLimit
-            ? Math.min(30000, 2000 * Math.pow(1.5, Math.min(retryAttempts, 8)))
-            : Math.min(10000, 1500 + Math.min(retryAttempts, 8) * 1000);
+            ? Math.min(120000, 2000 * Math.pow(1.6, Math.min(retryAttempts, 10)) + Math.random() * 2000)
+            : Math.min(15000, 1500 + Math.min(retryAttempts, 8) * 1000 + Math.random() * 500);
 
           const attemptInfo = isInfiniteRetry
             ? `Retry #${retryAttempts}`
@@ -996,9 +1079,9 @@ class BatchTranslateService {
 
           file.status = "processing";
           file.error = `Retrying batch ${bIdx + 1}/${batchChunks.length} (${attemptInfo}): ${lastErrorMessage.slice(0, 70)}`;
-          onFileUpdated({ ...file });
+          onFileUpdated({ ...file, items: [...file.items] });
 
-          await new Promise((r) => setTimeout(r, backoffMs));
+          await cancellableSleep(backoffMs, this.abortController?.signal);
         }
       }
 
@@ -1019,7 +1102,7 @@ class BatchTranslateService {
       }
 
       if (settings.delayMs > 0 && isLlm) {
-        await new Promise((r) => setTimeout(r, settings.delayMs));
+        await cancellableSleep(settings.delayMs, this.abortController?.signal);
       }
     }
 
@@ -1030,16 +1113,24 @@ class BatchTranslateService {
     if (file.completedLines + (file.explicitLines || 0) >= file.totalLines && !fileHalted) {
       file.status = "completed";
       file.error = undefined;
-      await this.saveTranslatedFile(file, settings);
+      try {
+        await this.saveTranslatedFile(file, settings);
+      } catch (saveErr: any) {
+        file.error = `Failed to save completed file: ${saveErr?.message || saveErr}`;
+      }
     } else {
       file.status = "error";
-      file.error = `Paused at batch (${file.completedLines}/${file.totalLines} lines translated): ${lastErrorMessage || "Halted"}`;
+      file.error = `Halted at batch (${file.completedLines}/${file.totalLines} lines translated): ${lastErrorMessage || "Stopped"}`;
       if (file.completedLines > 0 || (file.explicitLines || 0) > 0) {
-        await this.saveTranslatedFile(file, settings);
+        try {
+          await this.saveTranslatedFile(file, settings);
+        } catch (saveErr: any) {
+          logger.warn("BatchTranslate", `Failed to save partial progress for ${file.name}: ${saveErr}`);
+        }
       }
     }
 
-    onFileUpdated({ ...file });
+    onFileUpdated({ ...file, items: [...file.items] });
   }
 
   public async writeBatchDebugLog(params: {
@@ -1104,6 +1195,8 @@ class BatchTranslateService {
 
     const systemPrompt = buildCompleteSystemPrompt({
       mode: "batch",
+      sourceLang: settingsManager.getSourceLang(),
+      targetLang: settingsManager.getTargetLang(),
       includeGlossary: true,
     });
 
@@ -1120,7 +1213,7 @@ class BatchTranslateService {
       };
     });
 
-    const rawUserContent = JSON.stringify(inputBatchJson, null, 2);
+    const rawUserContent = JSON.stringify({ lines: inputBatchJson });
 
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
@@ -1145,14 +1238,31 @@ class BatchTranslateService {
     let exactCost = 0;
     let hasExactUsage = false;
 
+    // Dynamic token ceiling proportional to total lines in current batch chunk
+    const maxTokens = Math.min(16384, Math.max(800, items.length * 350));
+
     try {
-      const nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
+      const invokePromise = invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
         apiKey: apiKey.trim(),
         modelId: settings.modelId,
         messagesJson: JSON.stringify(messages),
         temperature: settings.temperature,
+        maxTokens,
         timeoutSeconds,
       });
+
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (this.abortController?.signal.aborted) {
+          return reject(new Error("Translation cancelled by user."));
+        }
+        this.abortController?.signal.addEventListener(
+          "abort",
+          () => reject(new Error("Translation cancelled by user.")),
+          { once: true }
+        );
+      });
+
+      const nativeRes = await Promise.race([invokePromise, abortPromise]);
 
       if (nativeRes && nativeRes.content) {
         content = nativeRes.content.trim();
@@ -1163,13 +1273,21 @@ class BatchTranslateService {
         hasExactUsage = true;
       }
     } catch (e: any) {
+      if (this.abortController?.signal.aborted) {
+        throw new Error("Translation cancelled by user.");
+      }
       lastErr = e?.message || String(e);
       logger.warn("BatchTranslate", `Native completion failed: ${lastErr}, trying fetch fallback...`);
     }
 
     if (!content) {
+      if (this.abortController?.signal.aborted) {
+        throw new Error("Translation cancelled by user.");
+      }
       const fetchAbort = new AbortController();
       const fetchTimer = setTimeout(() => fetchAbort.abort(), timeoutSeconds * 1000);
+      const onMainAbort = () => fetchAbort.abort();
+      this.abortController?.signal.addEventListener("abort", onMainAbort, { once: true });
       try {
         const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           signal: fetchAbort.signal,
@@ -1184,6 +1302,11 @@ class BatchTranslateService {
             model: settings.modelId,
             messages,
             temperature: settings.temperature,
+            max_tokens: maxTokens,
+            provider: {
+              allow_fallbacks: true,
+              data_collection: "deny",
+            },
           }),
         });
         if (!res.ok) {
@@ -1205,7 +1328,7 @@ class BatchTranslateService {
           exactPromptTokens = data.usage.prompt_tokens || 0;
           exactCompletionTokens = data.usage.completion_tokens || 0;
           exactCachedTokens = data.usage.prompt_tokens_details?.cached_tokens || 0;
-          exactCost = data.usage.cost || 0;
+          exactCost = typeof data.usage.total_cost === "number" ? data.usage.total_cost : (data.usage.cost || 0);
           hasExactUsage = true;
         }
       } catch (fetchErr: any) {
@@ -1295,15 +1418,14 @@ class BatchTranslateService {
         return null;
       };
 
-      // Repairs common LLM JSON syntax errors (like doubled quotes `""text""` or malformed quotes)
+      // Repairs common LLM JSON syntax errors (like doubled/triple quotes `""text""` or malformed quotes)
       const repairJsonQuotes = (str: string): string => {
         let s = str.trim();
-        // Fix targeted doubled quotes around property values: `"translated_message": ""text""` -> `"translated_message": "text"`
-        s = s.replace(/("translated_message"\s*:\s*)""([\s\S]*?)""(\s*[,}\]])/g, '$1"$2"$3');
-        s = s.replace(/("translated_speaker"\s*:\s*)""([\s\S]*?)""(\s*[,}\]])/g, '$1"$2"$3');
-        // Generic doubled quotes fallback: `:\s*""` -> `:"` and `""\s*([,}])` -> `"$1`
-        s = s.replace(/(:\s*)""/g, '$1"');
-        s = s.replace(/""(\s*[,}\]])/g, '"$1');
+        s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+        s = s.replace(/^json\s*(?=[{\[])/i, "").trim();
+        // Fix targeted doubled or triple quotes specifically around property values:
+        s = s.replace(/("translated_message"\s*:\s*)""+([\s\S]*?)""+(\s*[,}\]])/g, '$1"$2"$3');
+        s = s.replace(/("translated_speaker"\s*:\s*)""+([\s\S]*?)""+(\s*[,}\]])/g, '$1"$2"$3');
         return s;
       };
 
@@ -1447,6 +1569,25 @@ class BatchTranslateService {
         return scannedObjects;
       }
 
+      // 6. Robust Regex Key-Value Extraction Fallback for Truncated/Malformed Responses
+      const regexExtracted: any[] = [];
+      const itemPattern =
+        /\{\s*"id"\s*:\s*(\d+)[\s\S]*?(?:"translated_message"|"translatedMessage"|"message")\s*:\s*(?:"((?:\\.|[^"\\])*)"|"""([\s\S]*?)"""|'([^']*)')[\s\S]*?\}/gi;
+      let match: RegExpExecArray | null;
+      while ((match = itemPattern.exec(raw)) !== null) {
+        const id = parseInt(match[1], 10);
+        const msg = match[2] !== undefined ? match[2] : match[3] !== undefined ? match[3] : match[4] || "";
+        const spkMatch = match[0].match(/(?:"translated_speaker"|"translatedSpeaker"|"speaker")\s*:\s*"((?:\\.|[^"\\])*)"/i);
+        regexExtracted.push({
+          id,
+          translated_speaker: spkMatch ? spkMatch[1] : null,
+          translated_message: msg.replace(/\\"/g, '"').replace(/\\n/g, "\n"),
+        });
+      }
+      if (regexExtracted.length > 0) {
+        return regexExtracted;
+      }
+
       return [];
     };
 
@@ -1471,9 +1612,14 @@ class BatchTranslateService {
     // If any line is skipped by the LLM, fail the batch immediately to trigger a clean retry without holes ("bolong-bolong").
     const missingIds: number[] = [];
     const validatedItems: { item: BatchItem; spk?: string; msg: string }[] = [];
+    const parsedMap = new Map<number, any>(
+      parsedArray
+        .filter((p) => p && typeof p === "object" && p.id !== undefined)
+        .map((p) => [Number(p.id), p])
+    );
 
     for (const item of items) {
-      const found = parsedArray.find((p) => p && p.id === item.id);
+      const found = parsedMap.get(item.id);
       if (!found) {
         missingIds.push(item.id);
         continue;
@@ -1488,8 +1634,8 @@ class BatchTranslateService {
           spk: spk && spk !== "null" ? String(spk).trim() : (item.originalSpeaker || undefined),
           msg: String(msg).trim(),
         });
-      } else if (!JAPANESE_CHAR_REGEX.test(item.originalMessage)) {
-        // Line without Japanese characters (punctuation/symbols like "...", "!?")
+      } else if (!SOURCE_EAST_ASIAN_CHAR_REGEX.test(item.originalMessage)) {
+        // Line without East Asian characters (punctuation/symbols like "...", "!?")
         validatedItems.push({
           item,
           spk: spk && spk !== "null" ? String(spk).trim() : (item.originalSpeaker || undefined),
@@ -1532,10 +1678,10 @@ class BatchTranslateService {
       let cachedTokens = exactCachedTokens;
       let cost = exactCost;
 
-      if (!hasExactUsage || (promptTokens === 0 && completionTokens === 0)) {
+      if (!hasExactUsage) {
         const promptChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
         promptTokens = Math.max(1, Math.round(promptChars / 2.6));
-        cachedTokens = contextHistory.length > 0 ? Math.round((promptChars * 0.65) / 2.6) : 0;
+        cachedTokens = 0; // Do not guess phantom cached tokens on fallback; leave 0 unless reported by OpenRouter
         completionTokens = Math.max(1, Math.round(content.length / 3.0));
         cost = calculateUsageCost(settings.modelId, promptTokens, completionTokens, cachedTokens);
       }
@@ -1545,17 +1691,13 @@ class BatchTranslateService {
       console.warn("Failed to record batch session stats:", statErr);
     }
 
-    const assistantPayloadJson = JSON.stringify(
-      {
-        translations: items.map((it) => ({
-          id: it.id,
-          translated_speaker: it.translatedSpeaker || null,
-          translated_message: it.translatedMessage || it.originalMessage,
-        })),
-      },
-      null,
-      2
-    );
+    const assistantPayloadJson = JSON.stringify({
+      translations: items.map((it) => ({
+        id: it.id,
+        translated_speaker: it.translatedSpeaker || null,
+        translated_message: it.translatedMessage || it.originalMessage,
+      })),
+    });
 
     return {
       userContent: rawUserContent,
@@ -1590,35 +1732,73 @@ class BatchTranslateService {
           const updated: any = { ...item.rawJson };
 
           if (settings.overrideRawWithPreprocessed) {
+            // Find existing speaker key on object (case-insensitive fuzzy match)
+            let matchedSpkKey: string | null = null;
             if (srcSpkKey !== "auto" && srcSpkKey !== "none" && updated[srcSpkKey] !== undefined) {
-              updated[srcSpkKey] = finalRawSpeaker || null;
-            } else if (updated.speaker !== undefined) {
-              updated.speaker = finalRawSpeaker || null;
-            } else if (updated.name !== undefined) {
-              updated.name = finalRawSpeaker || null;
-            } else if (updated.character !== undefined) {
-              updated.character = finalRawSpeaker || null;
+              matchedSpkKey = srcSpkKey;
+            } else {
+              const keys = Object.keys(updated);
+              const foundKey = keys.find((k) => {
+                const lk = k.toLowerCase();
+                return (
+                  lk.includes("speaker") ||
+                  lk.includes("name") ||
+                  lk.includes("character") ||
+                  lk.includes("chara") ||
+                  lk.includes("actor") ||
+                  lk === "who" ||
+                  lk === "talker" ||
+                  lk === "jp_name"
+                );
+              });
+              if (foundKey) matchedSpkKey = foundKey;
             }
 
+            if (matchedSpkKey) {
+              updated[matchedSpkKey] = finalRawSpeaker || null;
+            } else if (finalRawSpeaker) {
+              updated.speaker = finalRawSpeaker;
+            }
+
+            // Find existing message key on object (case-insensitive fuzzy match)
+            let matchedMsgKey: string | null = null;
             if (srcMsgKey !== "auto" && updated[srcMsgKey] !== undefined) {
-              updated[srcMsgKey] = finalRawMessage;
-            } else if (updated.message !== undefined) {
+              matchedMsgKey = srcMsgKey;
+            } else {
+              const keys = Object.keys(updated);
+              const foundKey = keys.find((k) => {
+                const lk = k.toLowerCase();
+                return (
+                  lk.includes("message") ||
+                  lk.includes("text") ||
+                  lk.includes("dialogue") ||
+                  lk.includes("msg") ||
+                  lk.includes("content") ||
+                  lk.includes("line") ||
+                  lk.includes("body") ||
+                  lk.includes("original") ||
+                  lk.includes("sentence")
+                );
+              });
+              if (foundKey) matchedMsgKey = foundKey;
+            }
+
+            if (matchedMsgKey) {
+              updated[matchedMsgKey] = finalRawMessage;
+            } else {
               updated.message = finalRawMessage;
-            } else if (updated.text !== undefined) {
-              updated.text = finalRawMessage;
-            } else if (updated.dialogue !== undefined) {
-              updated.dialogue = finalRawMessage;
-            } else if (updated.msg !== undefined) {
-              updated.msg = finalRawMessage;
             }
           }
 
           updated[tgtSpkKey] = finalTranslatedSpeaker;
           updated[tgtMsgKey] = finalTranslatedMessage;
 
-          // Keep in-memory rawJson in sync with latest translations
-          item.rawJson[tgtSpkKey] = finalTranslatedSpeaker;
-          item.rawJson[tgtMsgKey] = finalTranslatedMessage;
+          // Keep in-memory rawJson immutable clone in sync with latest translations
+          item.rawJson = {
+            ...item.rawJson,
+            [tgtSpkKey]: finalTranslatedSpeaker,
+            [tgtMsgKey]: finalTranslatedMessage,
+          };
 
           outputObjects.push(updated);
         } else {
@@ -1632,13 +1812,40 @@ class BatchTranslateService {
       });
 
       const targetPath = this.calculateOutputPath(file.path, settings.outputDir, settings.fileSuffix);
+      const isExplicitJsonTarget = targetPath.toLowerCase().endsWith(".json");
+      const hadRawJson = file.items.some((it) => it.rawJson !== undefined);
+      const isJsonArray =
+        isExplicitJsonTarget ||
+        (file.rawContent && file.rawContent.trim().startsWith("[") && file.rawContent.trim().endsWith("]"));
+
       let outputContent: string;
-      if (targetPath.toLowerCase().endsWith(".json")) {
+      if (isJsonArray) {
         // Standard formatted JSON array
         outputContent = JSON.stringify(outputObjects, null, 2);
-      } else {
-        // JSONL / text format
+      } else if (hadRawJson || targetPath.toLowerCase().endsWith(".jsonl")) {
+        // Line-by-line JSONL format for JSON-based structures
         outputContent = outputObjects.map((obj) => JSON.stringify(obj)).join("\n");
+      } else {
+        // Plain text / script format (e.g. .txt, .ks, .dat) preserving natural script format
+        outputContent = file.items
+          .map((it) => {
+            const finalSpk =
+              it.translatedSpeaker !== undefined && it.translatedSpeaker !== null
+                ? it.translatedSpeaker
+                : settings.overrideRawWithPreprocessed && it.originalSpeaker
+                ? executePreprocessingPipeline(it.originalSpeaker, "batch")
+                : it.originalSpeaker;
+
+            const finalMsg =
+              it.translatedMessage !== undefined && it.translatedMessage !== null
+                ? it.translatedMessage
+                : settings.overrideRawWithPreprocessed
+                ? executePreprocessingPipeline(it.originalMessage, "batch")
+                : it.originalMessage;
+
+            return finalSpk ? `[${finalSpk}] ${finalMsg}` : finalMsg;
+          })
+          .join("\n");
       }
 
       await invoke("save_script_file", { path: targetPath, content: outputContent });
@@ -1648,27 +1855,11 @@ class BatchTranslateService {
     }
   }
 
-  public pause() {
-    this.isPaused = true;
-    useBatchStore.getState().setIsPaused(true);
-    logger.info("BatchTranslate", "Batch translation paused.");
-  }
-
-  public resume() {
-    this.isPaused = false;
-    useBatchStore.getState().setIsPaused(false);
-    logger.info("BatchTranslate", "Batch translation resumed.");
-  }
-
   public cancel() {
     if (this.abortController) {
       this.abortController.abort();
     }
-    this.isRunning = false;
-    this.isPaused = false;
-    useBatchStore.getState().setIsRunning(false);
-    useBatchStore.getState().setIsPaused(false);
-    logger.info("BatchTranslate", "Batch translation cancelled.");
+    logger.info("BatchTranslate", "Batch translation cancellation requested.");
   }
 }
 

@@ -138,11 +138,19 @@ export function getLanguageDisplayName(code: string): string {
   return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
 
-const USER_STYLE_PRESETS_STORAGE_KEY = "vn_user_style_presets_v1";
+export const OPENROUTER_STORAGE_KEYS = {
+  CACHED_MODELS: "vn_cached_openrouter_models",
+  USER_STYLE_PRESETS: "vn_user_style_presets_v1",
+  ACTIVE_STYLE_PRESET_ID: "vn_active_style_preset_id",
+  ACTIVE_STYLE_INSTRUCTIONS: "vn_active_style_instructions",
+  GLOSSARY_ENTRIES: "vn_glossary_entries_v1",
+  SOURCE_LANG: "vn_source_lang",
+  TARGET_LANG: "vn_target_lang",
+} as const;
 
 export function loadUserStylePresets(): PromptStylePreset[] {
   try {
-    const raw = localStorage.getItem(USER_STYLE_PRESETS_STORAGE_KEY);
+    const raw = localStorage.getItem(OPENROUTER_STORAGE_KEYS.USER_STYLE_PRESETS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -155,7 +163,7 @@ export function loadUserStylePresets(): PromptStylePreset[] {
 
 export function saveUserStylePresets(presets: PromptStylePreset[]) {
   try {
-    localStorage.setItem(USER_STYLE_PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    localStorage.setItem(OPENROUTER_STORAGE_KEYS.USER_STYLE_PRESETS, JSON.stringify(presets));
   } catch (e) {
     console.error("Failed to save custom style presets:", e);
   }
@@ -167,11 +175,11 @@ export function getAllStylePresets(customPresets?: PromptStylePreset[]): PromptS
 }
 
 export function getActiveStylePresetId(): string {
-  return localStorage.getItem("vn_active_style_preset_id") || "natural_anime";
+  return localStorage.getItem(OPENROUTER_STORAGE_KEYS.ACTIVE_STYLE_PRESET_ID) || "natural_anime";
 }
 
 export function getActiveStyleInstructions(): string {
-  const saved = localStorage.getItem("vn_active_style_instructions");
+  const saved = localStorage.getItem(OPENROUTER_STORAGE_KEYS.ACTIVE_STYLE_INSTRUCTIONS);
   if (saved !== null && saved.trim()) return saved.trim();
   const activeId = getActiveStylePresetId();
   const found = getAllStylePresets().find((p) => p.id === activeId);
@@ -196,8 +204,8 @@ export interface BuildSystemPromptOptions {
 export function buildCompleteSystemPrompt(options: BuildSystemPromptOptions): string {
   const {
     mode,
-    sourceLang = localStorage.getItem("vn_source_lang") || "ja",
-    targetLang = localStorage.getItem("vn_target_lang") || "en",
+    sourceLang = localStorage.getItem(OPENROUTER_STORAGE_KEYS.SOURCE_LANG) || "ja",
+    targetLang = localStorage.getItem(OPENROUTER_STORAGE_KEYS.TARGET_LANG) || "en",
     styleInstructions = getActiveStyleInstructions(),
     includeGlossary = true,
   } = options;
@@ -232,8 +240,15 @@ You MUST ALWAYS respond with a valid, clean JSON object matching this schema:
 2. **NEVER Skip Text Already in ${tgtName}**: If the speaker name or dialogue message is already in ${tgtName} (e.g. English loanwords, foreign character names, or phrases), DO NOT skip or omit it—preserve and output it as-is without dropping.
 3. **Strict JSON Only**: Do NOT include commentary, explanations, work logs, or markdown fences outside the JSON object.`;
   } else {
-    part4 = `\n\n### Batch Output Schema:
-You MUST ALWAYS return a JSON object with the "translations" array containing every input item:
+    part4 = `\n\n### Batch Input & Output Schema Requirements:
+You will receive input dialogue lines in JSON format:
+{
+  "lines": [
+    { "id": 1, "speaker": "Speaker Name (or null)", "message": "Original text" }
+  ]
+}
+
+You MUST ALWAYS respond with a JSON object matching the "translations" schema containing every input line ID:
 {
   "translations": [
     {
@@ -327,7 +342,7 @@ export async function fetchOpenRouterModels(forceRefresh = false): Promise<OpenR
       }));
       cachedModels = parsedModels;
       try {
-        localStorage.setItem("vn_cached_openrouter_models", JSON.stringify(parsedModels));
+        localStorage.setItem(OPENROUTER_STORAGE_KEYS.CACHED_MODELS, JSON.stringify(parsedModels));
       } catch {}
       return parsedModels;
     }
@@ -337,7 +352,7 @@ export async function fetchOpenRouterModels(forceRefresh = false): Promise<OpenR
 
   // Fallback to localStorage cache if network fails
   try {
-    const stored = localStorage.getItem("vn_cached_openrouter_models");
+    const stored = localStorage.getItem(OPENROUTER_STORAGE_KEYS.CACHED_MODELS);
     if (stored) {
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -471,7 +486,7 @@ export function parseStructuredDialogueOutput(
  */
 export function buildGlossarySystemPrompt(): string {
   try {
-    const saved = localStorage.getItem("vn_glossary_entries_v1");
+    const saved = localStorage.getItem(OPENROUTER_STORAGE_KEYS.GLOSSARY_ENTRIES);
     if (!saved) return "";
     const entries: Array<{ original: string; translation: string; category?: string; notes?: string }> = JSON.parse(saved);
     if (!Array.isArray(entries) || entries.length === 0) return "";
@@ -507,10 +522,7 @@ export interface ChatMessage {
   content: string;
 }
 
-/**
- * Perform chat completion translation using OpenRouter with structured JSON inputs and outputs
- */
-export async function translateWithOpenRouter(options: {
+export interface OpenRouterTranslateOptions {
   apiKey: string;
   modelId: string;
   speaker?: string;
@@ -520,14 +532,26 @@ export async function translateWithOpenRouter(options: {
   styleInstructions?: string;
   systemPrompt?: string;
   temperature?: number;
+  maxTokens?: number;
   contextHistory?: { user: string; assistant: string }[];
-}): Promise<{
+}
+
+export interface OpenRouterTranslateResult {
   success: boolean;
   translatedSpeaker?: string;
   translatedMessage: string;
   rawText?: string;
+  cost?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
   error?: string;
-}> {
+}
+
+/**
+ * Perform chat completion translation using OpenRouter with structured JSON inputs and outputs
+ */
+export async function translateWithOpenRouter(options: OpenRouterTranslateOptions): Promise<OpenRouterTranslateResult> {
   const {
     apiKey,
     modelId,
@@ -538,8 +562,12 @@ export async function translateWithOpenRouter(options: {
     styleInstructions,
     systemPrompt,
     temperature = 0.3,
+    maxTokens,
     contextHistory = [],
   } = options;
+
+  // Dynamic token ceiling: protects against truncation on long monologues while preventing run-away hallucination
+  const dynamicMaxTokens = maxTokens ?? Math.min(2048, Math.max(500, Math.ceil((message || "").length * 4)));
 
   const cleanKey = apiKey.trim();
 
@@ -554,17 +582,25 @@ export async function translateWithOpenRouter(options: {
   }
 
   // 1. Build Modular System Prompt
-  const fullSystemPrompt = systemPrompt
-    ? (systemPrompt.includes("### Character & Translation Glossary")
-        ? systemPrompt
-        : `${systemPrompt}${buildGlossarySystemPrompt()}`)
-    : buildCompleteSystemPrompt({
-        mode: "live",
-        sourceLang,
-        targetLang,
-        styleInstructions,
-        includeGlossary: true,
-      });
+  let fullSystemPrompt = systemPrompt;
+  if (!fullSystemPrompt) {
+    fullSystemPrompt = buildCompleteSystemPrompt({
+      mode: "live",
+      sourceLang,
+      targetLang,
+      styleInstructions,
+      includeGlossary: true,
+    });
+  } else {
+    // If a custom system prompt is provided, check if it already has glossary instructions
+    const hasGlossary = /glossary|glosarium|### Character & Translation Glossary/i.test(fullSystemPrompt);
+    if (!hasGlossary) {
+      const glossarySnippet = buildGlossarySystemPrompt();
+      if (glossarySnippet) {
+        fullSystemPrompt = `${fullSystemPrompt}\n\n${glossarySnippet}`;
+      }
+    }
+  }
 
   // Construct Multi-turn Chat Message array
   const messages: ChatMessage[] = [{ role: "system", content: fullSystemPrompt }];
@@ -579,18 +615,22 @@ export async function translateWithOpenRouter(options: {
     }
   }
 
-  // Active dialogue line turn
-  const activeUserPayload = speaker ? `[Speaker: ${speaker}]\n${message}` : message;
+  // Active dialogue line turn formatted with structured dialogue helper for schema consistency
+  const activeUserPayload = formatStructuredDialogueInput(speaker, message);
   messages.push({ role: "user", content: activeUserPayload });
 
   logger.info(
     "OpenRouter::API",
-    `Sending structured request to model: ${modelId} (${messages.length} messages, ${contextHistory.length} history turns)`
+    `Sending structured request to model: ${modelId} (${messages.length} messages, ${contextHistory.length} history turns, maxTokens: ${dynamicMaxTokens})`
   );
 
   const startTime = Date.now();
   let content = "";
   let lastErr = "";
+  let exactCost = 0;
+  let exactPromptTokens = 0;
+  let exactCompletionTokens = 0;
+  let exactCachedTokens = 0;
   const maxRetries = 3;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -600,14 +640,19 @@ export async function translateWithOpenRouter(options: {
         modelId,
         messagesJson: JSON.stringify(messages),
         temperature,
+        maxTokens: dynamicMaxTokens,
       });
 
       if (nativeRes && nativeRes.content) {
         content = nativeRes.content.trim();
+        exactCost = nativeRes.cost || 0;
+        exactPromptTokens = nativeRes.prompt_tokens || 0;
+        exactCompletionTokens = nativeRes.completion_tokens || 0;
+        exactCachedTokens = nativeRes.cached_tokens || 0;
         const elapsed = Date.now() - startTime;
         logger.info(
           "OpenRouter::API",
-          `Native structured response received in ${elapsed}ms: "${content.slice(0, 70)}..."`
+          `Native structured response received in ${elapsed}ms (Cost: $${exactCost.toFixed(6)}): "${content.slice(0, 70)}..."`
         );
         break;
       }
@@ -636,6 +681,7 @@ export async function translateWithOpenRouter(options: {
 
   // If native failed or was unavailable, try fallback fetch as last resort
   if (!content) {
+    logger.warn("OpenRouter::API", "Native completion failed or unavailable. Attempting fallback HTTP fetch...");
     try {
       const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
@@ -649,16 +695,31 @@ export async function translateWithOpenRouter(options: {
           model: modelId,
           messages,
           temperature,
-          response_format: { type: "json_object" },
+          max_tokens: dynamicMaxTokens,
+          provider: {
+            allow_fallbacks: true,
+            data_collection: "deny",
+          },
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
         content = data.choices?.[0]?.message?.content?.trim() || "";
+        exactPromptTokens = data.usage?.prompt_tokens || 0;
+        exactCompletionTokens = data.usage?.completion_tokens || 0;
+        exactCachedTokens = data.usage?.prompt_tokens_details?.cached_tokens || 0;
+        exactCost = typeof data.usage?.total_cost === "number" ? data.usage.total_cost : (typeof data.usage?.cost === "number" ? data.usage.cost : 0);
+      } else {
+        const errBody = await response.text().catch(() => "");
+        const statusMsg = `Fallback fetch returned HTTP ${response.status}: ${errBody}`;
+        logger.error("OpenRouter::API", statusMsg);
+        if (!lastErr) lastErr = statusMsg;
       }
-    } catch {
-      // Ignored if fetch fails
+    } catch (fetchErr: any) {
+      const fetchErrMsg = `Fallback fetch network error: ${fetchErr?.message || fetchErr}`;
+      logger.error("OpenRouter::API", fetchErrMsg);
+      if (!lastErr) lastErr = fetchErrMsg;
     }
   }
 
@@ -680,6 +741,10 @@ export async function translateWithOpenRouter(options: {
     translatedSpeaker,
     translatedMessage,
     rawText: content,
+    cost: exactCost,
+    promptTokens: exactPromptTokens,
+    completionTokens: exactCompletionTokens,
+    cachedTokens: exactCachedTokens,
   };
 }
 
@@ -698,7 +763,7 @@ export function calculateUsageCost(
 
   let models = cachedModels;
   if (!models || models.length === 0) {
-    const stored = localStorage.getItem("vn_cached_openrouter_models") || localStorage.getItem("openrouter_available_models");
+    const stored = localStorage.getItem(OPENROUTER_STORAGE_KEYS.CACHED_MODELS) || localStorage.getItem("openrouter_available_models");
     if (stored) {
       try {
         models = JSON.parse(stored);
@@ -706,25 +771,23 @@ export function calculateUsageCost(
     }
   }
 
-  let promptPrice = 0.00000015; // default fallback ($0.15 / 1M tokens)
-  let compPrice = 0.0000006;   // default fallback ($0.60 / 1M tokens)
-
   const m = models?.find((x) => x.id.toLowerCase() === modelId.toLowerCase());
-  if (m?.pricing) {
-    const parsedPrompt = parseFloat(m.pricing.prompt);
-    const parsedComp = parseFloat(m.pricing.completion);
-    if (!isNaN(parsedPrompt)) promptPrice = parsedPrompt;
-    if (!isNaN(parsedComp)) compPrice = parsedComp;
+  if (!m?.pricing) {
+    // If pricing is unknown, return 0 rather than inventing an arbitrary hardcoded price
+    return 0;
+  }
 
-    // If both prompt and completion prices are 0, this model is 100% free!
-    if (promptPrice === 0 && compPrice === 0) {
-      return 0;
-    }
+  const promptPrice = parseFloat(m.pricing.prompt) || 0;
+  const compPrice = parseFloat(m.pricing.completion) || 0;
+
+  // If both prompt and completion prices are 0, this model is 100% free!
+  if (promptPrice === 0 && compPrice === 0) {
+    return 0;
   }
 
   const nonCachedPrompt = Math.max(0, promptTokens - cachedTokens);
-  // Prompt caching typically yields ~50-80% discount on OpenRouter
-  const promptCost = nonCachedPrompt * promptPrice + cachedTokens * promptPrice * 0.25;
+  // Prompt caching typically yields ~50% discount on OpenRouter endpoints unless free
+  const promptCost = nonCachedPrompt * promptPrice + cachedTokens * promptPrice * 0.5;
   const compCost = completionTokens * compPrice;
 
   return promptCost + compCost;

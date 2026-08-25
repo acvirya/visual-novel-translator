@@ -470,7 +470,10 @@ fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> Resul
     let prompt_tokens = parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
     let completion_tokens = parsed["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
     let cached_tokens = parsed["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
-    let cost = parsed["usage"]["cost"].as_f64().unwrap_or(0.0);
+    let cost = parsed["usage"]["total_cost"]
+        .as_f64()
+        .or_else(|| parsed["usage"]["cost"].as_f64())
+        .unwrap_or(0.0);
 
     Ok(OpenRouterCompletionResponse {
         content,
@@ -487,6 +490,7 @@ async fn openrouter_chat_completion(
     model_id: String,
     messages_json: String,
     temperature: f64,
+    max_tokens: Option<u32>,
     timeout_seconds: Option<u64>,
 ) -> Result<OpenRouterCompletionResponse, String> {
     let client = get_http_client();
@@ -495,12 +499,22 @@ async fn openrouter_chat_completion(
     let messages: serde_json::Value = serde_json::from_str(&messages_json)
         .map_err(|e| format!("Invalid messages JSON: {}", e))?;
 
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "model": model_id,
         "messages": messages,
         "temperature": temperature,
-        "response_format": { "type": "json_object" }
+        "response_format": { "type": "json_object" },
+        "provider": {
+            "allow_fallbacks": true,
+            "data_collection": "deny"
+        }
     });
+
+    if let Some(mt) = max_tokens {
+        if mt > 0 {
+            payload["max_tokens"] = serde_json::json!(mt);
+        }
+    }
 
     let resp = client
         .post("https://openrouter.ai/api/v1/chat/completions")
@@ -527,11 +541,22 @@ async fn openrouter_chat_completion(
                 || body_text.contains("schema"));
 
         if is_format_error {
-            let fallback_payload = serde_json::json!({
+            let mut fallback_payload = serde_json::json!({
                 "model": model_id,
                 "messages": messages,
-                "temperature": temperature
+                "temperature": temperature,
+                "provider": {
+                    "allow_fallbacks": true,
+                    "data_collection": "deny"
+                }
             });
+
+            if let Some(mt) = max_tokens {
+                if mt > 0 {
+                    fallback_payload["max_tokens"] = serde_json::json!(mt);
+                }
+            }
+
             let retry_resp = client
                 .post("https://openrouter.ai/api/v1/chat/completions")
                 .timeout(timeout_duration)

@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Play,
-  Pause,
   Plus,
   Trash2,
   FolderOpen,
@@ -52,9 +51,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     statusFilter,
     setStatusFilter,
     isRunning,
-    isPaused,
     setIsRunning,
-    setIsPaused,
     progressData,
     setProgressData,
     sessionStats,
@@ -349,7 +346,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   const handleStartBatch = async () => {
     if (queuedFiles.length === 0) return;
     setIsRunning(true);
-    setIsPaused(false);
 
     const settings: BatchSettings = {
       linesPerBatch,
@@ -374,25 +370,12 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       });
     } finally {
       setIsRunning(false);
-      setIsPaused(false);
-    }
-  };
-
-  const handlePauseResume = () => {
-    if (!isRunning) return;
-    if (isPaused) {
-      batchTranslateService.resume();
-      setIsPaused(false);
-    } else {
-      batchTranslateService.pause();
-      setIsPaused(true);
     }
   };
 
   const handleCancelBatch = () => {
     batchTranslateService.cancel();
     setIsRunning(false);
-    setIsPaused(false);
   };
 
   // Validation Handlers for Numeric Inputs (No upper maximum caps)
@@ -501,24 +484,14 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 </span>
               </button>
             ) : (
-              <>
-                <button
-                  onClick={handlePauseResume}
-                  className="btn-secondary"
-                  style={{ padding: "6px 12px", fontSize: "12px" }}
-                >
-                  {isPaused ? <Play size={13} /> : <Pause size={13} />}
-                  <span>{isPaused ? "Resume" : "Pause"}</span>
-                </button>
-                <button
-                  onClick={handleCancelBatch}
-                  className="btn-secondary"
-                  style={{ padding: "6px 12px", fontSize: "12px", color: "var(--accent-danger)" }}
-                >
-                  <Square size={13} />
-                  <span>Cancel</span>
-                </button>
-              </>
+              <button
+                onClick={handleCancelBatch}
+                className="btn-secondary"
+                style={{ padding: "6px 14px", fontSize: "12px", color: "var(--accent-danger)", borderColor: "var(--accent-danger)" }}
+              >
+                <Square size={13} />
+                <span>Cancel Translation</span>
+              </button>
             )}
           </div>
         </div>
