@@ -1,9 +1,13 @@
 import React, { useState } from "react";
-import { Cpu, Scan, Radio, Monitor, ArrowRight } from "lucide-react";
+import { Cpu, Scan, Radio, Monitor } from "lucide-react";
 import { TextractorInputView } from "./TextractorInputView";
 import { OcrInputView } from "./OcrInputView";
 import { LiveTranslateView } from "./LiveTranslateView";
 import { OverlaySettingsView } from "./OverlaySettingsView";
+import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
+import { useTextractorStore } from "../../stores/useTextractorStore";
+import { useOcrStore } from "../../stores/useOcrStore";
+import { useTranslationStore } from "../../stores/useTranslationStore";
 
 export type LivePipelineStage = "input" | "stream" | "overlay";
 
@@ -15,6 +19,34 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
   const [activeStage, setActiveStage] = useState<LivePipelineStage>("stream");
   const [selectedInputMode, setSelectedInputMode] = useState<"textractor" | "ocr">("textractor");
 
+  const isHooked = useTextractorStore((state) => state.isHooked);
+  const isOcrScanning = useOcrStore((state) => state.isScanning);
+  const isPaused = useTranslationStore((state) => state.isPaused);
+
+  const stageOptions: SegmentedOption<LivePipelineStage>[] = [
+    {
+      id: "input",
+      label: "1. Input Setup",
+      icon: <Cpu size={14} />,
+      badge: isHooked ? "Hooked" : isOcrScanning ? "OCR On" : undefined,
+      badgeColor: isHooked ? "success" : isOcrScanning ? "cyan" : "neutral",
+    },
+    {
+      id: "stream",
+      label: "2. Live Translation",
+      icon: <Radio size={14} />,
+      badge: !isPaused ? "Active" : "Paused",
+      badgeColor: !isPaused ? "success" : "warning",
+    },
+    {
+      id: "overlay",
+      label: "3. In-Game Overlay",
+      icon: <Monitor size={14} />,
+      badge: "Ctrl+Shift+L",
+      badgeColor: "neutral",
+    },
+  ];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
       {/* 3-Stage Pipeline Stepper Header */}
@@ -23,134 +55,27 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "10px 16px",
+          padding: "8px 16px",
           backgroundColor: "var(--bg-panel)",
           borderBottom: "1px solid var(--border-subtle)",
           flexShrink: 0,
+          flexWrap: "wrap",
+          gap: "8px",
         }}
       >
-        {/* Pipeline Stages Navigation Pills */}
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {/* Stage 1: Input Setup */}
-          <button
-            type="button"
-            onClick={() => setActiveStage("input")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "7px 14px",
-              borderRadius: "var(--radius-sm)",
-              border: `1px solid ${activeStage === "input" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-              backgroundColor: activeStage === "input" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-              color: activeStage === "input" ? "var(--accent-primary)" : "var(--text-primary)",
-              cursor: "pointer",
-              fontWeight: activeStage === "input" ? 600 : 500,
-              fontSize: "12.5px",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <span
-              style={{
-                width: "18px",
-                height: "18px",
-                borderRadius: "50%",
-                backgroundColor: activeStage === "input" ? "var(--accent-primary)" : "var(--border-subtle)",
-                color: activeStage === "input" ? "#ffffff" : "var(--text-muted)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "10px",
-                fontWeight: 700,
-              }}
-            >
-              1
-            </span>
-            <Cpu size={14} />
-            <span>1. Input Setup</span>
-          </button>
+        <SegmentedControl<LivePipelineStage>
+          options={stageOptions}
+          value={activeStage}
+          onChange={setActiveStage}
+          size="md"
+        />
 
-          <ArrowRight size={13} color="var(--text-muted)" />
-
-          {/* Stage 2: Live Stream */}
-          <button
-            type="button"
-            onClick={() => setActiveStage("stream")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "7px 14px",
-              borderRadius: "var(--radius-sm)",
-              border: `1px solid ${activeStage === "stream" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-              backgroundColor: activeStage === "stream" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-              color: activeStage === "stream" ? "var(--accent-primary)" : "var(--text-primary)",
-              cursor: "pointer",
-              fontWeight: activeStage === "stream" ? 600 : 500,
-              fontSize: "12.5px",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <span
-              style={{
-                width: "18px",
-                height: "18px",
-                borderRadius: "50%",
-                backgroundColor: activeStage === "stream" ? "var(--accent-primary)" : "var(--border-subtle)",
-                color: activeStage === "stream" ? "#ffffff" : "var(--text-muted)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "10px",
-                fontWeight: 700,
-              }}
-            >
-              2
-            </span>
-            <Radio size={14} />
-            <span>2. Live Translation</span>
-          </button>
-
-          <ArrowRight size={13} color="var(--text-muted)" />
-
-          {/* Stage 3: Overlay */}
-          <button
-            type="button"
-            onClick={() => setActiveStage("overlay")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "7px 14px",
-              borderRadius: "var(--radius-sm)",
-              border: `1px solid ${activeStage === "overlay" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-              backgroundColor: activeStage === "overlay" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-              color: activeStage === "overlay" ? "var(--accent-primary)" : "var(--text-primary)",
-              cursor: "pointer",
-              fontWeight: activeStage === "overlay" ? 600 : 500,
-              fontSize: "12.5px",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <span
-              style={{
-                width: "18px",
-                height: "18px",
-                borderRadius: "50%",
-                backgroundColor: activeStage === "overlay" ? "var(--accent-primary)" : "var(--border-subtle)",
-                color: activeStage === "overlay" ? "#ffffff" : "var(--text-muted)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "10px",
-                fontWeight: 700,
-              }}
-            >
-              3
-            </span>
-            <Monitor size={14} />
-            <span>3. In-Game Overlay</span>
-          </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+            {activeStage === "input" && "Configure Textractor memory hooking or OCR screen regions"}
+            {activeStage === "stream" && "Real-time dialogue translation log and context stream"}
+            {activeStage === "overlay" && "Customize transparent in-game HUD subtitle appearance"}
+          </span>
         </div>
       </div>
 
@@ -177,10 +102,10 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
                 <div
                   onClick={() => setSelectedInputMode("textractor")}
                   style={{
-                    backgroundColor: selectedInputMode === "textractor" ? "rgba(88, 166, 255, 0.1)" : "var(--bg-app)",
+                    backgroundColor: selectedInputMode === "textractor" ? "var(--accent-primary-subtle)" : "var(--bg-app)",
                     border: `1.5px solid ${selectedInputMode === "textractor" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-                    borderRadius: "var(--radius-sm)",
-                    padding: "12px",
+                    borderRadius: "var(--radius-md)",
+                    padding: "14px",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
@@ -188,13 +113,26 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
                     transition: "all 0.15s ease",
                   }}
                 >
-                  <Cpu size={22} color={selectedInputMode === "textractor" ? "var(--accent-primary)" : "var(--text-muted)"} />
+                  <div
+                    style={{
+                      width: "36px",
+                      height: "36px",
+                      borderRadius: "var(--radius-sm)",
+                      backgroundColor: selectedInputMode === "textractor" ? "var(--accent-primary)" : "var(--bg-surface-elevated)",
+                      color: selectedInputMode === "textractor" ? "#ffffff" : "var(--text-muted)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Cpu size={20} />
+                  </div>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: "13px", color: selectedInputMode === "textractor" ? "var(--accent-primary)" : "var(--text-primary)" }}>
+                    <div style={{ fontWeight: 600, fontSize: "var(--text-base)", color: selectedInputMode === "textractor" ? "var(--accent-primary)" : "var(--text-primary)" }}>
                       Game Memory Hooking (Textractor)
                     </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      Recommended for native Windows VNs (100% accurate, zero OCR artifacts)
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Direct game hook (zero OCR delay, 100% accurate character dialogue)
                     </div>
                   </div>
                 </div>
@@ -203,10 +141,10 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
                 <div
                   onClick={() => setSelectedInputMode("ocr")}
                   style={{
-                    backgroundColor: selectedInputMode === "ocr" ? "rgba(88, 166, 255, 0.1)" : "var(--bg-app)",
-                    border: `1.5px solid ${selectedInputMode === "ocr" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-                    borderRadius: "var(--radius-sm)",
-                    padding: "12px",
+                    backgroundColor: selectedInputMode === "ocr" ? "var(--accent-cyan-subtle)" : "var(--bg-app)",
+                    border: `1.5px solid ${selectedInputMode === "ocr" ? "var(--accent-cyan)" : "var(--border-subtle)"}`,
+                    borderRadius: "var(--radius-md)",
+                    padding: "14px",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
@@ -214,13 +152,26 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
                     transition: "all 0.15s ease",
                   }}
                 >
-                  <Scan size={22} color={selectedInputMode === "ocr" ? "var(--accent-primary)" : "var(--text-muted)"} />
+                  <div
+                    style={{
+                      width: "36px",
+                      height: "36px",
+                      borderRadius: "var(--radius-sm)",
+                      backgroundColor: selectedInputMode === "ocr" ? "var(--accent-cyan)" : "var(--bg-surface-elevated)",
+                      color: selectedInputMode === "ocr" ? "#0d1017" : "var(--text-muted)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Scan size={20} />
+                  </div>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: "13px", color: selectedInputMode === "ocr" ? "var(--accent-primary)" : "var(--text-primary)" }}>
+                    <div style={{ fontWeight: 600, fontSize: "var(--text-base)", color: selectedInputMode === "ocr" ? "var(--accent-cyan)" : "var(--text-primary)" }}>
                       Screen OCR Scanner (Windows OneOCR)
                     </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      Ideal for emulators, browser games, RPG Maker, or untaggable engines
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Ideal for browser games, emulators, RPG Maker, or untaggable engines
                     </div>
                   </div>
                 </div>

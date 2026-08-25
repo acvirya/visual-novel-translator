@@ -4,11 +4,35 @@ import { TranslationProvidersView } from "./TranslationProvidersView";
 import { TextPreprocessingView } from "./TextPreprocessingView";
 import { GeneralSettingsView } from "./GeneralSettingsView";
 import { LogsView } from "./LogsView";
+import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
 
 export type SettingsSubTab = "providers" | "preprocessing" | "general" | "logs";
 
 export const UnifiedSettingsView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>("providers");
+
+  const settingOptions: SegmentedOption<SettingsSubTab>[] = [
+    {
+      id: "providers",
+      label: "AI Models & Prompts",
+      icon: <KeyRound size={14} />,
+    },
+    {
+      id: "preprocessing",
+      label: "Text Preprocessing Master",
+      icon: <Sparkles size={14} />,
+    },
+    {
+      id: "general",
+      label: "General & Hotkeys",
+      icon: <Sliders size={14} />,
+    },
+    {
+      id: "logs",
+      label: "System Logs",
+      icon: <Terminal size={14} />,
+    },
+  ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
@@ -17,104 +41,28 @@ export const UnifiedSettingsView: React.FC = () => {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "8px",
-          padding: "10px 16px",
+          justifyContent: "space-between",
+          padding: "8px 16px",
           backgroundColor: "var(--bg-panel)",
           borderBottom: "1px solid var(--border-subtle)",
           flexShrink: 0,
+          flexWrap: "wrap",
+          gap: "8px",
         }}
       >
-        {/* 1. AI Models & Providers */}
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("providers")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "6px 14px",
-            borderRadius: "var(--radius-sm)",
-            border: `1px solid ${activeSubTab === "providers" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-            backgroundColor: activeSubTab === "providers" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-            color: activeSubTab === "providers" ? "var(--accent-primary)" : "var(--text-primary)",
-            cursor: "pointer",
-            fontWeight: activeSubTab === "providers" ? 600 : 500,
-            fontSize: "12.5px",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <KeyRound size={14} />
-          <span>AI Models & Prompts</span>
-        </button>
+        <SegmentedControl<SettingsSubTab>
+          options={settingOptions}
+          value={activeSubTab}
+          onChange={setActiveSubTab}
+          size="md"
+        />
 
-        {/* 2. Text Preprocessing Master */}
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("preprocessing")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "6px 14px",
-            borderRadius: "var(--radius-sm)",
-            border: `1px solid ${activeSubTab === "preprocessing" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-            backgroundColor: activeSubTab === "preprocessing" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-            color: activeSubTab === "preprocessing" ? "var(--accent-primary)" : "var(--text-primary)",
-            cursor: "pointer",
-            fontWeight: activeSubTab === "preprocessing" ? 600 : 500,
-            fontSize: "12.5px",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <Sparkles size={14} />
-          <span>Text Preprocessing Master</span>
-        </button>
-
-        {/* 3. General & Hotkeys */}
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("general")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "6px 14px",
-            borderRadius: "var(--radius-sm)",
-            border: `1px solid ${activeSubTab === "general" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-            backgroundColor: activeSubTab === "general" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-            color: activeSubTab === "general" ? "var(--accent-primary)" : "var(--text-primary)",
-            cursor: "pointer",
-            fontWeight: activeSubTab === "general" ? 600 : 500,
-            fontSize: "12.5px",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <Sliders size={14} />
-          <span>General & Hotkeys</span>
-        </button>
-
-        {/* 4. System Logs & Diagnostics */}
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("logs")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "6px 14px",
-            borderRadius: "var(--radius-sm)",
-            border: `1px solid ${activeSubTab === "logs" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-            backgroundColor: activeSubTab === "logs" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-            color: activeSubTab === "logs" ? "var(--accent-primary)" : "var(--text-primary)",
-            cursor: "pointer",
-            fontWeight: activeSubTab === "logs" ? 600 : 500,
-            fontSize: "12.5px",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <Terminal size={14} />
-          <span>System Logs</span>
-        </button>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          {activeSubTab === "providers" && "Configure OpenRouter AI models, API keys, and custom prompts"}
+          {activeSubTab === "preprocessing" && "Furigana cleaner, regex replacers, and control code filters"}
+          {activeSubTab === "general" && "System-wide hotkeys, language pairs, and app preferences"}
+          {activeSubTab === "logs" && "Live debug console, network errors, and IPC execution logs"}
+        </span>
       </div>
 
       {/* Main Content Area */}

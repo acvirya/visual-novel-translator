@@ -335,27 +335,15 @@ export const LiveTranslateView: React.FC = () => {
         }}
       >
         {liveLogs.length === 0 ? (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              height: "100%",
-              color: "var(--text-muted)",
-              gap: "10px",
-              padding: "40px 20px",
-              textAlign: "center",
-            }}
-          >
-            <MessageSquare size={36} style={{ opacity: 0.35, color: "var(--accent-primary)" }} />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: "13.5px", color: "var(--text-secondary)" }}>
-                Waiting for dialogue stream...
-              </div>
-              <div style={{ fontSize: "12px", marginTop: "4px" }}>
-                Make sure Textractor Hook or Screen OCR is connected in <strong>1. Input Setup</strong>, then advance dialogue in your game.
-              </div>
+          <div className="empty-state-container" style={{ margin: "auto 0" }}>
+            <div className="empty-state-icon">
+              <MessageSquare size={22} color="var(--accent-primary)" />
+            </div>
+            <div className="empty-state-title">
+              Waiting for dialogue stream...
+            </div>
+            <div className="empty-state-desc">
+              Make sure Textractor Hook or Screen OCR is attached in <strong>1. Input Setup</strong>, then advance dialogue in your visual novel.
             </div>
           </div>
         ) : (

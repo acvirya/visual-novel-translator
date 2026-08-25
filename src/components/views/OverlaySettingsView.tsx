@@ -33,6 +33,7 @@ import {
   Type,
   Search,
 } from "lucide-react";
+import { SegmentedControl } from "../common/SegmentedControl";
 
 interface MonitorInfo {
   name: string;
@@ -475,48 +476,15 @@ export const OverlaySettingsView: React.FC = () => {
           </div>
 
           {/* Sample Dialogue Type Switcher */}
-          <div
-            style={{
-              display: "inline-flex",
-              backgroundColor: "var(--bg-app)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              padding: "2px",
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setSampleTextType("standard")}
-              style={{
-                padding: "3px 10px",
-                fontSize: "11px",
-                fontWeight: sampleTextType === "standard" ? 600 : 400,
-                borderRadius: "3px",
-                border: "none",
-                backgroundColor: sampleTextType === "standard" ? "var(--accent-primary)" : "transparent",
-                color: sampleTextType === "standard" ? "#ffffff" : "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-            >
-              Standard Text
-            </button>
-            <button
-              type="button"
-              onClick={() => setSampleTextType("long")}
-              style={{
-                padding: "3px 10px",
-                fontSize: "11px",
-                fontWeight: sampleTextType === "long" ? 600 : 400,
-                borderRadius: "3px",
-                border: "none",
-                backgroundColor: sampleTextType === "long" ? "var(--accent-primary)" : "transparent",
-                color: sampleTextType === "long" ? "#ffffff" : "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-            >
-              Long Dialogue
-            </button>
-          </div>
+          <SegmentedControl<"standard" | "long">
+            options={[
+              { id: "standard", label: "Standard Text" },
+              { id: "long", label: "Long Dialogue" },
+            ]}
+            value={sampleTextType}
+            onChange={setSampleTextType}
+            size="sm"
+          />
         </div>
 
         {/* Searchable Overlay Preset Dropdown */}
@@ -799,41 +767,15 @@ export const OverlaySettingsView: React.FC = () => {
             </div>
 
             {/* Code Tabs */}
-            <div style={{ display: "flex", gap: "6px" }}>
-              <button
-                type="button"
-                onClick={() => setActiveCodeTab("html")}
-                style={{
-                  padding: "5px 12px",
-                  fontSize: "11.5px",
-                  fontWeight: activeCodeTab === "html" ? 600 : 400,
-                  borderRadius: "var(--radius-sm)",
-                  border: `1px solid ${activeCodeTab === "html" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-                  backgroundColor: activeCodeTab === "html" ? "var(--bg-surface-elevated)" : "transparent",
-                  color: activeCodeTab === "html" ? "var(--accent-primary)" : "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                HTML Template
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveCodeTab("css")}
-                style={{
-                  padding: "5px 12px",
-                  fontSize: "11.5px",
-                  fontWeight: activeCodeTab === "css" ? 600 : 400,
-                  borderRadius: "var(--radius-sm)",
-                  border: `1px solid ${activeCodeTab === "css" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-                  backgroundColor: activeCodeTab === "css" ? "var(--bg-surface-elevated)" : "transparent",
-                  color: activeCodeTab === "css" ? "var(--accent-primary)" : "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                CSS Stylesheet
-              </button>
-            </div>
+            <SegmentedControl<"html" | "css">
+              options={[
+                { id: "html", label: "HTML Template" },
+                { id: "css", label: "CSS Stylesheet" },
+              ]}
+              value={activeCodeTab}
+              onChange={setActiveCodeTab}
+              size="sm"
+            />
 
             {/* Code Editor Textarea */}
             {activeCodeTab === "html" ? (

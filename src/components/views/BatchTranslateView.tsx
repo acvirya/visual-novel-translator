@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import { KeySelectorCombobox } from "../common/KeySelectorCombobox";
+import { SegmentedControl } from "../common/SegmentedControl";
 import {
   batchTranslateService,
   BatchFileEntry,
@@ -539,48 +540,31 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       {/* ========================================================================= */}
       {/* 2. SWITCH SECTION TABS: Preview vs Settings                               */}
       {/* ========================================================================= */}
-      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-        <button
-          onClick={() => setActiveTab("preview")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "7px 16px",
-            borderRadius: "var(--radius-sm)",
-            fontSize: "12px",
-            fontWeight: 700,
-            cursor: "pointer",
-            border: activeTab === "preview" ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
-            backgroundColor: activeTab === "preview" ? "var(--bg-card)" : "var(--bg-surface)",
-            color: activeTab === "preview" ? "var(--accent-primary)" : "var(--text-secondary)",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <FileCode size={14} />
-          <span>Script Translation Preview</span>
-        </button>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, flexWrap: "wrap", gap: "8px" }}>
+        <SegmentedControl<"preview" | "settings">
+          options={[
+            {
+              id: "preview",
+              label: "Script Translation Preview",
+              icon: <FileCode size={14} />,
+              badge: queuedFiles.length > 0 ? `${queuedFiles.length} files` : undefined,
+              badgeColor: "neutral",
+            },
+            {
+              id: "settings",
+              label: "Batch & Key Mapping Settings",
+              icon: <Sliders size={14} />,
+            },
+          ]}
+          value={activeTab}
+          onChange={setActiveTab}
+          size="md"
+        />
 
-        <button
-          onClick={() => setActiveTab("settings")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "7px 16px",
-            borderRadius: "var(--radius-sm)",
-            fontSize: "12px",
-            fontWeight: 700,
-            cursor: "pointer",
-            border: activeTab === "settings" ? "1px solid var(--accent-gold)" : "1px solid var(--border-subtle)",
-            backgroundColor: activeTab === "settings" ? "var(--bg-card)" : "var(--bg-surface)",
-            color: activeTab === "settings" ? "var(--accent-gold)" : "var(--text-secondary)",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <Sliders size={14} />
-          <span>Batch & Key Mapping Settings</span>
-        </button>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          {activeTab === "preview" && "Browse, inspect, and filter translated lines per file"}
+          {activeTab === "settings" && "Configure AI provider, concurrency, batch sizes, and custom JSON key mapping"}
+        </span>
       </div>
 
       {/* ========================================================================= */}

@@ -2,9 +2,23 @@ import React, { useState } from "react";
 import { BookOpen, Database } from "lucide-react";
 import { GlossaryManagerView } from "./GlossaryManagerView";
 import { ScriptManagerView } from "./ScriptManagerView";
+import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
 
 export const KnowledgeBaseView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"glossary" | "script">("glossary");
+
+  const tabOptions: SegmentedOption<"glossary" | "script">[] = [
+    {
+      id: "glossary",
+      label: "Character Glossary & Terms",
+      icon: <BookOpen size={14} />,
+    },
+    {
+      id: "script",
+      label: "Offline Script Memory & Cache",
+      icon: <Database size={14} />,
+    },
+  ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
@@ -13,56 +27,26 @@ export const KnowledgeBaseView: React.FC = () => {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "8px",
-          padding: "10px 16px",
+          justifyContent: "space-between",
+          padding: "8px 16px",
           backgroundColor: "var(--bg-panel)",
           borderBottom: "1px solid var(--border-subtle)",
           flexShrink: 0,
+          flexWrap: "wrap",
+          gap: "8px",
         }}
       >
-        <button
-          type="button"
-          onClick={() => setActiveTab("glossary")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "6px 14px",
-            borderRadius: "var(--radius-sm)",
-            border: `1px solid ${activeTab === "glossary" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-            backgroundColor: activeTab === "glossary" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-            color: activeTab === "glossary" ? "var(--accent-primary)" : "var(--text-primary)",
-            cursor: "pointer",
-            fontWeight: activeTab === "glossary" ? 600 : 500,
-            fontSize: "12.5px",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <BookOpen size={14} />
-          <span>Character Glossary & Terms</span>
-        </button>
+        <SegmentedControl<"glossary" | "script">
+          options={tabOptions}
+          value={activeTab}
+          onChange={setActiveTab}
+          size="md"
+        />
 
-        <button
-          type="button"
-          onClick={() => setActiveTab("script")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "6px 14px",
-            borderRadius: "var(--radius-sm)",
-            border: `1px solid ${activeTab === "script" ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-            backgroundColor: activeTab === "script" ? "rgba(88, 166, 255, 0.15)" : "var(--bg-app)",
-            color: activeTab === "script" ? "var(--accent-primary)" : "var(--text-primary)",
-            cursor: "pointer",
-            fontWeight: activeTab === "script" ? 600 : 500,
-            fontSize: "12.5px",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <Database size={14} />
-          <span>Offline Script Memory & Index</span>
-        </button>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          {activeTab === "glossary" && "Manage custom character names, terminology, and VNDB synchronization"}
+          {activeTab === "script" && "Local script database indexing and zero-latency line lookups"}
+        </span>
       </div>
 
       {/* Main Tab Content */}
