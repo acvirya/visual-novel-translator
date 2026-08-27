@@ -2,7 +2,7 @@
 
 # 🌸 Visual Novel Translator
 
-**A lightweight, all-in-one desktop application for real-time visual novel translation, transparent subtitle overlay, OCR screen capture, and batch script processing.**
+**A lightweight, all-in-one desktop app for playing untranslated Visual Novels in real-time with customizable transparent subtitles, zero-latency script lookup, and AI-powered translation.**
 
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D5?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
@@ -11,52 +11,94 @@
 
 <br />
 
-[**⬇️ Download Latest Installer**](https://github.com/acvirya/visual-novel-translator/releases/latest) • [**📖 User Guide**](#-quick-start-guide) • [**⌨️ Hotkeys**](#%EF%B8%8F-global-hotkeys)
+[**⬇️ Download Latest Installer**](https://github.com/acvirya/visual-novel-translator/releases/latest) • [**📖 User Guide**](#-how-to-use) • [**💡 Best Practices**](#-recommended-workflow) • [**⌨️ Hotkeys**](#%EF%B8%8F-global-hotkeys)
 
 </div>
 
 ---
 
-## 🎯 Key Features
-
-### 1. 🎮 Dual Text Input Modes
-- **Game Hooking (Textractor)**: Attach directly to running 32-bit & 64-bit game processes to capture text from memory with zero latency.
-- **Screen OCR Capture**: For games that cannot be hooked (browser games, emulators, or older engines), simply drag a box over dialogue and speaker areas to read text directly from the screen.
-
-### 2. 🪟 Transparent Subtitle Overlay (HUD)
-- **Click-Through Subtitles**: Displays translated dialogue directly over your game window without blocking mouse clicks.
-- **Customizable Styling**: Adjust font size, text outlines, colors, background opacity, and placement.
-- **Theme Presets**: Switch between built-in aesthetic styles (*Classic*, *Glassmorphism*, *Cyberpunk*, *Cinematic*, *RPG Box*) or customize with HTML/CSS.
-
-### 3. 🤖 Flexible Translation Engines
-- **OpenRouter AI**: Connect to any LLM supported by OpenRouter with multi-turn conversation memory for consistent story context.
-- **Free Translation (No API Key Required)**: Built-in support for Google Translate and DeepL Free for instant out-of-the-box translation.
-
-### 4. ⚡ Batch Script Translator
-- Translate entire script files (`.json`, `.jsonl`, `.txt`) in parallel with auto-continue, retry recovery, and customizable batch sizes.
-- Preserves original file formats and schema keys for visual novel modding and translation projects.
-
-### 5. 📚 Local Script Database & Caching
-- **Instant Script Matcher**: Automatically matches incoming game dialogue against local translated script files to avoid repetitive API calls.
-- **Auto-Save**: Saves new translations to your local database as you play.
-
-### 6. 📖 Character Glossary & VNDB Sync
-- Maintain custom character names and term glossaries to ensure consistent naming across routes.
-- **1-Click VNDB Sync**: Import character names, roles, and aliases directly from [The Visual Novel Database (VNDB)](https://vndb.org/).
+> [!NOTE]
+> **Active Development**: This project is currently in active development. Features, user experience, and performance optimizations are actively being refined. Feedback and bug reports are warmly welcome!
 
 ---
 
-## 🚀 Quick Start Guide
+## 💡 What is Visual Novel Translator?
 
-1. **Choose Translation Provider**:
-   - Open **Translation Providers** from the sidebar.
-   - Select **Free MT** (Google/DeepL) or enter your **OpenRouter API Key**.
-2. **Select Text Source**:
-   - **For PC Games**: Go to **Textractor Hook**, click **Refresh Targets**, select your game, and click **Attach**.
-   - **For Other Games / OCR**: Go to **OCR Input**, click **Select Screen Region**, and drag a box over the dialogue box.
-3. **Open Subtitle Overlay**:
-   - Enable the overlay from **Overlay Settings** or press `Ctrl + Shift + L`.
-   - Position the subtitle box over your game and start playing!
+**Visual Novel Translator** is designed as a **live playing companion** for visual novel readers. 
+
+Unlike romhacking or script repacking tools (which require extracting game archives, modifying script codes, and repacking files back into the game engine), this application works **alongside your running game**:
+- Captures Japanese dialogue in real-time as you play (via **Textractor Game Hooking** or **Screen OCR**).
+- Displays smooth, translated subtitles directly over your game using a **Transparent Subtitle Overlay**.
+- Leverages a local **Script Knowledge Base** so pre-translated dialogue lines appear instantly with zero API lag and 100% accurate context.
+
+---
+
+## 🎯 Key Features
+
+### 1. 🪟 Transparent Subtitle Overlay (HUD)
+- **Click-Through Mode**: Displays subtitles on top of your game without interfering with your mouse clicks or gameplay.
+- **Full Customization**: Change font styles, font sizes, text outlines, background opacity, colors, and positioning.
+- **Aesthetic Presets**: Choose from built-in themes (*Classic*, *Glassmorphism*, *Cyberpunk*, *Cinematic*, *RPG Box*) or customize your own look.
+
+### 2. 🎮 Two Capture Modes
+- **Game Hooking (Textractor Engine)**: Hooks directly into 32-bit & 64-bit game processes to read text straight from game memory with minimal delay. Supports combined threads and separate speaker/dialogue threads with automatic synchronization.
+- **Screen OCR Capture** *(Windows 11 only)*: For games that cannot be hooked (browser games, emulators, or non-hookable engines), simply select screen regions over the dialogue box to capture text directly using Windows 11's built-in high-speed OCR.
+
+> [!IMPORTANT]
+> **Windows 11 Requirement for OCR**: The built-in Screen OCR feature uses the native Windows 11 high-speed OCR API (`Windows.Media.Ocr` / OneOCR). If you are running Windows 10 or older, please use the **Textractor Hook** mode.
+
+### 3. 📚 Local Script Database & Knowledge Base
+- **Zero-Latency Lookups**: Pre-load translated script files (`.json`, `.jsonl`, `.txt`) into the app. When you encounter a line in-game, the app performs an instant in-memory lookup ($< 0.1\text{ms}$) instead of making online API requests.
+- **Smart Matching**: Uses multi-tier fuzzy and canonical matching with speaker-alias compensation (e.g. matching prologue alias *「クラスメイト」* with character name *「章吾」*).
+- **Auto-Learning**: Translations processed during your gameplay session can be automatically saved to your local database for future playthroughs.
+
+### 4. ⚡ Batch Script Translator
+- **Build Your Knowledge Base Offline**: Translate extracted script files (`.json`, `.jsonl`, `.txt`) in bulk using OpenRouter AI models or free translation before you play.
+- **Auto-Save & Resume**: Supports batching, automatic progress checkpointing, and retry recovery so long translation jobs never lose progress.
+
+### 5. 🤖 Flexible Translation Engines
+- **Free Translators (No API Key Needed)**: Instant out-of-the-box translation using Google Translate and DeepL Free.
+- **AI Models (OpenRouter)**: Connect your OpenRouter API key to use advanced LLMs (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro, DeepSeek, etc.) with custom system prompts and multi-turn story context memory.
+
+### 6. 📖 Character Glossary & VNDB Integration
+- **Character Name Synchronization**: Ensure character names and terminology remain consistent across all routes.
+- **1-Click VNDB Import**: Enter a VNDB visual novel ID (e.g. `v17`) to automatically import character names, aliases, and gender tags into your glossary.
+
+---
+
+## 🚀 How to Use
+
+### 🎮 Method A: Playing with Game Hook (Recommended)
+1. Start your Visual Novel game.
+2. Open **Visual Novel Translator** and go to **🎮 Textractor Input** in the sidebar.
+3. Click **Refresh Process List**, select your game process, and click **Attach Process**.
+4. Advance a line of dialogue in your game. Check the **Detected Threads** list:
+   - If the thread contains both speaker and dialogue (e.g., `【遥月】「おはよう」`), set its role to **✨ Combined**.
+   - If speaker and dialogue appear on separate threads, capture the speaker thread as **👤 Speaker** and the dialogue thread as **💬 Dialogue**.
+5. Enable the **Transparent Overlay** (press `Ctrl + Shift + L` to adjust position and size).
+6. Enjoy your game! Subtitles will update automatically as you advance dialogue.
+
+---
+
+### 📷 Method B: Playing with Screen OCR
+1. Start your game.
+2. Go to **📷 OCR Input** in the sidebar.
+3. Click **Select Dialogue Region** and drag a rectangle over the game's text box.
+4. *(Optional)* Click **Select Speaker Region** if character names appear in a separate box.
+5. Set the scan trigger to **Auto-Scan (Timer)** or press **`F9`** for instant manual capture.
+6. Open the **Transparent Overlay** and play.
+
+---
+
+## 💡 Recommended Workflow: The "Pre-Translate" Advantage
+
+For the best reading experience with zero translation lag and high AI quality:
+1. **Extract** your visual novel scripts to `.txt` or `.jsonl`.
+2. Open **⚡ Batch Translate** in this app to translate the files using an LLM.
+3. Open **📚 Script Database**, click **Import Scripts**, and add your translated script files into the database.
+4. Now, launch your game and play with **Textractor Hook**!
+   - Every line of dialogue will instantly match your pre-translated script database ($< 0.1\text{ms}$) with zero API cost and no network lag.
+   - Any lines that were not in the script will gracefully fall back to live AI/MT translation.
 
 ---
 
@@ -64,8 +106,8 @@
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl + Shift + L` | Toggle Overlay Click-Through / Interactive Position Mode |
-| `Ctrl + Shift + P` | Pause / Resume Live Translation |
+| `Ctrl + Shift + L` | Toggle Overlay Click-Through / Interactive Resize & Move Mode |
+| `Ctrl + Shift + P` | Pause / Resume Live Translation Stream |
 | `F9` | Trigger Instant Manual OCR Scan |
 
 ---
@@ -98,7 +140,7 @@
    npm run tauri dev
    ```
 
-4. **Build release package (`.exe` / `.msi`)**:
+4. **Build production installer (`.exe` / `.msi`)**:
    ```bash
    npm run tauri build
    ```
@@ -109,6 +151,6 @@
 
 ## 📄 License
 
-Distributed under the **GNU General Public License v3.0 (GPL-3.0)**. See [`LICENSE`](LICENSE) for more information.
+Distributed under the **GNU General Public License v3.0 (GPL-3.0)**. See [`LICENSE`](LICENSE) for more details.
 
 Copyright © 2026 **Anggatha Chandra Virya**. All rights reserved.
