@@ -8,6 +8,7 @@ import { logger } from "./loggerService";
 import { useTranslationStore } from "../stores/useTranslationStore";
 
 export interface TranslatePipelineOptions {
+  id?: number;
   speaker?: string;
   message: string;
   sourceLang?: string;
@@ -33,9 +34,10 @@ export interface LlmContextSettings {
   maxCharsPerLine: number;
 }
 
-interface QueueTask {
+interface TranslationTask {
   options: TranslatePipelineOptions;
   resolve: (res: TranslatePipelineResult) => void;
+  reqSeq: number;
 }
 
 const MAX_QUEUE_SIZE = 30;
@@ -50,9 +52,10 @@ function generateLogId(prefix: string = "log"): string {
 class TranslationManager {
   private listeners: ((item: TranslationLogItem) => void)[] = [];
   private contextHistory: { user: string; assistant: string }[] = [];
-  private queue: QueueTask[] = [];
+  private queue: TranslationTask[] = [];
   private isProcessingQueue = false;
   private isPausedInternal = true;
+  private dialogueSeq = 0;
 
   public subscribe(callback: (item: TranslationLogItem) => void) {
     this.listeners.push(callback);
@@ -187,6 +190,11 @@ class TranslationManager {
       });
     }
 
+    const reqSeq = options.id !== undefined ? options.id : ++this.dialogueSeq;
+    if (options.id !== undefined && options.id > this.dialogueSeq) {
+      this.dialogueSeq = options.id;
+    }
+
     return new Promise<TranslatePipelineResult>((resolve) => {
       // If queue exceeds max limit, discard oldest pending item to avoid unbounded backlog
       if (this.queue.length >= MAX_QUEUE_SIZE) {
@@ -217,7 +225,7 @@ class TranslationManager {
         }
       }
 
-      this.queue.push({ options, resolve });
+      this.queue.push({ options, resolve, reqSeq });
       this.processQueue();
     });
   }
@@ -238,7 +246,7 @@ class TranslationManager {
       if (!task) break;
 
       try {
-        const result = await this.executeTranslate(task.options);
+        const result = await this.executeTranslate(task.options, task.reqSeq);
         task.resolve(result);
       } catch (err: any) {
         logger.error("TranslationManager", `Queue task failed: ${err?.message || err}`);
@@ -274,7 +282,7 @@ class TranslationManager {
    * 4. Auto-appends new translations into Active Script Database
    * 5. Forwards result to Transparent Overlay and Live Translate Log Stream
    */
-  private async executeTranslate(options: TranslatePipelineOptions): Promise<TranslatePipelineResult> {
+  private async executeTranslate(options: TranslatePipelineOptions, reqSeq: number = 0): Promise<TranslatePipelineResult> {
     const startTime = Date.now();
     const {
       speaker,
@@ -357,6 +365,7 @@ class TranslationManager {
       overlayChannel.send({
         type: "DIALOGUE_UPDATE",
         dialogue: {
+          id: reqSeq,
           speaker: cleanSpk,
           translatedSpeaker,
           message: cleanMsg,
@@ -396,6 +405,7 @@ class TranslationManager {
       overlayChannel.send({
         type: "DIALOGUE_UPDATE",
         dialogue: {
+          id: reqSeq,
           speaker: cleanSpk,
           translatedSpeaker: cleanSpk,
           message: cleanMsg,
@@ -519,6 +529,7 @@ class TranslationManager {
     overlayChannel.send({
       type: "DIALOGUE_UPDATE",
       dialogue: {
+        id: reqSeq,
         speaker: cleanSpk,
         translatedSpeaker,
         message: cleanMsg,

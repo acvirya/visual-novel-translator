@@ -86,6 +86,8 @@ export const OverlayWindow: React.FC = () => {
     initialBox: boxRect,
   });
 
+  const highestIdRef = useRef<number>(0);
+
   // Sync with main app via BroadcastChannel
   useEffect(() => {
     const unsubscribe = overlayChannel.subscribe((event: OverlayEvent) => {
@@ -100,6 +102,14 @@ export const OverlayWindow: React.FC = () => {
       } else if (event.type === "SET_EDIT_MODE") {
         setIsEditing(event.isEditing);
       } else if (event.type === "DIALOGUE_UPDATE") {
+        const msgId = typeof event.dialogue.id === "number" ? event.dialogue.id : 0;
+        // Rule 6: Only accept packets with the highest ID (strictly discard older packets to eliminate race conditions)
+        if (msgId > 0 && msgId < highestIdRef.current) {
+          return;
+        }
+        if (msgId > 0 && msgId > highestIdRef.current) {
+          highestIdRef.current = msgId;
+        }
         setDialogue(event.dialogue);
       }
     });
@@ -322,16 +332,16 @@ export const OverlayWindow: React.FC = () => {
       let currentIdx = 1;
       setDisplayedDialogue({
         ...dialogue,
-        message: targetOrig.slice(0, 1),
-        translatedMessage: targetTrans.slice(0, 1),
+        message: targetOrig ? targetOrig.slice(0, 1) : "",
+        translatedMessage: targetTrans ? targetTrans.slice(0, 1) : "",
       });
 
       const timer = setInterval(() => {
         currentIdx++;
         setDisplayedDialogue({
           ...dialogue,
-          message: targetOrig.slice(0, currentIdx),
-          translatedMessage: targetTrans.slice(0, currentIdx),
+          message: targetOrig ? targetOrig.slice(0, currentIdx) : "",
+          translatedMessage: targetTrans ? targetTrans.slice(0, currentIdx) : "",
         });
 
         if (currentIdx >= maxLen) {

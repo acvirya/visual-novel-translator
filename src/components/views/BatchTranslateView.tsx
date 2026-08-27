@@ -9,7 +9,6 @@ import {
   Square,
   Sliders,
   Sparkles,
-  Layers,
   Search,
   CheckCircle2,
   Clock,
@@ -23,15 +22,19 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
-import { KeySelectorCombobox } from "../common/KeySelectorCombobox";
+import { ProviderSelectorMultiSelect } from "../common/ProviderSelectorMultiSelect";
 import { SegmentedControl } from "../common/SegmentedControl";
+import {
+  getSelectedModelProviders,
+  setSelectedModelProviders,
+} from "../../services/openRouterService";
 import {
   batchTranslateService,
   BatchFileEntry,
   BatchSettings,
-  KeyMappingConfig,
   isGenuinelyTranslated,
   isExplicitTagged,
+  isProcessed,
 } from "../../services/batchTranslateService";
 import { useBatchStore } from "../../stores/useBatchStore";
 
@@ -64,6 +67,10 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   // Settings State
   const [selectedEngine, setSelectedEngine] = useState<string>(() => {
     return localStorage.getItem("vn_batch_selected_model") || "openai/gpt-4o-mini";
+  });
+  const [selectedProviders, setSelectedProviders] = useState<string[]>(() => {
+    const initModel = localStorage.getItem("vn_batch_selected_model") || "openai/gpt-4o-mini";
+    return getSelectedModelProviders(initModel);
   });
 
   const [linesPerBatch, setLinesPerBatch] = useState<number>(() => {
@@ -104,9 +111,14 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   });
   const [timeoutMinutesInput, setTimeoutMinutesInput] = useState<string>(String(timeoutMinutes));
 
+  const [maxBackoffSeconds, setMaxBackoffSeconds] = useState<number>(() => {
+    const val = parseInt(localStorage.getItem("vn_batch_max_backoff_seconds") || "30", 10);
+    return isNaN(val) || val < 1 ? 30 : val;
+  });
+  const [maxBackoffSecondsInput, setMaxBackoffSecondsInput] = useState<string>(String(maxBackoffSeconds));
+
   const [autoContinue, setAutoContinue] = useState<boolean>(() => {
-    const val = localStorage.getItem("vn_batch_auto_continue");
-    return val === null ? true : val === "true";
+    return localStorage.getItem("vn_batch_auto_continue") !== "false";
   });
   const [translateExplicitOnly, setTranslateExplicitOnly] = useState<boolean>(() => {
     return localStorage.getItem("vn_batch_translate_explicit_only") === "true";
@@ -120,54 +132,22 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   });
   const [fileSuffix, setFileSuffix] = useState<string>("_translated");
 
-  // Key Mappings
-  const [sourceSpeakerKey, setSourceSpeakerKey] = useState<string>(() => {
-    const raw = localStorage.getItem("vn_batch_src_speaker_key");
-    return raw && raw !== "auto" ? raw : "speaker";
-  });
-  const [sourceMessageKey, setSourceMessageKey] = useState<string>(() => {
-    const raw = localStorage.getItem("vn_batch_src_message_key");
-    return raw && raw !== "auto" ? raw : "message";
-  });
-  const [targetSpeakerKey, setTargetSpeakerKey] = useState<string>(() => {
-    return localStorage.getItem("vn_batch_tgt_speaker_key") || "translated_speaker";
-  });
-  const [targetMessageKey, setTargetMessageKey] = useState<string>(() => {
-    return localStorage.getItem("vn_batch_tgt_message_key") || "translated_message";
-  });
-
-  const keyMapping: KeyMappingConfig = useMemo(() => ({
-    sourceSpeakerKey,
-    sourceMessageKey,
-    targetSpeakerKey,
-    targetMessageKey,
-  }), [sourceSpeakerKey, sourceMessageKey, targetSpeakerKey, targetMessageKey]);
-
-  // Aggregate all detected JSON keys across queued files
-  const detectedKeys = useMemo(() => {
-    const set = new Set<string>();
-    queuedFiles.forEach((f) => f.detectedKeys.forEach((k) => set.add(k)));
-    return Array.from(set);
-  }, [queuedFiles]);
-
   // Sync settings to localStorage
   useEffect(() => {
     localStorage.setItem("vn_batch_selected_model", selectedEngine);
+    setSelectedProviders(getSelectedModelProviders(selectedEngine));
     localStorage.setItem("vn_batch_lines_per_batch", String(linesPerBatch));
     localStorage.setItem("vn_batch_max_batch_context", String(maxBatchContext));
     localStorage.setItem("vn_batch_retain_batch_context", String(retainBatchContext));
     localStorage.setItem("vn_batch_concurrency", String(concurrency));
     localStorage.setItem("vn_batch_delay_ms", String(delayMs));
     localStorage.setItem("vn_batch_timeout_minutes", String(timeoutMinutes));
+    localStorage.setItem("vn_batch_max_backoff_seconds", String(maxBackoffSeconds));
     localStorage.setItem("vn_batch_auto_continue", String(autoContinue));
     localStorage.setItem("vn_batch_translate_explicit_only", String(translateExplicitOnly));
     localStorage.setItem("vn_batch_override_raw", String(overrideRawWithPreprocessed));
     localStorage.setItem("vn_batch_output_dir", outputDir);
-    localStorage.setItem("vn_batch_src_speaker_key", sourceSpeakerKey);
-    localStorage.setItem("vn_batch_src_message_key", sourceMessageKey);
-    localStorage.setItem("vn_batch_tgt_speaker_key", targetSpeakerKey);
-    localStorage.setItem("vn_batch_tgt_message_key", targetMessageKey);
-  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, autoContinue, translateExplicitOnly, overrideRawWithPreprocessed, outputDir, sourceSpeakerKey, sourceMessageKey, targetSpeakerKey, targetMessageKey]);
+  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, maxBackoffSeconds, autoContinue, translateExplicitOnly, overrideRawWithPreprocessed, outputDir]);
 
   // Auto-select first file if none selected
   useEffect(() => {
@@ -175,31 +155,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       setSelectedFileId(queuedFiles[0].id);
     }
   }, [queuedFiles, selectedFileId]);
-
-  // Re-parse files only when key mappings change
-  useEffect(() => {
-    if (isRunning) return;
-    setQueuedFiles((prev) =>
-      prev.map((file) => {
-        const newItems = batchTranslateService.parseScriptContent(file.rawContent, keyMapping);
-        newItems.forEach((newItem, idx) => {
-          const oldItem = file.items.find((it) => it.id === newItem.id) || file.items[idx];
-          if (oldItem && isGenuinelyTranslated(oldItem)) {
-            newItem.translatedSpeaker = oldItem.translatedSpeaker;
-            newItem.translatedMessage = oldItem.translatedMessage;
-          }
-        });
-        const completedCount = newItems.filter((it) => isGenuinelyTranslated(it)).length;
-        return {
-          ...file,
-          items: newItems,
-          completedLines: completedCount,
-          totalLines: newItems.length,
-          status: completedCount >= newItems.length && newItems.length > 0 ? "completed" : file.status,
-        };
-      })
-    );
-  }, [sourceSpeakerKey, sourceMessageKey, targetSpeakerKey, targetMessageKey]);
 
   // Subscribe to progress events
   useEffect(() => {
@@ -216,6 +171,17 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   const completedLines = queuedFiles.reduce((acc, f) => acc + f.items.filter((it) => isGenuinelyTranslated(it)).length, 0);
   const explicitLines = queuedFiles.reduce((acc, f) => acc + f.items.filter((it) => isExplicitTagged(it)).length, 0);
   const progressPercent = totalLines > 0 ? Math.min(100, Math.round((completedLines / totalLines) * 100)) : 0;
+
+  // Check if there are remaining lines available to translate based on active mode
+  const hasTranslatableLines = useMemo(() => {
+    if (queuedFiles.length === 0) return false;
+    if (translateExplicitOnly) {
+      // In explicit re-translation mode: only explicit-flagged lines are valid targets
+      return queuedFiles.some((f) => f.items.some((it) => isExplicitTagged(it)));
+    }
+    // In standard mode: any line not processed yet (neither genuinely translated nor explicit) is a valid target
+    return queuedFiles.some((f) => f.items.some((it) => !isProcessed(it)));
+  }, [queuedFiles, translateExplicitOnly]);
 
   // Active Selected File
   const activeFile = useMemo(() => {
@@ -269,8 +235,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       if (Array.isArray(results) && results.length > 0) {
         const rawFiles: BatchFileEntry[] = results.map(([filePath, content, sizeBytes]) => {
           const fileName = filePath.replace(/\\/g, "/").split("/").pop() || "script.jsonl";
-          const detected = batchTranslateService.detectAvailableKeys(content);
-          const items = batchTranslateService.parseScriptContent(content, keyMapping);
+          const items = batchTranslateService.parseScriptContent(content);
           return {
             id: `bf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             name: fileName,
@@ -278,16 +243,15 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             sizeBytes,
             rawContent: content,
             items,
-            detectedKeys: detected,
             status: "ready",
             completedLines: items.filter((it) => isGenuinelyTranslated(it)).length,
             totalLines: items.length,
           };
         });
 
-        // Hydrate from existing output files on disk
+        // Hydrate from existing output files (.jsonl) on disk
         const hydratedFiles = await Promise.all(
-          rawFiles.map((f) => batchTranslateService.hydrateExistingTranslationFromDisk(f, outputDir, fileSuffix, keyMapping))
+          rawFiles.map((f) => batchTranslateService.hydrateExistingTranslationFromDisk(f, outputDir, fileSuffix))
         );
 
         setQueuedFiles((prev) => [...prev, ...hydratedFiles]);
@@ -307,7 +271,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
         setOutputDir(folder);
         if (queuedFiles.length > 0) {
           const rehydrated = await Promise.all(
-            queuedFiles.map((f) => batchTranslateService.hydrateExistingTranslationFromDisk(f, folder, fileSuffix, keyMapping))
+            queuedFiles.map((f) => batchTranslateService.hydrateExistingTranslationFromDisk(f, folder, fileSuffix))
           );
           setQueuedFiles(rehydrated);
         }
@@ -321,7 +285,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     if (queuedFiles.length === 0 || isRunning) return;
     try {
       const rehydrated = await Promise.all(
-        queuedFiles.map((f) => batchTranslateService.hydrateExistingTranslationFromDisk(f, outputDir, fileSuffix, keyMapping))
+        queuedFiles.map((f) => batchTranslateService.hydrateExistingTranslationFromDisk(f, outputDir, fileSuffix))
       );
       setQueuedFiles(rehydrated);
     } catch (err) {
@@ -357,12 +321,13 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       temperature: 0.3,
       delayMs,
       timeoutMinutes,
+      maxBackoffSeconds,
       autoContinueUntilCompleted: autoContinue,
       translateExplicitOnly,
       overrideRawWithPreprocessed,
+      selectedProviders,
       outputDir,
       fileSuffix,
-      keyMapping,
     };
 
     try {
@@ -426,6 +391,13 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     setTimeoutMinutesInput(String(valid));
   };
 
+  const handleCommitMaxBackoffSeconds = () => {
+    const parsed = parseInt(maxBackoffSecondsInput, 10);
+    const valid = isNaN(parsed) || parsed < 1 ? 30 : parsed;
+    setMaxBackoffSeconds(valid);
+    setMaxBackoffSecondsInput(String(valid));
+  };
+
   const handleOpenDebugLog = async () => {
     try {
       const logPath = outputDir && outputDir.trim() ? `${outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/batch_debug_log.txt` : "batch_debug_log.txt";
@@ -464,22 +436,54 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               selectedModelId={selectedEngine}
               onSelectModel={(id) => setSelectedEngine(id)}
               disabled={isRunning}
-              width="240px"
+              width="220px"
               compact={true}
             />
+            {!selectedEngine.startsWith("mt:") && (
+              <ProviderSelectorMultiSelect
+                modelId={selectedEngine}
+                selectedProviders={selectedProviders}
+                onChangeProviders={(newProviders) => {
+                  setSelectedModelProviders(selectedEngine, newProviders);
+                  setSelectedProviders(newProviders);
+                }}
+                disabled={isRunning}
+                width="220px"
+                compact={true}
+              />
+            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {!isRunning ? (
               <button
                 onClick={handleStartBatch}
-                disabled={queuedFiles.length === 0 || queuedFiles.every((f) => f.status === "completed")}
+                disabled={!hasTranslatableLines}
                 className="btn-primary"
-                style={{ padding: "6px 14px", fontSize: "12px" }}
+                style={{
+                  padding: "6px 14px",
+                  fontSize: "12px",
+                  opacity: !hasTranslatableLines ? 0.5 : 1,
+                  cursor: !hasTranslatableLines ? "not-allowed" : "pointer",
+                }}
+                title={
+                  queuedFiles.length === 0
+                    ? "No script files loaded in queue. Click 'Add Scripts' to import files."
+                    : !hasTranslatableLines
+                    ? translateExplicitOnly
+                      ? "No explicit / censored flagged lines found in any queued file to re-translate."
+                      : "All dialogue lines across all queued files are already 100% completed."
+                    : undefined
+                }
               >
                 <Play size={13} />
                 <span>
-                  {queuedFiles.some((f) => f.status === "error" || (f.completedLines > 0 && f.status !== "completed"))
+                  {translateExplicitOnly
+                    ? "Re-translate Explicit Lines"
+                    : queuedFiles.some((f) => {
+                        const proc = f.items.filter((it) => isProcessed(it)).length;
+                        return proc > 0 && proc < f.totalLines;
+                      })
                     ? "Continue / Resume Batch"
                     : "Start Batch Translation"}
                 </span>
@@ -552,7 +556,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             },
             {
               id: "settings",
-              label: "Batch & Key Mapping Settings",
+              label: "Batch Settings",
               icon: <Sliders size={14} />,
             },
           ]}
@@ -563,7 +567,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
         <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
           {activeTab === "preview" && "Browse, inspect, and filter translated lines per file"}
-          {activeTab === "settings" && "Configure AI provider, concurrency, batch sizes, and custom JSON key mapping"}
+          {activeTab === "settings" && "Configure AI provider, concurrency, batch sizes, and unified .jsonl script database storage"}
         </span>
       </div>
 
@@ -572,7 +576,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       {/* ========================================================================= */}
       {activeTab === "settings" ? (
         /* ========================================================================= */
-        /* MODE A: BATCH SETTINGS & JSON FIELD MAPPING (Single Column Spacious View) */
+        /* MODE A: BATCH SETTINGS & PARAMETERS                                       */
         /* ========================================================================= */
         <div style={{ display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", flex: 1, minHeight: 0, paddingRight: "2px" }}>
           {/* Card 1: Queued Files Manager in Settings */}
@@ -598,249 +602,202 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                     • Total: <strong style={{ color: "var(--accent-success)" }}>{completedLines}</strong> / {totalLines} lines ({progressPercent}%)
                     {explicitLines > 0 && (
                       <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "3px" }}>
-                        • <AlertTriangle size={11} /> {explicitLines} explicit
+                        • ⚠️ {explicitLines} Censored / Explicit
                       </span>
                     )}
                   </span>
                 )}
               </div>
 
+              {/* Action Buttons: Add, Scan Disk, Clear */}
               <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                 <button
                   type="button"
                   onClick={handleAddFiles}
                   disabled={isRunning}
                   className="btn-primary"
-                  style={{ padding: "5px 12px", fontSize: "11.5px" }}
+                  style={{ padding: "5px 10px", fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "5px" }}
                 >
                   <Plus size={13} />
-                  <span>Add Script Files</span>
+                  <span>Add Scripts</span>
                 </button>
-                {queuedFiles.length > 0 && !isRunning && (
-                  <button
-                    type="button"
-                    onClick={handleScanDiskProgress}
-                    className="btn-secondary"
-                    style={{ padding: "5px 10px", fontSize: "11.5px" }}
-                    title="Scan output folder to hydrate already translated files"
-                  >
-                    <RefreshCw size={13} />
-                    <span>Scan Disk</span>
-                  </button>
-                )}
-                {queuedFiles.length > 0 && !isRunning && (
-                  <button
-                    type="button"
-                    onClick={handleClearQueue}
-                    className="btn-secondary"
-                    style={{ padding: "5px 10px", fontSize: "11.5px", color: "var(--accent-danger)" }}
-                    title="Clear all queued files"
-                  >
-                    <Trash2 size={13} />
-                    <span>Clear</span>
-                  </button>
-                )}
+
+                <button
+                  type="button"
+                  onClick={handleScanDiskProgress}
+                  disabled={isRunning || queuedFiles.length === 0}
+                  className="btn-secondary"
+                  style={{ padding: "5px 10px", fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                  title="Rescan output folder to check for already translated lines and update completion status"
+                >
+                  <RefreshCw size={13} />
+                  <span>Scan Disk</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleClearQueue}
+                  disabled={isRunning || queuedFiles.length === 0}
+                  className="btn-secondary"
+                  style={{ padding: "5px 10px", fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "5px", color: "var(--accent-danger)" }}
+                >
+                  <Trash2 size={13} />
+                  <span>Clear All</span>
+                </button>
               </div>
             </div>
 
-            {/* Global Progress Bar Line */}
-            {queuedFiles.length > 0 && (
-              <div style={{ width: "100%", height: "5px", backgroundColor: "var(--bg-app)", borderRadius: "3px", overflow: "hidden" }}>
-                <div
-                  style={{
-                    width: `${progressPercent}%`,
-                    height: "100%",
-                    backgroundColor: progressPercent === 100 ? "var(--accent-success)" : "var(--accent-cyan)",
-                    transition: "width 0.2s ease",
-                  }}
-                />
-              </div>
-            )}
-
-            {/* Grid of File Cards */}
+            {/* Table of Queued Files */}
             {queuedFiles.length === 0 ? (
               <div
                 style={{
-                  padding: "16px",
+                  border: "1px dashed var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "18px",
                   textAlign: "center",
                   color: "var(--text-muted)",
                   fontSize: "12px",
-                  border: "1px dashed var(--border-subtle)",
-                  borderRadius: "var(--radius-sm)",
+                  backgroundColor: "var(--bg-app)",
                 }}
               >
-                No script files queued. Click <strong>Add Script Files</strong> above to load <code>.jsonl</code> or <code>.json</code> files.
+                No files loaded yet. Click <strong>"Add Scripts"</strong> to import JSONL, JSON, KS, CSV, or TXT script files.
               </div>
             ) : (
               <div
                 style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-                  gap: "8px",
-                  maxHeight: "160px",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  overflow: "hidden",
+                  backgroundColor: "var(--bg-app)",
+                  maxHeight: "200px",
                   overflowY: "auto",
                 }}
               >
-                {queuedFiles.map((file) => {
-                  const isSelected = file.id === (activeFile?.id);
-                  const fileDone = file.items.filter((it) => isGenuinelyTranslated(it)).length;
-                  const fileExp = file.items.filter((it) => isExplicitTagged(it)).length;
-                  const filePercent = file.totalLines > 0 ? Math.round((fileDone / file.totalLines) * 100) : 0;
-                  return (
-                    <div
-                      key={file.id}
-                      onClick={() => setSelectedFileId(file.id)}
+                <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "12px" }}>
+                  <thead>
+                    <tr
                       style={{
-                        backgroundColor: isSelected ? "var(--bg-card)" : "var(--bg-surface-elevated)",
-                        border:
-                          file.status === "processing"
-                            ? "1px solid var(--accent-cyan)"
-                            : file.status === "error"
-                            ? "1px solid var(--accent-danger)"
-                            : isSelected
-                            ? "1px solid var(--accent-primary)"
-                            : "1px solid var(--border-subtle)",
-                        borderRadius: "var(--radius-sm)",
-                        padding: "8px 10px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: "8px",
-                        cursor: "pointer",
-                        transition: "all 0.15s ease",
+                        backgroundColor: "var(--bg-surface-elevated)",
+                        borderBottom: "1px solid var(--border-subtle)",
+                        color: "var(--text-secondary)",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 2,
                       }}
                     >
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: isSelected ? 700 : 600,
-                            color: file.status === "error" ? "var(--accent-danger)" : isSelected ? "var(--accent-primary)" : "var(--text-primary)",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                          title={file.path}
-                        >
-                          {file.name}
-                        </div>
-                        <div style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px", marginTop: "2px" }}>
-                          <span>{fileDone}/{file.totalLines} lines ({filePercent}%)</span>
-                          {fileExp > 0 && (
-                            <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "2px" }}>
-                              <AlertTriangle size={10} /> {fileExp} explicit
-                            </span>
-                          )}
-                          <span>•</span>
-                          <span>{(file.sizeBytes / 1024).toFixed(1)} KB</span>
-                          {file.status === "completed" || (file.totalLines > 0 && fileDone + fileExp >= file.totalLines) ? (
-                            fileExp > 0 ? (
-                              <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "2px" }}>
-                                <AlertTriangle size={10} /> Done ({fileExp} Explicit)
-                              </span>
-                            ) : (
-                              <span style={{ color: "var(--accent-success)", fontWeight: 700 }}>Completed</span>
-                            )
-                          ) : file.status === "processing" ? (
-                            <span style={{ color: "var(--accent-cyan)", fontWeight: 700 }}>Translating...</span>
-                          ) : file.status === "error" ? (
-                            <span style={{ color: "var(--accent-danger)", fontWeight: 700 }}>Halted / Error</span>
-                          ) : null}
-                        </div>
-                      </div>
+                      <th style={{ padding: "7px 12px" }}>File</th>
+                      <th style={{ padding: "7px 12px", width: "130px" }}>Progress</th>
+                      <th style={{ padding: "7px 12px", width: "140px" }}>Status</th>
+                      <th style={{ padding: "7px 10px", width: "40px", textAlign: "center" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queuedFiles.map((file, idx) => {
+                      const fDone = file.completedLines ?? file.items.filter((it) => isGenuinelyTranslated(it)).length;
+                      const fExp = file.explicitLines ?? file.items.filter((it) => isExplicitTagged(it)).length;
+                      const isFinished = (fDone + fExp >= file.totalLines && file.totalLines > 0) || file.status === "completed";
+                      const isSelected = file.id === selectedFileId;
 
-                      {!isRunning && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRemoveFile(file.id);
+                      // Status Badge Calculation
+                      let statusNode: React.ReactNode;
+                      if (file.status === "processing") {
+                        statusNode = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(56, 189, 248, 0.12)", color: "var(--accent-cyan)", border: "1px solid rgba(56, 189, 248, 0.3)" }}>
+                            <Activity size={11} className="animate-spin" /> translating
+                          </span>
+                        );
+                      } else if (isFinished) {
+                        if (fExp > 0) {
+                          statusNode = (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(244, 63, 94, 0.12)", color: "#fb7185", border: "1px solid rgba(244, 63, 94, 0.3)" }}>
+                              <AlertTriangle size={11} /> {fExp} explicit
+                            </span>
+                          );
+                        } else {
+                          statusNode = (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(34, 197, 94, 0.12)", color: "var(--accent-success)", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
+                              <CheckCircle2 size={11} /> completed
+                            </span>
+                          );
+                        }
+                      } else if (isRunning) {
+                        statusNode = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(234, 179, 8, 0.1)", color: "var(--accent-gold)", border: "1px solid rgba(234, 179, 8, 0.25)" }}>
+                            <Clock size={11} /> queued
+                          </span>
+                        );
+                      } else if (file.status === "error") {
+                        statusNode = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(239, 68, 68, 0.12)", color: "var(--accent-danger)", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
+                            error
+                          </span>
+                        );
+                      } else {
+                        statusNode = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "var(--bg-surface-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
+                            pending
+                          </span>
+                        );
+                      }
+
+                      return (
+                        <tr
+                          key={file.id}
+                          onClick={() => setSelectedFileId(file.id)}
+                          style={{
+                            borderBottom: idx < queuedFiles.length - 1 ? "1px solid var(--border-subtle)" : "none",
+                            backgroundColor: isSelected ? "var(--accent-surface)" : "transparent",
+                            cursor: "pointer",
+                            transition: "background-color 0.15s ease",
                           }}
-                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "3px" }}
-                          title="Remove file"
                         >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+                          {/* 1. File Name without size */}
+                          <td style={{ padding: "6px 12px", color: isSelected ? "var(--accent-primary)" : "var(--text-primary)", fontWeight: 600 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden" }}>
+                              <FileCode size={14} style={{ color: isSelected ? "var(--accent-primary)" : isFinished ? "var(--accent-success)" : "var(--accent-cyan)", flexShrink: 0 }} />
+                              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "320px" }} title={file.path}>
+                                {file.name}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* 2. Progress "12/100" */}
+                          <td style={{ padding: "6px 12px", whiteSpace: "nowrap" }}>
+                            <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "11.5px" }}>
+                              {fDone}/{file.totalLines}
+                            </span>
+                          </td>
+
+                          {/* 3. Status */}
+                          <td style={{ padding: "6px 12px", whiteSpace: "nowrap" }}>
+                            {statusNode}
+                          </td>
+
+                          {/* 4. Remove Action */}
+                          <td style={{ padding: "6px 10px", textAlign: "center" }}>
+                            {!isRunning && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveFile(file.id);
+                                }}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "3px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                                title="Remove file"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
-          </div>
-
-          {/* Card 2: JSON Field / Key Mapping */}
-          <div
-            style={{
-              backgroundColor: "var(--bg-surface)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-md)",
-              padding: "16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "12px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Layers size={16} style={{ color: "var(--accent-cyan)" }} />
-                <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text-primary)" }}>
-                  JSON Field / Column Key Mapping
-                </span>
-              </div>
-              {detectedKeys.length > 0 && (
-                <span style={{ fontSize: "11px", color: "var(--accent-gold)", fontWeight: 600 }}>
-                  {detectedKeys.length} JSON keys auto-detected across scripts
-                </span>
-              )}
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "14px" }}>
-              {/* Source Speaker */}
-              <KeySelectorCombobox
-                label="Source Speaker Key:"
-                value={sourceSpeakerKey}
-                onChange={(key) => setSourceSpeakerKey(key)}
-                detectedKeys={detectedKeys}
-                placeholder="Select or type key..."
-                allowNone={true}
-                disabled={isRunning}
-                helperText="Select detected key or type custom key (e.g. 'speaker', 'name', or 'none')."
-              />
-
-              {/* Source Message */}
-              <KeySelectorCombobox
-                label="Source Message Key:"
-                value={sourceMessageKey}
-                onChange={(key) => setSourceMessageKey(key)}
-                detectedKeys={detectedKeys}
-                placeholder="Select or type key..."
-                disabled={isRunning}
-                helperText="Select detected dialogue key or type custom key (e.g. 'message', 'text', 'dialogue')."
-              />
-
-              {/* Target Speaker */}
-              <KeySelectorCombobox
-                label="Target Speaker Key (Output):"
-                value={targetSpeakerKey}
-                onChange={(key) => setTargetSpeakerKey(key)}
-                detectedKeys={detectedKeys.length > 0 ? detectedKeys : ["translated_speaker", "speaker_en", "trans_speaker"]}
-                placeholder="translated_speaker"
-                disabled={isRunning}
-                helperText="Key name written into output script for translated character names."
-              />
-
-              {/* Target Message */}
-              <KeySelectorCombobox
-                label="Target Message Key (Output):"
-                value={targetMessageKey}
-                onChange={(key) => setTargetMessageKey(key)}
-                detectedKeys={detectedKeys.length > 0 ? detectedKeys : ["translated_message", "message_en", "trans_message"]}
-                placeholder="translated_message"
-                disabled={isRunning}
-                helperText="Key name written into output script for translated dialogue."
-              />
-            </div>
           </div>
 
           {/* Card 3: Batch & Context Parameters */}
@@ -992,6 +949,28 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 </span>
               </div>
 
+              {/* Max Retry Backoff Time (Seconds) */}
+              <div>
+                <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  Max Backoff Time (Seconds):
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  className="input-field"
+                  value={maxBackoffSecondsInput}
+                  disabled={isRunning}
+                  onChange={(e) => setMaxBackoffSecondsInput(e.target.value)}
+                  onBlur={handleCommitMaxBackoffSeconds}
+                  onKeyDown={(e) => e.key === "Enter" && handleCommitMaxBackoffSeconds()}
+                  style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600 }}
+                />
+                <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
+                  Maximum wait limit during rate-limits & retries (e.g. 5s for fast bruteforce, 30s default).
+                </span>
+              </div>
+
               {/* Output File Suffix */}
               <div>
                 <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
@@ -1037,6 +1016,26 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   Browse Folder
                 </button>
               </div>
+            </div>
+
+            {/* Unified Database Format Note */}
+            <div
+              style={{
+                backgroundColor: "rgba(56, 189, 248, 0.06)",
+                border: "1px solid rgba(56, 189, 248, 0.2)",
+                borderRadius: "var(--radius-sm)",
+                padding: "8px 12px",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <FileCode size={14} color="var(--accent-cyan)" style={{ flexShrink: 0 }} />
+              <span>
+                <strong>Unified .jsonl Script Database:</strong> All translations are stored in standardized JSON Lines format, ready for instant offline script lookup by Textractor & Live Translation.
+              </span>
             </div>
 
             {/* Automation & Preprocessing Toggles */}

@@ -711,10 +711,10 @@ class ScriptManagerService {
       return false;
     };
 
-    const isConflictingSpeaker = (itemSpk?: string): boolean => {
-      const normItemSpk = this.normalizeSpeaker(itemSpk);
-      if (!normCleanSpk || !normItemSpk) return false;
-      return normCleanSpk !== normItemSpk && !normCleanSpk.includes(normItemSpk) && !normItemSpk.includes(normCleanSpk);
+    const getSpeakerAdjustment = (itemSpk?: string): number => {
+      if (isExactSpeakerMatch(itemSpk)) return 0.04;
+      if (isCompatibleSpeaker(itemSpk)) return 0.0;
+      return -0.08; // Speaker mismatch penalty
     };
 
     // =========================================================================
@@ -731,11 +731,11 @@ class ScriptManagerService {
     }
 
     // =========================================================================
-    // Tier 2: Normalized Message Match (O(1)) with Speaker Priority
+    // Tier 2: Normalized Message Match (O(1)) with Speaker Priority & Penalty
     // =========================================================================
     const msgHits = this.messageOnlyIndex.get(normCleanMsg);
     if (msgHits && msgHits.length > 0) {
-      // 2a. Exact speaker match
+      // 2a. Exact speaker match (Highest priority)
       const exactSpkHit = msgHits.find((e) => isExactSpeakerMatch(e.speaker));
       if (exactSpkHit) {
         exactSpkHit.matchedCount = (exactSpkHit.matchedCount || 0) + 1;
@@ -751,12 +751,14 @@ class ScriptManagerService {
         return { matched: true, entry: compatibleHit, similarityScore: 0.98 };
       }
 
-      // 2c. If query is narration and threshold is lenient (<= 0.85), allow first match
-      if (!normCleanSpk && threshold <= 0.85) {
-        const fallback = msgHits[0];
-        fallback.matchedCount = (fallback.matchedCount || 0) + 1;
-        fallback.lastUsed = new Date().toLocaleTimeString();
-        return { matched: true, entry: fallback, similarityScore: 0.95 };
+      // 2c. Different speaker with Exact Message: Apply speaker mismatch penalty (-0.08)
+      // Score = 0.92 (e.g. クラスメイト in capture vs 章吾 in script)
+      const diffSpeakerScore = 0.92;
+      if (diffSpeakerScore >= effectiveThreshold) {
+        const fallbackHit = msgHits[0];
+        fallbackHit.matchedCount = (fallbackHit.matchedCount || 0) + 1;
+        fallbackHit.lastUsed = new Date().toLocaleTimeString();
+        return { matched: true, entry: fallbackHit, similarityScore: diffSpeakerScore };
       }
     }
 
@@ -790,16 +792,14 @@ class ScriptManagerService {
 
       for (const item of substrCandidates) {
         const itemSpk = item._normSpeaker ?? this.normalizeSpeaker(item.speaker);
-        if (isConflictingSpeaker(itemSpk)) continue; // Never cross-contaminate different named speakers
-
         const normItem = item._normMessage ?? this.normalizeMessage(item.message);
         if (normItem.length >= 6 && Math.abs(normItem.length - normCleanMsg.length) <= 3) {
           if (normItem.includes(normCleanMsg) || normCleanMsg.includes(normItem)) {
             const overlapScore = Math.min(normItem.length, normCleanMsg.length) / Math.max(normItem.length, normCleanMsg.length);
-            const isSpkMatch = isExactSpeakerMatch(itemSpk);
-            const finalScore = overlapScore + (isSpkMatch ? 0.05 : 0);
+            const spkAdjustment = getSpeakerAdjustment(itemSpk);
+            const finalScore = overlapScore + spkAdjustment;
 
-            if (finalScore >= Math.max(effectiveThreshold, 0.90) && finalScore > bestSubstrScore) {
+            if (finalScore >= Math.max(effectiveThreshold, 0.85) && finalScore > bestSubstrScore) {
               bestSubstrScore = finalScore;
               bestSubstrItem = item;
             }
@@ -830,22 +830,16 @@ class ScriptManagerService {
       // 4b. 3-character text (e.g. "そうだ", "違うよ"): Normalized Levenshtein Distance
       for (const item of this.entries) {
         const itemSpk = item._normSpeaker ?? this.normalizeSpeaker(item.speaker);
-        if (isConflictingSpeaker(itemSpk)) continue;
-
         const normItem = item._normMessage ?? this.normalizeMessage(item.message);
         if (normItem.length !== 3) continue;
 
         const levDist = calcLevenshteinDistance(normCleanMsg, normItem);
         const levScore = 1.0 - levDist / 3;
+        const weightedScore = levScore + getSpeakerAdjustment(itemSpk);
 
-        if (levScore >= effectiveThreshold) {
-          const isSpkMatch = isExactSpeakerMatch(itemSpk);
-          const weightedScore = levScore + (isSpkMatch ? 0.04 : 0);
-
-          if (weightedScore > bestScore) {
-            bestScore = weightedScore;
-            bestMatch = item;
-          }
+        if (weightedScore >= effectiveThreshold && weightedScore > bestScore) {
+          bestScore = weightedScore;
+          bestMatch = item;
         }
       }
     } else {
@@ -869,10 +863,7 @@ class ScriptManagerService {
         const hits = this.ngramIndex.get(bg);
         if (hits) {
           for (const entry of hits) {
-            const itemSpk = entry._normSpeaker ?? this.normalizeSpeaker(entry.speaker);
-            if (!isConflictingSpeaker(itemSpk)) {
-              candidates.add(entry);
-            }
+            candidates.add(entry);
           }
         }
       }
@@ -903,16 +894,12 @@ class ScriptManagerService {
         if (sharedMatches < minRequiredShared) continue;
 
         const rawScore = (2 * sharedMatches) / (queryTotalBigrams + candidateBigrams);
+        const itemSpk = entry._normSpeaker ?? this.normalizeSpeaker(entry.speaker);
+        const weightedScore = rawScore + getSpeakerAdjustment(itemSpk);
 
-        if (rawScore >= effectiveThreshold) {
-          const itemSpk = entry._normSpeaker ?? this.normalizeSpeaker(entry.speaker);
-          const isSpkMatch = isExactSpeakerMatch(itemSpk);
-          const weightedScore = rawScore + (isSpkMatch ? 0.04 : 0);
-
-          if (weightedScore > bestScore) {
-            bestScore = weightedScore;
-            bestMatch = entry;
-          }
+        if (weightedScore >= effectiveThreshold && weightedScore > bestScore) {
+          bestScore = weightedScore;
+          bestMatch = entry;
         }
       }
     }

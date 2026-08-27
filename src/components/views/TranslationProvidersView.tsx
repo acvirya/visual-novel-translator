@@ -14,7 +14,10 @@ import {
   getActiveStyleInstructions,
   buildCompleteSystemPrompt,
   getLanguageDisplayName,
+  getSelectedModelProviders,
+  setSelectedModelProviders,
 } from "../../services/openRouterService";
+import { ProviderSelectorMultiSelect } from "../common/ProviderSelectorMultiSelect";
 import {
   Zap,
   Sparkles,
@@ -115,6 +118,10 @@ export const TranslationProvidersView: React.FC = () => {
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
     return localStorage.getItem("vn_selected_model") || "anthropic/claude-3.5-sonnet";
   });
+  const [selectedProviders, setSelectedProviders] = useState<string[]>(() => {
+    const initModel = localStorage.getItem("vn_selected_model") || "anthropic/claude-3.5-sonnet";
+    return getSelectedModelProviders(initModel);
+  });
 
   // Hyperparameters
   const [temperature, setTemperature] = useState<number>(0.3);
@@ -166,6 +173,7 @@ export const TranslationProvidersView: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("vn_selected_model", selectedModelId);
     useTranslationStore.getState().setSelectedProvider(selectedModelId);
+    setSelectedProviders(getSelectedModelProviders(selectedModelId));
   }, [selectedModelId]);
 
   useEffect(() => {
@@ -536,6 +544,29 @@ export const TranslationProvidersView: React.FC = () => {
               )}
             </div>
           </div>
+
+          {/* Infrastructure Provider Routing Multi-Select */}
+          {!selectedModelId.startsWith("mt:") && (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 600 }}>
+                  Infrastructure Provider Routing:
+                </label>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                  Optional: restrict requests to specific provider endpoints (e.g. Z.AI, Venice)
+                </span>
+              </div>
+              <ProviderSelectorMultiSelect
+                modelId={selectedModelId}
+                selectedProviders={selectedProviders}
+                onChangeProviders={(newProviders) => {
+                  setSelectedModelProviders(selectedModelId, newProviders);
+                  setSelectedProviders(newProviders);
+                }}
+                disabled={isLoadingModels}
+              />
+            </div>
+          )}
 
           {/* Temperature Slider */}
           <div>

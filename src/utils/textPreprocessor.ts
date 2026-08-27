@@ -337,9 +337,13 @@ export interface ExtractedDialogue {
   message: string;
 }
 
+// Visual novel engine dummy/placeholder tags indicating narration, monologue, or system notes rather than a real character name
+const MONOLOGUE_SPEAKER_REGEX = /^(?:地の文|地の文章|地文|地|ナレーション|ナレ|ナレ[0-9１２345]|独白|モノローグ|内心|心の声|心声|心|思い|思考|旁白|内心独白|ト書き|解説|状況|システム|システムメッセージ|アナウンス|narration|narr|narrator|monologue|mono|thought|thoughts|inner|inner_voice|none|null|undefined|void|empty|blank|no_name|noname|[-―—─_・…\s]+)$/i;
+
 /**
  * Hidden auto-active normalizer for speaker names:
- * Automatically cleans duplicated bracket tags, multi-pass loops, and stray brackets
+ * Automatically cleans duplicated bracket tags, multi-pass loops, stray brackets,
+ * and eliminates VN engine placeholder monologue/narration tags (e.g. 地の文, ナレーション, narr, mono, 独白)
  * Examples:
  * - 【【伊織】【伊織】】 -> 伊織
  * - 【伊織】【伊織】    -> 伊織
@@ -347,7 +351,7 @@ export interface ExtractedDialogue {
  * - 【伊織】            -> 伊織
  * - [伊織][伊織]        -> 伊織
  * - 伊織伊織            -> 伊織
- * - クラスメイトクラスメイト -> クラスメイト
+ * - 地の文 / ナレーション / narr / mono / 独白 -> "" (Clean Monologue)
  */
 export function cleanSpeakerName(rawSpeaker: string): string {
   if (!rawSpeaker) return "";
@@ -392,7 +396,14 @@ export function cleanSpeakerName(rawSpeaker: string): string {
     }
   }
 
-  return spk.trim();
+  const finalClean = spk.trim();
+
+  // 5. If speaker name is a VN engine dummy placeholder for monologue/narration, eliminate it!
+  if (MONOLOGUE_SPEAKER_REGEX.test(finalClean)) {
+    return "";
+  }
+
+  return finalClean;
 }
 
 /**
@@ -438,16 +449,16 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
     };
   }
 
-  // 2. Bracketed Speaker prefix: 【遥月】セリフ, 【【伊織】【伊織】】セリフ, [遥月] セリフ, ［遥月］セリフ, 〈遥月〉セリフ, 〔遥月〕セリフ
-  const bracketPrefixMatch = trimmed.match(/^([【\[［〈〔（(《『「]+(?:[^【】\[\]［］〈〉〔〕（）()《》『』「」\r\n]{1,25}[】\]］〉〕）)》』」]+)+)\s*[:：]?\s*([\s\S]+)$/);
+  // 2. Bracketed Speaker prefix: 【遥月】セリフ, [遥月] セリフ, ［遥月］セリフ, 〈遥月〉セリフ, 〔遥月〕セリフ
+  const bracketPrefixMatch = trimmed.match(/^([【\[［〈〔（(《]+(?:[^【】\[\]［］〈〉〔〕（）()《》\r\n]{1,25}[】\]］〉〕）)》]+)+)\s*[:：]?\s*([\s\S]+)$/);
   if (bracketPrefixMatch) {
     const rawBracketSpeaker = bracketPrefixMatch[1];
-    const messagePart = bracketPrefixMatch[2];
+    const messagePart = bracketPrefixMatch[2]?.trim() || "";
     const cleanedSpeaker = cleanSpeakerName(rawBracketSpeaker);
-    if (cleanedSpeaker) {
+    if (cleanedSpeaker && messagePart) {
       return {
         speaker: cleanedSpeaker,
-        message: messagePart.trim(),
+        message: messagePart,
       };
     }
   }
@@ -455,10 +466,13 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   // Fallback single bracket
   const bracketMatch = trimmed.match(/^[【\[［〈〔]([^【\]］〉〕\r\n]{1,20})[】\]］〉〕]\s*[:：]?\s*([\s\S]+)$/);
   if (bracketMatch) {
-    return {
-      speaker: cleanSpeakerName(bracketMatch[1]),
-      message: bracketMatch[2].trim(),
-    };
+    const messagePart = bracketMatch[2]?.trim() || "";
+    if (messagePart) {
+      return {
+        speaker: cleanSpeakerName(bracketMatch[1]),
+        message: messagePart,
+      };
+    }
   }
 
   // 3. Name before Japanese quotation mark: 遥月「セリフ」 or 遥月『セリフ』

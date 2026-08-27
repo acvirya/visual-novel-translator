@@ -492,6 +492,7 @@ async fn openrouter_chat_completion(
     temperature: f64,
     max_tokens: Option<u32>,
     timeout_seconds: Option<u64>,
+    providers: Option<Vec<String>>,
 ) -> Result<OpenRouterCompletionResponse, String> {
     let client = get_http_client();
     let timeout_duration = std::time::Duration::from_secs(timeout_seconds.unwrap_or(600)); // Default 10 min
@@ -504,11 +505,16 @@ async fn openrouter_chat_completion(
         "messages": messages,
         "temperature": temperature,
         "response_format": { "type": "json_object" },
-        "provider": {
-            "allow_fallbacks": true,
-            "data_collection": "deny"
-        }
     });
+
+    if let Some(ref list) = providers {
+        if !list.is_empty() {
+            payload["provider"] = serde_json::json!({
+                "allow_fallbacks": true,
+                "only": list,
+            });
+        }
+    }
 
     if let Some(mt) = max_tokens {
         if mt > 0 {
@@ -545,11 +551,16 @@ async fn openrouter_chat_completion(
                 "model": model_id,
                 "messages": messages,
                 "temperature": temperature,
-                "provider": {
-                    "allow_fallbacks": true,
-                    "data_collection": "deny"
-                }
             });
+
+            if let Some(ref list) = providers {
+                if !list.is_empty() {
+                    fallback_payload["provider"] = serde_json::json!({
+                        "allow_fallbacks": true,
+                        "only": list,
+                    });
+                }
+            }
 
             if let Some(mt) = max_tokens {
                 if mt > 0 {

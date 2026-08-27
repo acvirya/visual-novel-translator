@@ -1,6 +1,7 @@
 import { OverlayConfig } from "../types";
 
 export interface OverlayDialogueMessage {
+  id?: number | string;
   speaker?: string;
   translatedSpeaker?: string;
   message?: string;

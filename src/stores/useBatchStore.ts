@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { BatchFileEntry, BatchProgressUpdate, BatchSettings, KeyMappingConfig } from "../services/batchTranslateService";
+import { BatchFileEntry, BatchProgressUpdate, BatchSettings } from "../services/batchTranslateService";
 
 export interface SessionUsageStats {
   promptTokens: number;
@@ -17,7 +17,6 @@ export interface BatchState {
   isPaused: boolean;
   progressData: BatchProgressUpdate | null;
   settings: BatchSettings;
-  keyMapping: KeyMappingConfig;
   sessionStats: SessionUsageStats;
 
   // Actions
@@ -30,7 +29,6 @@ export interface BatchState {
   setIsPaused: (paused: boolean) => void;
   setProgressData: (progress: BatchProgressUpdate | null) => void;
   setSettings: (settings: Partial<BatchSettings>) => void;
-  setKeyMapping: (mapping: Partial<KeyMappingConfig>) => void;
   addSessionTokens: (promptTokens: number, completionTokens: number, cachedTokens: number, cost: number) => void;
 }
 
@@ -46,25 +44,11 @@ export const useBatchStore = create<BatchState>((set) => {
   const savedConcurrency = Number(localStorage.getItem("vn_batch_concurrency")) || 2;
   const savedDelay = Number(localStorage.getItem("vn_batch_delay_ms")) || 300;
   const savedTimeoutMinutes = Number(localStorage.getItem("vn_batch_timeout_minutes")) || 10;
+  const savedMaxBackoff = Number(localStorage.getItem("vn_batch_max_backoff_seconds")) || 30;
   const savedAutoContinue = localStorage.getItem("vn_batch_auto_continue") !== "false";
   const savedTranslateExplicitOnly = localStorage.getItem("vn_batch_translate_explicit_only") === "true";
   const savedOverrideRaw = localStorage.getItem("vn_batch_override_raw") !== "false";
   const savedOutputDir = localStorage.getItem("vn_batch_output_dir") || "";
-  const rawSrcSpk = localStorage.getItem("vn_batch_src_speaker_key");
-  const savedSrcSpk = rawSrcSpk && rawSrcSpk !== "auto" ? rawSrcSpk : "speaker";
-
-  const rawSrcMsg = localStorage.getItem("vn_batch_src_message_key");
-  const savedSrcMsg = rawSrcMsg && rawSrcMsg !== "auto" ? rawSrcMsg : "message";
-
-  const savedTgtSpk = localStorage.getItem("vn_batch_tgt_speaker_key") || "translated_speaker";
-  const savedTgtMsg = localStorage.getItem("vn_batch_tgt_message_key") || "translated_message";
-
-  const keyMapping: KeyMappingConfig = {
-    sourceSpeakerKey: savedSrcSpk,
-    sourceMessageKey: savedSrcMsg,
-    targetSpeakerKey: savedTgtSpk,
-    targetMessageKey: savedTgtMsg,
-  };
 
   const initialSettings: BatchSettings = {
     linesPerBatch: savedLines,
@@ -75,12 +59,12 @@ export const useBatchStore = create<BatchState>((set) => {
     temperature: 0.3,
     delayMs: savedDelay,
     timeoutMinutes: savedTimeoutMinutes,
+    maxBackoffSeconds: savedMaxBackoff,
     autoContinueUntilCompleted: savedAutoContinue,
     translateExplicitOnly: savedTranslateExplicitOnly,
     overrideRawWithPreprocessed: savedOverrideRaw,
     outputDir: savedOutputDir,
     fileSuffix: "_translated",
-    keyMapping,
   };
 
   return {
@@ -92,7 +76,6 @@ export const useBatchStore = create<BatchState>((set) => {
     isPaused: false,
     progressData: null,
     settings: initialSettings,
-    keyMapping,
     sessionStats: {
       promptTokens: 0,
       completionTokens: 0,
@@ -125,22 +108,12 @@ export const useBatchStore = create<BatchState>((set) => {
         if (partial.retainBatchContext !== undefined) localStorage.setItem("vn_batch_retain_batch_context", String(partial.retainBatchContext));
         if (partial.concurrency !== undefined) localStorage.setItem("vn_batch_concurrency", String(partial.concurrency));
         if (partial.delayMs !== undefined) localStorage.setItem("vn_batch_delay_ms", String(partial.delayMs));
+        if (partial.timeoutMinutes !== undefined) localStorage.setItem("vn_batch_timeout_minutes", String(partial.timeoutMinutes));
+        if (partial.maxBackoffSeconds !== undefined) localStorage.setItem("vn_batch_max_backoff_seconds", String(partial.maxBackoffSeconds));
         if (partial.autoContinueUntilCompleted !== undefined) localStorage.setItem("vn_batch_auto_continue", String(partial.autoContinueUntilCompleted));
         if (partial.overrideRawWithPreprocessed !== undefined) localStorage.setItem("vn_batch_override_raw", String(partial.overrideRawWithPreprocessed));
         if (partial.outputDir !== undefined) localStorage.setItem("vn_batch_output_dir", partial.outputDir);
         return { settings: next };
-      }),
-    setKeyMapping: (partial) =>
-      set((state) => {
-        const next = { ...state.keyMapping, ...partial };
-        if (partial.sourceSpeakerKey !== undefined) localStorage.setItem("vn_batch_src_speaker_key", partial.sourceSpeakerKey);
-        if (partial.sourceMessageKey !== undefined) localStorage.setItem("vn_batch_src_message_key", partial.sourceMessageKey);
-        if (partial.targetSpeakerKey !== undefined) localStorage.setItem("vn_batch_tgt_speaker_key", partial.targetSpeakerKey);
-        if (partial.targetMessageKey !== undefined) localStorage.setItem("vn_batch_tgt_message_key", partial.targetMessageKey);
-        return {
-          keyMapping: next,
-          settings: { ...state.settings, keyMapping: next },
-        };
       }),
     addSessionTokens: (promptTokens, completionTokens, cachedTokens, cost) =>
       set((state) => ({
@@ -153,3 +126,4 @@ export const useBatchStore = create<BatchState>((set) => {
       })),
   };
 });
+

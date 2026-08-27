@@ -17,6 +17,18 @@ export interface OpenRouterModel {
   pricing: OpenRouterModelPricing;
 }
 
+export interface OpenRouterEndpoint {
+  name: string;
+  provider_name: string;
+  context_length?: number;
+  pricing?: {
+    prompt: string;
+    completion: string;
+  };
+  quantization?: string;
+  status?: number;
+}
+
 export interface OpenRouterKeyInfo {
   label?: string;
   usage: number; // in USD
@@ -365,6 +377,93 @@ export async function fetchOpenRouterModels(forceRefresh = false): Promise<OpenR
   return cachedModels || [];
 }
 
+const ENDPOINTS_CACHE_MAP: Map<string, OpenRouterEndpoint[]> = new Map();
+
+/**
+ * Fetch available infrastructure providers / endpoints for a specific OpenRouter model
+ */
+export async function fetchModelEndpoints(modelId: string, forceRefresh = false): Promise<OpenRouterEndpoint[]> {
+  if (!modelId || modelId.startsWith("mt:")) return [];
+  const cleanId = modelId.trim();
+
+  if (!forceRefresh && ENDPOINTS_CACHE_MAP.has(cleanId)) {
+    return ENDPOINTS_CACHE_MAP.get(cleanId)!;
+  }
+
+  try {
+    const response = await fetch(`https://openrouter.ai/api/v1/models/${cleanId}/endpoints`);
+    if (!response.ok) {
+      return [];
+    }
+    const json = await response.json();
+    if (json?.data?.endpoints && Array.isArray(json.data.endpoints)) {
+      const endpoints: OpenRouterEndpoint[] = json.data.endpoints.map((e: any) => ({
+        name: e.name || e.provider_name,
+        provider_name: e.provider_name || e.name,
+        context_length: e.context_length,
+        pricing: e.pricing
+          ? {
+              prompt: e.pricing.prompt || "0",
+              completion: e.pricing.completion || "0",
+            }
+          : undefined,
+        quantization: e.quantization,
+        status: e.status,
+      }));
+
+      // Deduplicate by provider_name
+      const uniqueEndpoints: OpenRouterEndpoint[] = [];
+      const seen = new Set<string>();
+      for (const ep of endpoints) {
+        if (!seen.has(ep.provider_name)) {
+          seen.add(ep.provider_name);
+          uniqueEndpoints.push(ep);
+        }
+      }
+
+      ENDPOINTS_CACHE_MAP.set(cleanId, uniqueEndpoints);
+      return uniqueEndpoints;
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch endpoints for model ${modelId}:`, err);
+  }
+  return [];
+}
+
+/**
+ * Get selected providers for a model from localStorage
+ */
+export function getSelectedModelProviders(modelId: string): string[] {
+  if (!modelId) return [];
+  try {
+    const raw = localStorage.getItem("vn_openrouter_model_providers_map");
+    if (!raw) return [];
+    const map = JSON.parse(raw);
+    return Array.isArray(map[modelId]) ? map[modelId] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save selected providers for a model to localStorage
+ */
+export function setSelectedModelProviders(modelId: string, providers: string[]): void {
+  if (!modelId) return;
+  try {
+    const raw = localStorage.getItem("vn_openrouter_model_providers_map");
+    const map = raw ? JSON.parse(raw) : {};
+    if (!providers || providers.length === 0) {
+      delete map[modelId];
+    } else {
+      map[modelId] = providers;
+    }
+    localStorage.setItem("vn_openrouter_model_providers_map", JSON.stringify(map));
+  } catch (err) {
+    console.error("Failed to save selected model providers:", err);
+  }
+}
+
 /**
  * Test and validate OpenRouter API Key using https://openrouter.ai/api/v1/auth/key
  */
@@ -533,6 +632,7 @@ export interface OpenRouterTranslateOptions {
   systemPrompt?: string;
   temperature?: number;
   maxTokens?: number;
+  providers?: string[];
   contextHistory?: { user: string; assistant: string }[];
 }
 
@@ -633,6 +733,8 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
   let exactCachedTokens = 0;
   const maxRetries = 3;
 
+  const activeProviders = options.providers ?? getSelectedModelProviders(modelId);
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
@@ -641,6 +743,7 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
         messagesJson: JSON.stringify(messages),
         temperature,
         maxTokens: dynamicMaxTokens,
+        providers: activeProviders.length > 0 ? activeProviders : undefined,
       });
 
       if (nativeRes && nativeRes.content) {
@@ -683,6 +786,20 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
   if (!content) {
     logger.warn("OpenRouter::API", "Native completion failed or unavailable. Attempting fallback HTTP fetch...");
     try {
+      const fetchPayload: any = {
+        model: modelId,
+        messages,
+        temperature,
+        max_tokens: dynamicMaxTokens,
+      };
+
+      if (activeProviders.length > 0) {
+        fetchPayload.provider = {
+          allow_fallbacks: true,
+          only: activeProviders,
+        };
+      }
+
       const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -691,16 +808,7 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
           "HTTP-Referer": "https://github.com/acvirya/visual-novel-translator",
           "X-Title": "VN Translator Desktop",
         },
-        body: JSON.stringify({
-          model: modelId,
-          messages,
-          temperature,
-          max_tokens: dynamicMaxTokens,
-          provider: {
-            allow_fallbacks: true,
-            data_collection: "deny",
-          },
-        }),
+        body: JSON.stringify(fetchPayload),
       });
 
       if (response.ok) {

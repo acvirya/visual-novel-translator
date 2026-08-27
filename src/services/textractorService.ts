@@ -5,6 +5,7 @@ import { useTextractorStore } from "../stores/useTextractorStore";
 import { useTranslationStore } from "../stores/useTranslationStore";
 import { cleanSpeakerName, executePreprocessingPipeline, extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
+import { overlayChannel } from "../utils/overlayChannel";
 
 export interface EngineHookPreset {
   name: string;
@@ -96,6 +97,35 @@ export function deduplicateAndMergeLines(rawText: string): string {
   return lines.join(" ");
 }
 
+// Checks if incoming text is a distinctly new line rather than a fragment continuation of current
+export function isDistinctNewLine(current: string, incoming: string): boolean {
+  const cur = current.trim();
+  const inc = incoming.trim();
+  if (!cur || !inc) return false;
+  if (cur === inc) return false;
+
+  // If cur is a complete sentence (ended with closing quote, period, exclamation, question mark) and inc starts a new quote
+  const curClosed = cur.endsWith("」") || cur.endsWith("』") || cur.endsWith("）") || cur.endsWith(")") || cur.endsWith("。") || cur.endsWith("！") || cur.endsWith("？");
+  const incStartsNew = inc.startsWith("「") || inc.startsWith("『") || inc.startsWith("（") || inc.startsWith("(");
+  if (curClosed && incStartsNew) return true;
+
+  // If one is not a substring of the other and they have zero overlap
+  if (!cur.includes(inc) && !inc.includes(cur)) {
+    let hasOverlap = false;
+    for (let len = Math.min(cur.length, inc.length); len >= 2; len--) {
+      if (cur.slice(-len) === inc.slice(0, len)) {
+        hasOverlap = true;
+        break;
+      }
+    }
+    if (!hasOverlap) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Smart merge helper for visual novel typewriter text fragments & multi-pass memory hooks
 export function mergeDialogueFragments(current: string, incoming: string): string {
   const cur = current.trim();
@@ -140,20 +170,15 @@ export function mergeDialogueFragments(current: string, incoming: string): strin
 
 export class TextractorService {
   private static unlistenFn: UnlistenFn | null = null;
-  private static debounceTimer: any = null;
-  private static bufferedMessage = "";
-  private static bufferedSpeaker = "";
-  private static lastDispatchedText = { speaker: "", message: "" };
 
-  // Dual-Thread Synchronization State (Sequence ID / Event Counters)
-  private static speakerLineSeq = 0;
-  private static dialogueLineSeq = 0;
-  private static pendingSpeakerText = "";
-  private static pendingSpeakerSeq = 0;
-  private static speakerWaitTimer: any = null;
-  private static dialogueWaitTimer: any = null;
-  private static bufferedSeparateDialogue = "";
-  private static dialogueStartSpeakerSeq = 0;
+  // Unified Multi-Thread Coordinator State
+  private static syncTimer: any = null;
+  private static syncFirstThreadRole: "speaker" | "dialogue" | "combined" | null = null;
+  private static bufferedSpeaker = "";
+  private static bufferedDialogue = "";
+  private static globalDialogueSeq = 0;
+  private static lastDispatchedText = { speaker: "", message: "" };
+  private static lastDispatchedTime = 0;
 
   /**
    * Initialize global textractor listener stream
@@ -302,139 +327,141 @@ export class TextractorService {
     const normalizedRaw = deduplicateAndMergeLines(rawText);
     if (!normalizedRaw.trim()) return;
 
-    // 2. Process message according to designated Thread Role
-    const isCombined = store.combinedThreadId === handle;
-    const isMessage = store.messageThreadId === handle;
-    const isSpeaker = store.speakerThreadId === handle;
+    // 2. Process message according to designated Thread Role (robust matching)
+    const isCombined = store.combinedThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && c.role === "combined");
+    const isMessage = store.messageThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && (c.role === "dialogue" || (c as any).role === "message"));
+    const isSpeaker = store.speakerThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && c.role === "speaker");
 
+    if (!isCombined && !isMessage && !isSpeaker) return;
+
+    // Rule 1 & 3: If no timer is active, start a global timer and record the first thread role.
+    // Never reset/overwrite the running timer when new fragments/threads arrive!
+    const syncWaitMs = isCombined ? Math.max(80, store.debounceMs || 250) : Math.max(120, store.threadSyncWaitMs || 200);
+
+    if (!this.syncTimer) {
+      this.syncFirstThreadRole = isSpeaker ? "speaker" : isMessage ? "dialogue" : "combined";
+      this.syncTimer = setTimeout(() => {
+        this.finalizeAndDispatch();
+      }, syncWaitMs);
+    }
+
+    // Accumulate/buffer data into respective slots during the global sync timer window
     if (isCombined) {
       const extracted = extractSpeakerAndDialogue(normalizedRaw);
       const cleanSpk = extracted.speaker ? cleanSpeakerName(executePreprocessingPipeline(extracted.speaker, "textractor")) : "";
       const cleanMsg = executePreprocessingPipeline(extracted.message, "textractor");
 
-      this.bufferedSpeaker = cleanSpk;
-      this.bufferedMessage = mergeDialogueFragments(this.bufferedMessage, cleanMsg);
+      if (cleanSpk) this.bufferedSpeaker = cleanSpk;
+      if (cleanMsg) this.bufferedDialogue = mergeDialogueFragments(this.bufferedDialogue, cleanMsg);
 
       store.setLatestSpeaker(this.bufferedSpeaker);
-      store.setLatestMessage(this.bufferedMessage);
+      store.setLatestMessage(this.bufferedDialogue);
       store.setLatestRawMessage(normalizedRaw);
-
-      this.debounceDispatch();
     } else if (isSpeaker) {
-      // =========================================================================
-      // DEDICATED SPEAKER THREAD HANDLER
-      // =========================================================================
       const cleanSpk = cleanSpeakerName(executePreprocessingPipeline(normalizedRaw, "textractor"));
-      if (!cleanSpk) return;
-
-      // Increment sequence counter for speaker line arrival (never relying on string equality)
-      this.speakerLineSeq++;
-      this.pendingSpeakerText = cleanSpk;
-      this.pendingSpeakerSeq = this.speakerLineSeq;
-
-      store.setLatestSpeaker(cleanSpk);
-
-      if (this.speakerWaitTimer) {
-        clearTimeout(this.speakerWaitTimer);
+      if (cleanSpk) {
+        this.bufferedSpeaker = cleanSpk;
+        store.setLatestSpeaker(cleanSpk);
       }
-
-      const currentDialogueSeqAtArrival = this.dialogueLineSeq;
-      const syncWait = Math.max(50, store.threadSyncWaitMs || 150);
-
-      // Invalidate orphaned speaker candidate if no dialogue line follows within sync wait window
-      this.speakerWaitTimer = setTimeout(() => {
-        if (this.dialogueLineSeq === currentDialogueSeqAtArrival) {
-          if (this.pendingSpeakerSeq === this.speakerLineSeq) {
-            this.pendingSpeakerText = "";
-          }
-        }
-      }, syncWait);
     } else if (isMessage) {
-      // =========================================================================
-      // DEDICATED DIALOGUE THREAD HANDLER
-      // =========================================================================
       const cleanMsg = executePreprocessingPipeline(normalizedRaw, "textractor").trim();
-      if (!cleanMsg) return;
-
-      // Increment sequence counter for dialogue line arrival
-      this.dialogueLineSeq++;
-      this.bufferedSeparateDialogue = mergeDialogueFragments(this.bufferedSeparateDialogue, cleanMsg);
-      store.setLatestMessage(this.bufferedSeparateDialogue);
-      store.setLatestRawMessage(normalizedRaw);
-
-      // Record speaker sequence at the moment this dialogue arrived
-      this.dialogueStartSpeakerSeq = this.speakerLineSeq;
-      const syncWait = Math.max(50, store.threadSyncWaitMs || 150);
-
-      if (this.dialogueWaitTimer) {
-        clearTimeout(this.dialogueWaitTimer);
-      }
-
-      // Wait n ms for speaker thread to produce a new line
-      this.dialogueWaitTimer = setTimeout(() => {
-        let finalSpeaker = "";
-        // If a valid speaker arrived in the window or just prior, pair it
-        if (this.pendingSpeakerText && this.pendingSpeakerSeq >= this.dialogueStartSpeakerSeq) {
-          finalSpeaker = this.pendingSpeakerText;
-          this.pendingSpeakerText = "";
-        } else {
-          // No speaker produced in the window -> Pure Narration line
-          finalSpeaker = "";
-        }
-
-        const finalMsg = this.bufferedSeparateDialogue.trim();
-        this.bufferedSeparateDialogue = "";
-
-        if (!finalMsg) return;
-
-        this.bufferedSpeaker = finalSpeaker;
-        this.bufferedMessage = finalMsg;
-        store.setLatestSpeaker(finalSpeaker);
-        store.setLatestMessage(finalMsg);
-
-        this.dispatchFinalTranslation(finalSpeaker, finalMsg);
-      }, syncWait);
-    }
-  }
-
-  private static dispatchFinalTranslation(spk: string, msg: string) {
-    if (!msg) return;
-
-    const hasChanged = spk !== this.lastDispatchedText.speaker || msg !== this.lastDispatchedText.message;
-
-    if (hasChanged) {
-      this.lastDispatchedText = { speaker: spk, message: msg };
-      const translationStore = useTranslationStore.getState();
-      if (!translationStore.isPaused) {
-        translationManager.translate({
-          speaker: spk || undefined,
-          message: msg,
-        });
+      if (cleanMsg) {
+        this.bufferedDialogue = mergeDialogueFragments(this.bufferedDialogue, cleanMsg);
+        store.setLatestMessage(this.bufferedDialogue);
+        store.setLatestRawMessage(normalizedRaw);
       }
     }
   }
 
-  private static debounceDispatch() {
-    const store = useTextractorStore.getState();
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
-    }
+  /**
+   * Finalizes assembled text and dispatches to Overlay and TranslationManager
+   */
+  private static finalizeAndDispatch() {
+    let firstRole: "speaker" | "dialogue" | "combined" | null = null;
+    let spk = "";
+    let msg = "";
 
-    this.debounceTimer = setTimeout(() => {
-      const spk = this.bufferedSpeaker.trim();
-      const msg = this.bufferedMessage.trim();
-
-      this.dispatchFinalTranslation(spk, msg);
-
-      this.bufferedMessage = "";
+    try {
+      firstRole = this.syncFirstThreadRole;
+      spk = this.bufferedSpeaker.trim();
+      msg = this.bufferedDialogue.trim();
+    } finally {
+      this.syncTimer = null;
+      this.syncFirstThreadRole = null;
       this.bufferedSpeaker = "";
-    }, store.debounceMs);
+      this.bufferedDialogue = "";
+    }
+
+    // Rule 2:
+    // If first thread was speaker and dialogue is empty, discard/drop (orphan speaker hook)
+    if (firstRole === "speaker" && !msg) {
+      return;
+    }
+
+    // If dialogue is empty, discard
+    if (!msg) {
+      return;
+    }
+
+    // If first thread was dialogue and speaker is empty, proceed with empty speaker (pure narration)
+    const dialogueId = ++this.globalDialogueSeq;
+
+    // Burst deduplication check (< 800ms)
+    const store = useTextractorStore.getState();
+    const now = Date.now();
+    const isSameText = spk === this.lastDispatchedText.speaker && msg === this.lastDispatchedText.message;
+    const timeSinceLast = now - this.lastDispatchedTime;
+
+    if (isSameText && store.ignoreDuplicateLines && timeSinceLast < 800) {
+      return;
+    }
+
+    this.lastDispatchedText = { speaker: spk, message: msg };
+    this.lastDispatchedTime = now;
+
+    // Update UI store
+    store.setLatestSpeaker(spk);
+    store.setLatestMessage(msg);
+
+    // Rule 4: Send Raw Japanese Text immediately to Overlay with dialogueId
+    if (store.autoForwardToOverlay !== false) {
+      overlayChannel.send({
+        type: "DIALOGUE_UPDATE",
+        dialogue: {
+          id: dialogueId,
+          speaker: spk || undefined,
+          translatedSpeaker: spk || undefined,
+          message: msg,
+          translatedMessage: "",
+        },
+      });
+    }
+
+    // Rule 4: Forward to Live Translation with dialogueId
+    const translationStore = useTranslationStore.getState();
+    if (!translationStore.isPaused) {
+      translationManager.translate({
+        id: dialogueId,
+        speaker: spk || undefined,
+        message: msg,
+      });
+    }
   }
 
   /**
    * Set thread role and sync with capturedThreads
    */
   public static setThreadRole(threadId: number, role: "combined" | "dialogue" | "speaker" | "ignored") {
+    // Cleanly cancel any running sync timers and reset buffer on thread change
+    if (this.syncTimer) {
+      clearTimeout(this.syncTimer);
+      this.syncTimer = null;
+    }
+    this.syncFirstThreadRole = null;
+    this.bufferedDialogue = "";
+    this.bufferedSpeaker = "";
+    this.lastDispatchedText = { speaker: "", message: "" };
+
     const store = useTextractorStore.getState();
     store.updateCapturedThreadRole(threadId, role);
 
@@ -491,10 +518,14 @@ export class TextractorService {
     msgId: number | null,
     speakerId: number | null
   ) {
-    const store = useTextractorStore.getState();
-    this.bufferedMessage = "";
+    if (this.syncTimer) {
+      clearTimeout(this.syncTimer);
+      this.syncTimer = null;
+    }
+    this.syncFirstThreadRole = null;
+    this.bufferedDialogue = "";
     this.bufferedSpeaker = "";
-    this.lastDispatchedText = { speaker: "", message: "" };
+    const store = useTextractorStore.getState();
 
     if (combinedId === null && msgId === null && speakerId === null) {
       store.setLatestSpeaker("");
