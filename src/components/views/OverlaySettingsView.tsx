@@ -92,6 +92,7 @@ export const OverlaySettingsView: React.FC = () => {
     return {
       ...INITIAL_OVERLAY_CONFIG,
       ...(saved || {}),
+      isEnabled: false, // Always default inactive on app startup to prevent bugs
       isExcludedFromCapture: true, // Always guaranteed active
       useCustomTemplate: true,
       customTemplateHtml: saved?.customTemplateHtml || OVERLAY_PRESETS[0].html,

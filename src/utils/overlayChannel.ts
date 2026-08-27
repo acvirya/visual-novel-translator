@@ -31,9 +31,10 @@ class OverlayChannel {
     if (this.channel) {
       this.channel.postMessage(event);
     }
-    // Also backup to localStorage
+    // Also backup to localStorage without isEnabled: true (always default inactive on startup)
     if (event.type === "CONFIG_UPDATE") {
-      localStorage.setItem("vn_overlay_config", JSON.stringify(event.config));
+      const configToPersist = { ...event.config, isEnabled: false };
+      localStorage.setItem("vn_overlay_config", JSON.stringify(configToPersist));
     }
   }
 
@@ -47,7 +48,9 @@ class OverlayChannel {
   public getSavedConfig(): OverlayConfig | null {
     try {
       const data = localStorage.getItem("vn_overlay_config");
-      return data ? JSON.parse(data) : null;
+      if (!data) return null;
+      const parsed = JSON.parse(data);
+      return { ...parsed, isEnabled: false };
     } catch {
       return null;
     }

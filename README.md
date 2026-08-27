@@ -2,7 +2,7 @@
 
 # 🌸 Visual Novel Translator
 
-**A lightweight, all-in-one desktop app for playing untranslated Visual Novels in real-time with customizable transparent subtitles, zero-latency script lookup, and AI-powered translation.**
+**A lightweight desktop app for translating untranslated Visual Novels in real-time with customizable transparent subtitles, zero-latency script lookup, and AI-powered translation.**
 
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8D5?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
@@ -24,7 +24,7 @@
 
 ## 💡 What is Visual Novel Translator?
 
-**Visual Novel Translator** is designed as a **live playing companion** for visual novel readers. 
+**Visual Novel Translator** is designed to **live translate** visual novels without modifying game files. 
 
 Unlike romhacking or script repacking tools (which require extracting game archives, modifying script codes, and repacking files back into the game engine), this application works **alongside your running game**:
 - Captures Japanese dialogue in real-time as you play (via **Textractor Game Hooking** or **Screen OCR**).

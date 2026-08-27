@@ -298,6 +298,11 @@ class SettingsManager {
         }
       }
 
+      // Always reset overlay isEnabled to false on app load to prevent startup bugs
+      if (loaded.overlay?.config) {
+        loaded.overlay.config.isEnabled = false;
+      }
+
       return loaded;
     } catch (e) {
       console.warn("Failed to parse settings from localStorage:", e);
@@ -333,7 +338,11 @@ class SettingsManager {
 
   private saveToStorage() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.cache));
+      const cacheToPersist = JSON.parse(JSON.stringify(this.cache));
+      if (cacheToPersist.overlay?.config) {
+        cacheToPersist.overlay.config.isEnabled = false;
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheToPersist));
       this.syncFlatKeys();
       this.notifyListeners();
     } catch (e) {
