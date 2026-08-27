@@ -324,8 +324,35 @@ export class TextractorService {
     if (!rawText.trim()) return;
 
     // Normalize packet line bursts (deduplicate if all lines identical, merge if different)
-    const normalizedRaw = deduplicateAndMergeLines(rawText);
+    let normalizedRaw = deduplicateAndMergeLines(rawText);
     if (!normalizedRaw.trim()) return;
+
+    // Apply consecutive duplicate character reduction if configured (e.g. 2 for doubled hooks: 「「運運命命」」 → 「運命」)
+    if (store.charDeduplicationCount >= 2) {
+      const repeatCount = store.charDeduplicationCount;
+      const regex = new RegExp(`(.)\\1{${repeatCount - 1}}`, "gu");
+      normalizedRaw = normalizedRaw.replace(regex, "$1");
+    }
+
+    // Apply repeated phrase & loop deduplication if enabled (e.g. shadow/outline hooks: 遥月遥月 → 遥月)
+    if (store.loopDeduplication !== false) {
+      let prev = "";
+      for (let pass = 0; pass < 3 && normalizedRaw !== prev; pass++) {
+        prev = normalizedRaw;
+        normalizedRaw = normalizedRaw.replace(/(.{2,150}?)\1+/gu, "$1");
+      }
+    }
+
+    // Apply stutter / repeated character reduction if enabled (e.g. あ、、あの → あ、あの)
+    if (store.stutterReduction !== false) {
+      normalizedRaw = normalizedRaw
+        .replace(/、{2,}/g, "、")
+        .replace(/。{2,}/g, "。")
+        .replace(/！{2,}/g, "！")
+        .replace(/!{2,}/g, "!")
+        .replace(/？{2,}/g, "？")
+        .replace(/\?{2,}/g, "?");
+    }
 
     // 2. Process message according to designated Thread Role (robust matching)
     const isCombined = store.combinedThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && c.role === "combined");

@@ -1,12 +1,12 @@
 import React, { useState } from "react";
-import { Sparkles, Sliders, Terminal, KeyRound } from "lucide-react";
+import { Sliders, Terminal, KeyRound, Code } from "lucide-react";
 import { TranslationProvidersView } from "./TranslationProvidersView";
-import { TextPreprocessingView } from "./TextPreprocessingView";
+import { CustomReplacementRulesView } from "./CustomReplacementRulesView";
 import { GeneralSettingsView } from "./GeneralSettingsView";
 import { LogsView } from "./LogsView";
 import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
 
-export type SettingsSubTab = "providers" | "preprocessing" | "general" | "logs";
+export type SettingsSubTab = "providers" | "custom_rules" | "general" | "logs";
 
 export const UnifiedSettingsView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>("providers");
@@ -18,9 +18,9 @@ export const UnifiedSettingsView: React.FC = () => {
       icon: <KeyRound size={14} />,
     },
     {
-      id: "preprocessing",
-      label: "Text Preprocessing Master",
-      icon: <Sparkles size={14} />,
+      id: "custom_rules",
+      label: "Custom Replacement Rules",
+      icon: <Code size={14} />,
     },
     {
       id: "general",
@@ -59,7 +59,7 @@ export const UnifiedSettingsView: React.FC = () => {
 
         <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
           {activeSubTab === "providers" && "Configure OpenRouter AI models, API keys, and custom prompts"}
-          {activeSubTab === "preprocessing" && "Furigana cleaner, regex replacers, and control code filters"}
+          {activeSubTab === "custom_rules" && "Universal regex patterns and custom term replacements applied across all sources"}
           {activeSubTab === "general" && "System-wide hotkeys, language pairs, and app preferences"}
           {activeSubTab === "logs" && "Live debug console, network errors, and IPC execution logs"}
         </span>
@@ -68,7 +68,7 @@ export const UnifiedSettingsView: React.FC = () => {
       {/* Main Content Area */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px", maxWidth: "1200px", margin: "0 auto", width: "100%" }}>
         {activeSubTab === "providers" && <TranslationProvidersView />}
-        {activeSubTab === "preprocessing" && <TextPreprocessingView />}
+        {activeSubTab === "custom_rules" && <CustomReplacementRulesView />}
         {activeSubTab === "general" && <GeneralSettingsView />}
         {activeSubTab === "logs" && <LogsView />}
       </div>

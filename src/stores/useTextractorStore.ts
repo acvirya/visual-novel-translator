@@ -26,6 +26,9 @@ export interface TextractorState {
   maxLogLines: number;
   threadLogs: Map<number, TextractorMessage[]>;
   ignoreDuplicateLines: boolean;
+  charDeduplicationCount: number;
+  loopDeduplication: boolean;
+  stutterReduction: boolean;
   latestSpeaker: string;
   latestMessage: string;
   latestRawMessage: string;
@@ -57,6 +60,9 @@ export interface TextractorState {
   setMaxLogLines: (lines: number) => void;
   setThreadLogs: (logs: Map<number, TextractorMessage[]> | ((prev: Map<number, TextractorMessage[]>) => Map<number, TextractorMessage[]>)) => void;
   setIgnoreDuplicateLines: (ignore: boolean) => void;
+  setCharDeduplicationCount: (count: number) => void;
+  setLoopDeduplication: (enabled: boolean) => void;
+  setStutterReduction: (enabled: boolean) => void;
   setLatestSpeaker: (speaker: string) => void;
   setLatestMessage: (message: string) => void;
   setLatestRawMessage: (raw: string) => void;
@@ -73,6 +79,9 @@ export const useTextractorStore = create<TextractorState>((set) => {
   const savedDiscovery = Number(localStorage.getItem("vn_textractor_discovery_duration")) || 10;
   const savedIgnoreDup = localStorage.getItem("vn_ignore_duplicate_lines") !== "false";
   const savedAutoForward = localStorage.getItem("vn_textractor_auto_forward") !== "false";
+  const savedCharDedup = Number(localStorage.getItem("vn_textractor_char_dedup_count")) || 0;
+  const savedLoopDedup = localStorage.getItem("vn_textractor_loop_dedup") !== "false";
+  const savedStutter = localStorage.getItem("vn_textractor_stutter_reduction") !== "false";
 
   return {
     exePath: savedExePath,
@@ -98,6 +107,9 @@ export const useTextractorStore = create<TextractorState>((set) => {
     maxLogLines: savedMaxLogs,
     threadLogs: new Map(),
     ignoreDuplicateLines: savedIgnoreDup,
+    charDeduplicationCount: savedCharDedup,
+    loopDeduplication: savedLoopDedup,
+    stutterReduction: savedStutter,
     latestSpeaker: "",
     latestMessage: "",
     latestRawMessage: "",
@@ -178,6 +190,19 @@ export const useTextractorStore = create<TextractorState>((set) => {
     setIgnoreDuplicateLines: (ignoreDuplicateLines) => {
       localStorage.setItem("vn_ignore_duplicate_lines", String(ignoreDuplicateLines));
       set({ ignoreDuplicateLines });
+    },
+    setCharDeduplicationCount: (charDeduplicationCount) => {
+      const count = Math.max(0, Math.min(10, charDeduplicationCount || 0));
+      localStorage.setItem("vn_textractor_char_dedup_count", String(count));
+      set({ charDeduplicationCount: count });
+    },
+    setLoopDeduplication: (loopDeduplication) => {
+      localStorage.setItem("vn_textractor_loop_dedup", String(loopDeduplication));
+      set({ loopDeduplication });
+    },
+    setStutterReduction: (stutterReduction) => {
+      localStorage.setItem("vn_textractor_stutter_reduction", String(stutterReduction));
+      set({ stutterReduction });
     },
     setLatestSpeaker: (latestSpeaker) => set({ latestSpeaker }),
     setLatestMessage: (latestMessage) => set({ latestMessage }),

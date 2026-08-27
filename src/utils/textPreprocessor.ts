@@ -9,7 +9,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Furigana / Ruby Annotation Stripper",
     description: "Strips pronunciation readings like 私(わたし), 漢字[かんじ], and <ruby> tags",
     isEnabled: true,
-    applicableSources: ["manual", "textractor", "batch"],
+    applicableSources: ["manual", "textractor", "ocr", "batch"],
     options: {
       stripRubyParentheses: true,
       stripRubyBrackets: true,
@@ -22,7 +22,7 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     name: "Control Characters & Engine Tags",
     description: "Removes VN engine format tags (e.g. \\c[2], \\v[1]), null bytes, and cleans escape sequences",
     isEnabled: true,
-    applicableSources: ["manual", "textractor", "batch"],
+    applicableSources: ["manual", "textractor", "ocr", "batch"],
     options: {
       isRegex: true,
     },
@@ -34,36 +34,6 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     description: "Converts half-width katakana (ｶﾀｶﾅ → カタカナ) and normalizes character representations",
     isEnabled: true,
     applicableSources: ["manual", "textractor", "ocr", "batch"],
-  },
-  {
-    id: "step_char_deduplicator",
-    type: "char_deduplicator",
-    name: "Consecutive Duplicate Character Deduplicator",
-    description: "Collapses multi-pass text hook duplicates where every character is repeated N times (e.g. 「「運運命命、、感感じじるるだだろろ ?? 」」 → 「運命、感じるだろ ? 」)",
-    isEnabled: false,
-    applicableSources: ["textractor", "manual", "batch"],
-    options: {
-      duplicateCount: 2,
-    },
-  },
-  {
-    id: "step_phrase_deduplicator",
-    type: "phrase_deduplicator",
-    name: "Repeated Phrase & Loop Deduplicator",
-    description: "Collapses repeating sentence loops and duplicate phrase bursts caused by outline/shadow text hooks (e.g. 遥月遥月... → 遥月)",
-    isEnabled: true,
-    applicableSources: ["textractor"],
-  },
-  {
-    id: "step_stutter",
-    type: "stutter_reducer",
-    name: "Stutter & Repeated Character Reducer",
-    description: "Normalizes excessive repetitions and stutters (e.g. あ、、あの → あ、あの, ！！！！ → ！)",
-    isEnabled: true,
-    applicableSources: ["manual", "textractor", "ocr", "batch"],
-    options: {
-      collapseLimit: 1,
-    },
   },
   {
     id: "step_punctuation",
@@ -314,13 +284,31 @@ export function executePreprocessingPipeline(
   source?: PreprocessingSource
 ): string {
   try {
-    let pipeline = DEFAULT_PREPROCESSING_PIPELINE;
-    const stored = localStorage.getItem("vn_preprocessing_pipeline");
-    if (stored) {
-      pipeline = JSON.parse(stored);
+    let current = rawText;
+
+    // 1. Core 5 Auto-Active Steps (always enabled for all sources)
+    for (const step of DEFAULT_PREPROCESSING_PIPELINE) {
+      if (isStepApplicableForSource(step, source)) {
+        current = applyPreprocessingStep(current, step);
+      }
     }
-    const { finalOutput } = executePipelineWithTrace(rawText, pipeline, source);
-    return finalOutput;
+
+    // 2. Custom User-Defined Replacement Rules
+    const customRulesJson = localStorage.getItem("vn_custom_replacement_rules") || localStorage.getItem("vn_preprocessing_pipeline");
+    if (customRulesJson) {
+      const parsed = JSON.parse(customRulesJson);
+      if (Array.isArray(parsed)) {
+        for (const rule of parsed) {
+          if (rule.isEnabled && (rule.type === "custom_regex" || rule.isCustom)) {
+            if (isStepApplicableForSource(rule, source)) {
+              current = applyPreprocessingStep(current, rule);
+            }
+          }
+        }
+      }
+    }
+
+    return current;
   } catch {
     return rawText;
   }

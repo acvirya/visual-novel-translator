@@ -52,6 +52,14 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
     capturedThreads,
     inspectedThreadId,
     threadLogs,
+    ignoreDuplicateLines,
+    charDeduplicationCount,
+    loopDeduplication,
+    stutterReduction,
+    setIgnoreDuplicateLines,
+    setCharDeduplicationCount,
+    setLoopDeduplication,
+    setStutterReduction,
     latestSpeaker,
     latestMessage,
     latestRawMessage,
@@ -1096,6 +1104,89 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
                   />
                   <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "3px", lineHeight: "1.3" }}>
                     When using separate Name & Dialogue threads, waits up to this duration to sync character name or clear for narration.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Category 4: Deduplication & Clean Text Filtering */}
+            <div style={{ backgroundColor: "var(--bg-app)", padding: "12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)", display: "flex", flexDirection: "column", gap: "14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Layers size={13} color="var(--accent-secondary)" />
+                <span>Text Hook Deduplication & Filtering</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px", alignItems: "flex-start" }}>
+                {/* 1. Consecutive Character Deduplication Number Input */}
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", alignItems: "center" }}>
+                    <label style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 500 }}>
+                      Consecutive Character Deduplication:
+                    </label>
+                    <span style={{ fontSize: "11px", fontWeight: 600, color: charDeduplicationCount >= 2 ? "var(--accent-primary)" : "var(--text-muted)" }}>
+                      {charDeduplicationCount >= 2 ? `${charDeduplicationCount}x (${charDeduplicationCount === 2 ? "Doubled" : charDeduplicationCount === 3 ? "Tripled" : `${charDeduplicationCount}-pass`})` : "Disabled (0)"}
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    step={1}
+                    value={charDeduplicationCount}
+                    onChange={(e) => setCharDeduplicationCount(parseInt(e.target.value, 10) || 0)}
+                    placeholder="0 to disable (e.g. 2 for doubled characters)"
+                    style={{ width: "100%", fontSize: "12px", height: "32px" }}
+                  />
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "3px", lineHeight: "1.3" }}>
+                    Collapses multi-pass text hook duplicates (e.g. set <strong>2</strong> for 「「運運命命」」 → 「運命」, <strong>3</strong> for tripled).
+                  </span>
+                </div>
+
+                {/* 2. Rapid Burst Duplicate Line Suppression Toggle */}
+                <div>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "11.5px", fontWeight: 500, color: "var(--text-primary)", marginTop: "4px" }}>
+                    <input
+                      type="checkbox"
+                      checked={ignoreDuplicateLines}
+                      onChange={(e) => setIgnoreDuplicateLines(e.target.checked)}
+                      style={{ cursor: "pointer" }}
+                    />
+                    <span>Suppress Identical Burst Packets (&lt; 800ms)</span>
+                  </label>
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "4px", lineHeight: "1.3" }}>
+                    Prevents rapid duplicate memory hook packet bursts from triggering double translations while still allowing repeated lines when you advance the game.
+                  </span>
+                </div>
+
+                {/* 3. Repeated Phrase & Loop Deduplicator */}
+                <div>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "11.5px", fontWeight: 500, color: "var(--text-primary)", marginTop: "4px" }}>
+                    <input
+                      type="checkbox"
+                      checked={loopDeduplication !== false}
+                      onChange={(e) => setLoopDeduplication(e.target.checked)}
+                      style={{ cursor: "pointer" }}
+                    />
+                    <span>Repeated Phrase & Loop Deduplicator</span>
+                  </label>
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "4px", lineHeight: "1.3" }}>
+                    Collapses shadow and outline rendering hook loops (e.g. 遥月遥月... → 遥月).
+                  </span>
+                </div>
+
+                {/* 4. Stutter & Repeated Punctuation Reducer */}
+                <div>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "11.5px", fontWeight: 500, color: "var(--text-primary)", marginTop: "4px" }}>
+                    <input
+                      type="checkbox"
+                      checked={stutterReduction !== false}
+                      onChange={(e) => setStutterReduction(e.target.checked)}
+                      style={{ cursor: "pointer" }}
+                    />
+                    <span>Stutter & Repeated Punctuation Reducer</span>
+                  </label>
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "4px", lineHeight: "1.3" }}>
+                    Collapses excessive stutter marks (e.g. あ、、あの → あ、あの, ！！！！ → ！).
                   </span>
                 </div>
               </div>
