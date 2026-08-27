@@ -36,6 +36,17 @@ export const DEFAULT_PREPROCESSING_PIPELINE: PreprocessingStep[] = [
     applicableSources: ["manual", "textractor", "ocr", "batch"],
   },
   {
+    id: "step_char_deduplicator",
+    type: "char_deduplicator",
+    name: "Consecutive Duplicate Character Deduplicator",
+    description: "Collapses multi-pass text hook duplicates where every character is repeated N times (e.g. 「「運運命命、、感感じじるるだだろろ ?? 」」 → 「運命、感じるだろ ? 」)",
+    isEnabled: false,
+    applicableSources: ["textractor", "manual", "batch"],
+    options: {
+      duplicateCount: 2,
+    },
+  },
+  {
     id: "step_phrase_deduplicator",
     type: "phrase_deduplicator",
     name: "Repeated Phrase & Loop Deduplicator",
@@ -167,6 +178,21 @@ export function applyPreprocessingStep(text: string, step: PreprocessingStep): s
         result = result.normalize("NFKC");
       } catch {
         // Fallback if environment doesn't support normalize
+      }
+      break;
+    }
+
+    case "char_deduplicator": {
+      const opts = step.options || {};
+      const repeatCount = opts.duplicateCount ?? 2; // 2 (doubled), 3 (tripled), 4 (quadrupled), or 0 for any consecutive duplicate
+
+      if (repeatCount === 0) {
+        // Collapses any consecutive duplicate character (2 or more identical adjacent chars)
+        result = result.replace(/(.)\1+/gu, "$1");
+      } else if (typeof repeatCount === "number" && repeatCount >= 2) {
+        // Collapses exact N consecutive identical characters into 1 (e.g. (.)\1 -> $1 for N=2)
+        const regex = new RegExp(`(.)\\1{${repeatCount - 1}}`, "gu");
+        result = result.replace(regex, "$1");
       }
       break;
     }
@@ -312,6 +338,64 @@ export interface ExtractedDialogue {
 }
 
 /**
+ * Hidden auto-active normalizer for speaker names:
+ * Automatically cleans duplicated bracket tags, multi-pass loops, and stray brackets
+ * Examples:
+ * - 【【伊織】【伊織】】 -> 伊織
+ * - 【伊織】【伊織】    -> 伊織
+ * - 【【伊織】】        -> 伊織
+ * - 【伊織】            -> 伊織
+ * - [伊織][伊織]        -> 伊織
+ * - 伊織伊織            -> 伊織
+ * - クラスメイトクラスメイト -> クラスメイト
+ */
+export function cleanSpeakerName(rawSpeaker: string): string {
+  if (!rawSpeaker) return "";
+  let spk = rawSpeaker.trim();
+
+  // 1. If text contains bracketed segments (e.g. 【伊織】【伊織】 or 【【伊織】【伊織】】),
+  // extract all non-empty candidate contents between matching brackets
+  const bracketMatches = spk.match(/[【\[［〈〔（(《『「]([^【】\[\]［］〈〉〔〕（）()《》『』「」\r\n\s]+)[】\]］〉〕）)》』」]/g);
+  if (bracketMatches && bracketMatches.length > 0) {
+    const candidates = bracketMatches
+      .map((m) => m.replace(/[【】\[\]［］〈〉〔〕（）()《》『』「」]/g, "").trim())
+      .filter((c) => c.length > 0);
+
+    if (candidates.length > 0) {
+      // Take first clean non-empty candidate from the bracketed tokens
+      spk = candidates[0];
+    }
+  }
+
+  // 2. Strip any remaining outer/stray bracket characters and punctuation
+  spk = spk.replace(/^[【】\[\]［］〈〉〔〕（）()《》『』「」\s:：·・]+|[【】\[\]［］〈〉〔〕（）()《》『』「」\s:：·・]+$/g, "");
+  spk = spk.replace(/[【】\[\]［］〈〉〔〕（）()《》『』「」]/g, "").trim();
+
+  // 3. Multi-pass phrase loop deduplication on speaker name (e.g. "伊織伊織" -> "伊織", "クラスメイトクラスメイト" -> "クラスメイト")
+  for (let pass = 0; pass < 3; pass++) {
+    const deduplicated = spk.replace(/^(.{1,15}?)\1+$/u, "$1");
+    if (deduplicated === spk) break;
+    spk = deduplicated;
+  }
+
+  // 4. Consecutive character duplicate cleaner if every character is doubled (e.g. "伊伊織織" -> "伊織")
+  if (spk.length >= 2 && spk.length % 2 === 0) {
+    let isAllDoubled = true;
+    for (let i = 0; i < spk.length; i += 2) {
+      if (spk[i] !== spk[i + 1]) {
+        isAllDoubled = false;
+        break;
+      }
+    }
+    if (isAllDoubled) {
+      spk = spk.replace(/(.)\1/gu, "$1");
+    }
+  }
+
+  return spk.trim();
+}
+
+/**
  * Smart extractor to separate character name (speaker) and dialogue message from a single text line
  */
 export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
@@ -331,7 +415,7 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   const suffixDashMatch = trimmed.match(/^([\s\S]+?[」』）\)】\]〕”"])\s*(?:――|——|--)\s*([^「」『』\r\n]{1,20})$/);
   if (suffixDashMatch) {
     return {
-      speaker: suffixDashMatch[2].trim(),
+      speaker: cleanSpeakerName(suffixDashMatch[2]),
       message: suffixDashMatch[1].trim(),
     };
   }
@@ -340,7 +424,7 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   const suffixParenMatch = trimmed.match(/^([\s\S]+?[」』）\)])\s*[（(【\[［]([^）)\]】］\r\n]{1,20})[）)\]】］]$/);
   if (suffixParenMatch) {
     return {
-      speaker: suffixParenMatch[2].trim(),
+      speaker: cleanSpeakerName(suffixParenMatch[2]),
       message: suffixParenMatch[1].trim(),
     };
   }
@@ -349,17 +433,30 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   const suffixDirectQuoteMatch = trimmed.match(/^([「『（\(〔“][\s\S]+?[」』）\)〕”])\s*([^「」『』（\)\r\n。、!?！？:：]{1,20})$/);
   if (suffixDirectQuoteMatch) {
     return {
-      speaker: suffixDirectQuoteMatch[2].trim(),
+      speaker: cleanSpeakerName(suffixDirectQuoteMatch[2]),
       message: suffixDirectQuoteMatch[1].trim(),
     };
   }
 
-  // 2. Bracketed Speaker prefix: 【遥月】セリフ, [遥月] セリフ, ［遥月］セリフ, 〈遥月〉セリフ, 〔遥月〕セリフ
-  // (Excludes <...> to avoid collision with HTML/ruby tags, and checks bracket validity)
+  // 2. Bracketed Speaker prefix: 【遥月】セリフ, 【【伊織】【伊織】】セリフ, [遥月] セリフ, ［遥月］セリフ, 〈遥月〉セリフ, 〔遥月〕セリフ
+  const bracketPrefixMatch = trimmed.match(/^([【\[［〈〔（(《『「]+(?:[^【】\[\]［］〈〉〔〕（）()《》『』「」\r\n]{1,25}[】\]］〉〕）)》』」]+)+)\s*[:：]?\s*([\s\S]+)$/);
+  if (bracketPrefixMatch) {
+    const rawBracketSpeaker = bracketPrefixMatch[1];
+    const messagePart = bracketPrefixMatch[2];
+    const cleanedSpeaker = cleanSpeakerName(rawBracketSpeaker);
+    if (cleanedSpeaker) {
+      return {
+        speaker: cleanedSpeaker,
+        message: messagePart.trim(),
+      };
+    }
+  }
+
+  // Fallback single bracket
   const bracketMatch = trimmed.match(/^[【\[［〈〔]([^【\]］〉〕\r\n]{1,20})[】\]］〉〕]\s*[:：]?\s*([\s\S]+)$/);
   if (bracketMatch) {
     return {
-      speaker: bracketMatch[1].trim(),
+      speaker: cleanSpeakerName(bracketMatch[1]),
       message: bracketMatch[2].trim(),
     };
   }
@@ -371,7 +468,7 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   // - The text after closing quote does not continue as a narrative sentence (e.g. 『サラマンダの鱗』が彼女を守っていた。)
   const quoteMatch = trimmed.match(/^([^「『（\r\n]{1,15})\s*([「『][\s\S]+?[」』])\s*([\s\S]*)$/);
   if (quoteMatch) {
-    const potentialSpeaker = quoteMatch[1].trim();
+    const potentialSpeaker = cleanSpeakerName(quoteMatch[1]);
     const dialoguePart = quoteMatch[2].trim();
     const trailingPart = quoteMatch[3].trim();
 
@@ -390,7 +487,7 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   // 4. Colon separator: 遥月: セリフ or 遥月：セリフ
   const colonMatch = trimmed.match(/^([^:：\r\n]{1,15})[:：]\s*([\s\S]+)$/);
   if (colonMatch) {
-    const potentialSpeaker = colonMatch[1].trim();
+    const potentialSpeaker = cleanSpeakerName(colonMatch[1]);
     if (!potentialSpeaker.startsWith("http") && !potentialSpeaker.startsWith("<") && !NARRATION_PREFIX_ENDINGS.test(potentialSpeaker)) {
       return {
         speaker: potentialSpeaker,
@@ -403,7 +500,7 @@ export function extractSpeakerAndDialogue(text: string): ExtractedDialogue {
   const lines = trimmed.split(/\r?\n/);
   if (lines.length >= 2 && lines[0].trim().length >= 1 && lines[0].trim().length <= 15 && !lines[0].includes("。") && !NARRATION_PREFIX_ENDINGS.test(lines[0].trim())) {
     return {
-      speaker: lines[0].trim(),
+      speaker: cleanSpeakerName(lines[0]),
       message: lines.slice(1).join("\n").trim(),
     };
   }

@@ -387,6 +387,34 @@ export const TextPreprocessingView: React.FC = () => {
                 </div>
 
                 {/* Specific Step Options / Custom Regex Inputs */}
+                {step.type === "char_deduplicator" && (
+                  <div
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{
+                      marginTop: "10px",
+                      paddingTop: "10px",
+                      borderTop: "1px solid var(--border-subtle)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "6px",
+                    }}
+                  >
+                    <label style={{ display: "block", fontSize: "11px", color: "var(--text-secondary)", fontWeight: 500 }}>
+                      Duplicate Reduction Multiplier:
+                    </label>
+                    <select
+                      value={step.options?.duplicateCount !== undefined ? step.options.duplicateCount : 2}
+                      onChange={(e) => handleUpdateStepOptions(step.id, { duplicateCount: parseInt(e.target.value, 10) })}
+                      style={{ width: "100%", maxWidth: "380px", fontSize: "12px", height: "30px" }}
+                    >
+                      <option value={2}>2x Doubled Characters (e.g. 「「運運命命」」 → 「運命」)</option>
+                      <option value={3}>3x Tripled Characters (e.g. 「「「運運運」」」 → 「運命」)</option>
+                      <option value={4}>4x Quadrupled Characters (e.g. 「「「「...」」」」 → 「...」)</option>
+                      <option value={0}>Any Consecutive Duplicates (All 2+ repeated chars)</option>
+                    </select>
+                  </div>
+                )}
+
                 {step.type === "custom_regex" && (
                   <div
                     onMouseDown={(e) => e.stopPropagation()}
@@ -558,6 +586,17 @@ export const TextPreprocessingView: React.FC = () => {
                   style={{ padding: "3px 8px", fontSize: "11px" }}
                 >
                   Half-width & Symbols
+                </button>
+                <button
+                  onClick={() =>
+                    setSampleInput(
+                      "「「運運命命、、感感じじるるだだろろ ?? 」」"
+                    )
+                  }
+                  className="btn-secondary"
+                  style={{ padding: "3px 8px", fontSize: "11px", color: "var(--accent-cyan)" }}
+                >
+                  2x Doubled Hook
                 </button>
               </div>
             </div>

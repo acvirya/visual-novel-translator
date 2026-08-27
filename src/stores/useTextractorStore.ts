@@ -16,6 +16,7 @@ export interface TextractorState {
   discoverySecondsLeft: number;
   isDiscoveryActive: boolean;
   debounceMs: number;
+  threadSyncWaitMs: number;
   threads: Map<number, TextractorThread>;
   combinedThreadId: number | null;
   messageThreadId: number | null;
@@ -44,6 +45,7 @@ export interface TextractorState {
   setDiscoverySecondsLeft: (sec: number) => void;
   setIsDiscoveryActive: (active: boolean) => void;
   setDebounceMs: (ms: number) => void;
+  setThreadSyncWaitMs: (ms: number) => void;
   setThreads: (threads: Map<number, TextractorThread> | ((prev: Map<number, TextractorThread>) => Map<number, TextractorThread>)) => void;
   setCombinedThreadId: (id: number | null) => void;
   setMessageThreadId: (id: number | null) => void;
@@ -66,6 +68,7 @@ export const useTextractorStore = create<TextractorState>((set) => {
   const savedExePath = localStorage.getItem("vn_textractor_path") || DEFAULT_TEXTRACTOR_PATH;
   const savedArch = (localStorage.getItem("vn_textractor_arch") as "x86" | "x64") || "x86";
   const savedDebounce = Number(localStorage.getItem("vn_textractor_debounce_ms")) || 250;
+  const savedThreadSync = Number(localStorage.getItem("vn_textractor_thread_sync_ms")) || 150;
   const savedMaxLogs = Number(localStorage.getItem("vn_textractor_max_log_lines")) || 100;
   const savedDiscovery = Number(localStorage.getItem("vn_textractor_discovery_duration")) || 10;
   const savedIgnoreDup = localStorage.getItem("vn_ignore_duplicate_lines") !== "false";
@@ -85,6 +88,7 @@ export const useTextractorStore = create<TextractorState>((set) => {
     discoverySecondsLeft: 0,
     isDiscoveryActive: false,
     debounceMs: savedDebounce,
+    threadSyncWaitMs: Math.max(50, savedThreadSync),
     threads: new Map(),
     combinedThreadId: null,
     messageThreadId: null,
@@ -123,6 +127,11 @@ export const useTextractorStore = create<TextractorState>((set) => {
     setDebounceMs: (debounceMs) => {
       localStorage.setItem("vn_textractor_debounce_ms", String(debounceMs));
       set({ debounceMs });
+    },
+    setThreadSyncWaitMs: (threadSyncWaitMs) => {
+      const clamped = Math.max(50, threadSyncWaitMs);
+      localStorage.setItem("vn_textractor_thread_sync_ms", String(clamped));
+      set({ threadSyncWaitMs: clamped });
     },
     setThreads: (threadsOrFn) =>
       set((state) => ({

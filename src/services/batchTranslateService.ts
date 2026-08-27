@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { translateWithFreeMt } from "./freeMtService";
 import { buildCompleteSystemPrompt, ChatMessage, calculateUsageCost, OpenRouterCompletionResponse } from "./openRouterService";
-import { extractSpeakerAndDialogue, executePreprocessingPipeline } from "../utils/textPreprocessor";
+import { extractSpeakerAndDialogue, cleanSpeakerName, executePreprocessingPipeline } from "../utils/textPreprocessor";
 import { logger } from "./loggerService";
 import { useBatchStore } from "../stores/useBatchStore";
 import { settingsManager } from "./settingsManager";
@@ -699,7 +699,7 @@ class BatchTranslateService {
               const chunk = precedingItems.slice(p, p + settings.linesPerBatch);
               const uJson = chunk.map((it) => ({
                 id: it.id,
-                speaker: it.originalSpeaker ? executePreprocessingPipeline(it.originalSpeaker, "batch") : undefined,
+                speaker: it.originalSpeaker ? cleanSpeakerName(executePreprocessingPipeline(it.originalSpeaker, "batch")) : undefined,
                 message: executePreprocessingPipeline(it.originalMessage, "batch"),
               }));
               const aJson = chunk.map((it) => ({
@@ -761,7 +761,7 @@ class BatchTranslateService {
               for (const item of chunkItems) {
                 if (originallyExplicitIds.has(item.id)) {
                   const cleanSpk = item.originalSpeaker
-                    ? executePreprocessingPipeline(item.originalSpeaker, "batch")
+                    ? cleanSpeakerName(executePreprocessingPipeline(item.originalSpeaker, "batch"))
                     : undefined;
                   const cleanMsg = executePreprocessingPipeline(item.originalMessage, "batch");
                   const res = await translateWithFreeMt({
@@ -918,7 +918,7 @@ class BatchTranslateService {
           const chunk = precedingItems.slice(p, p + settings.linesPerBatch);
           const uJson = chunk.map((it) => ({
             id: it.id,
-            speaker: it.originalSpeaker ? executePreprocessingPipeline(it.originalSpeaker, "batch") : undefined,
+            speaker: it.originalSpeaker ? cleanSpeakerName(executePreprocessingPipeline(it.originalSpeaker, "batch")) : undefined,
             message: executePreprocessingPipeline(it.originalMessage, "batch"),
           }));
           const aJson = chunk.map((it) => ({
@@ -992,7 +992,7 @@ class BatchTranslateService {
             const provider = settings.modelId === "mt:deepl-free" ? "deepl" : "google";
             for (const item of chunkItems) {
               const cleanSpk = item.originalSpeaker
-                ? executePreprocessingPipeline(item.originalSpeaker, "batch")
+                ? cleanSpeakerName(executePreprocessingPipeline(item.originalSpeaker, "batch"))
                 : undefined;
               const cleanMsg = executePreprocessingPipeline(item.originalMessage, "batch");
               const res = await translateWithFreeMt({

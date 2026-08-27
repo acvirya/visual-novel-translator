@@ -47,6 +47,7 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
     attachedPid,
     hookError,
     debounceMs,
+    threadSyncWaitMs,
     threads,
     capturedThreads,
     inspectedThreadId,
@@ -58,6 +59,7 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
     setArch,
     setSelectedPid,
     setDebounceMs,
+    setThreadSyncWaitMs,
     reorderCapturedThreads,
     setInspectedThreadId,
     setLatestSpeaker,
@@ -1046,29 +1048,55 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
             </div>
 
             {/* Category 3: Performance & Timing */}
-            <div style={{ backgroundColor: "var(--bg-app)", padding: "12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ backgroundColor: "var(--bg-app)", padding: "12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)", display: "flex", flexDirection: "column", gap: "14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
                 <Sliders size={13} color="var(--accent-primary)" />
-                <span>Typewriter Stream Delay Tuning</span>
+                <span>Timing & Dual-Thread Synchronization</span>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                    Typewriter Debounce Delay: <strong>{debounceMs} ms</strong>
-                  </label>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
+                {/* 1. Typewriter Debounce Slider */}
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <label style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 500 }}>
+                      Typewriter Debounce Delay:
+                    </label>
+                    <strong style={{ fontSize: "11px", color: "var(--accent-primary)" }}>{debounceMs} ms</strong>
+                  </div>
                   <input
                     type="range"
                     min={50}
                     max={600}
-                    step={50}
+                    step={25}
                     value={debounceMs}
                     onChange={(e) => setDebounceMs(Number(e.target.value))}
                     style={{ width: "100%" }}
                   />
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "3px", lineHeight: "1.3" }}>
+                    Buffers typewriter character streams before dispatching sentences.
+                  </span>
                 </div>
-                <div style={{ fontSize: "11px", color: "var(--text-muted)", maxWidth: "340px", lineHeight: "1.4" }}>
-                  Buffers in-game typewriter character animations before dispatching complete sentences.
+
+                {/* 2. Dual-Thread Sync Window Slider */}
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <label style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 500 }}>
+                      Dual-Thread Sync Wait Window:
+                    </label>
+                    <strong style={{ fontSize: "11px", color: "var(--accent-gold)" }}>{threadSyncWaitMs || 150} ms</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min={50}
+                    max={600}
+                    step={25}
+                    value={threadSyncWaitMs || 150}
+                    onChange={(e) => setThreadSyncWaitMs(Number(e.target.value))}
+                    style={{ width: "100%" }}
+                  />
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "3px", lineHeight: "1.3" }}>
+                    When using separate Name & Dialogue threads, waits up to this duration to sync character name or clear for narration.
+                  </span>
                 </div>
               </div>
             </div>

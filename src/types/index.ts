@@ -20,6 +20,7 @@ export type NavigationTab =
 export type PreprocessingType =
   | "furigana_cleaner"
   | "control_char_cleaner"
+  | "char_deduplicator"
   | "phrase_deduplicator"
   | "stutter_reducer"
   | "whitespace_normalizer"
@@ -48,6 +49,7 @@ export interface PreprocessingStep {
     collapseLimit?: number;
     normalizeQuotes?: boolean;
     removeDecorativeSymbols?: boolean;
+    duplicateCount?: number; // e.g. 2 for doubled (aa->a), 3 for tripled, 0 for any
   };
 }
 
