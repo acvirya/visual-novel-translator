@@ -319,7 +319,7 @@ export const GlossaryManagerView: React.FC = () => {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", gap: "14px" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "14px" }}>
       {/* Top Header Card */}
       <div
         style={{

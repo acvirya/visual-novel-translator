@@ -7,6 +7,8 @@ export interface OpenRouterModelPricing {
   completion: string;
   image?: string;
   request?: string;
+  input_cache_read?: string;
+  input_cache_write?: string;
 }
 
 export interface OpenRouterModel {
@@ -24,6 +26,9 @@ export interface OpenRouterEndpoint {
   pricing?: {
     prompt: string;
     completion: string;
+    input_cache_read?: string;
+    input_cache_write?: string;
+    request?: string;
   };
   quantization?: string;
   status?: number;
@@ -405,6 +410,9 @@ export async function fetchModelEndpoints(modelId: string, forceRefresh = false)
           ? {
               prompt: e.pricing.prompt || "0",
               completion: e.pricing.completion || "0",
+              input_cache_read: e.pricing.input_cache_read || e.pricing.request || "0",
+              input_cache_write: e.pricing.input_cache_write || "0",
+              request: e.pricing.request,
             }
           : undefined,
         quantization: e.quantization,
@@ -428,6 +436,102 @@ export async function fetchModelEndpoints(modelId: string, forceRefresh = false)
     console.warn(`Failed to fetch endpoints for model ${modelId}:`, err);
   }
   return [];
+}
+
+export interface ModelPricingSummary {
+  input: string;
+  output: string;
+  cache: string;
+  isFree: boolean;
+}
+
+/**
+ * Calculates and formats pricing (Input, Output, Cache per 1M tokens) as an exact price or price range
+ * based on the active model and user-selected provider endpoints.
+ */
+export function getModelPricingSummary(
+  modelId: string,
+  selectedProviders: string[] = [],
+  cachedModel?: OpenRouterModel,
+  endpoints: OpenRouterEndpoint[] = []
+): ModelPricingSummary {
+  if (!modelId) {
+    return { input: "$0", output: "$0", cache: "$0", isFree: true };
+  }
+
+  if (modelId.startsWith("mt:")) {
+    return { input: "$0 (Free)", output: "$0 (Free)", cache: "$0 (Free)", isFree: true };
+  }
+
+  // Filter endpoints by user-selected providers if any are chosen
+  let relevantEndpoints = endpoints;
+  if (selectedProviders && selectedProviders.length > 0) {
+    const filtered = endpoints.filter((ep) =>
+      selectedProviders.some(
+        (sp) => sp.toLowerCase() === ep.provider_name.toLowerCase() || sp.toLowerCase() === ep.name.toLowerCase()
+      )
+    );
+    if (filtered.length > 0) {
+      relevantEndpoints = filtered;
+    }
+  }
+
+  // Gather token prices per 1 Million tokens
+  const promptPrices: number[] = [];
+  const compPrices: number[] = [];
+  const cachePrices: number[] = [];
+
+  for (const ep of relevantEndpoints) {
+    if (ep.pricing) {
+      if (ep.pricing.prompt !== undefined) {
+        promptPrices.push(parseFloat(ep.pricing.prompt || "0") * 1000000);
+      }
+      if (ep.pricing.completion !== undefined) {
+        compPrices.push(parseFloat(ep.pricing.completion || "0") * 1000000);
+      }
+      if (ep.pricing.input_cache_read !== undefined && parseFloat(ep.pricing.input_cache_read || "0") > 0) {
+        cachePrices.push(parseFloat(ep.pricing.input_cache_read || "0") * 1000000);
+      }
+    }
+  }
+
+  // Fallback to top-level model pricing if endpoint pricing is not loaded yet
+  if (promptPrices.length === 0 && cachedModel?.pricing) {
+    promptPrices.push(parseFloat(cachedModel.pricing.prompt || "0") * 1000000);
+    compPrices.push(parseFloat(cachedModel.pricing.completion || "0") * 1000000);
+    if (cachedModel.pricing.input_cache_read && parseFloat(cachedModel.pricing.input_cache_read) > 0) {
+      cachePrices.push(parseFloat(cachedModel.pricing.input_cache_read) * 1000000);
+    }
+  }
+
+  const formatPriceVal = (val: number): string => {
+    if (val === 0) return "$0";
+    if (val < 0.01) return `$${val.toFixed(4)}`;
+    if (val < 1) return `$${val.toFixed(2)}`;
+    return `$${val.toFixed(2)}`;
+  };
+
+  const formatRange = (prices: number[]): string => {
+    if (prices.length === 0) return "$0";
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    if (Math.abs(min - max) < 0.0001) {
+      return formatPriceVal(min);
+    }
+    return `${formatPriceVal(min)} - ${formatPriceVal(max)}`;
+  };
+
+  const inputStr = formatRange(promptPrices);
+  const outputStr = formatRange(compPrices);
+  const cacheStr = cachePrices.length > 0 ? formatRange(cachePrices) : "$0";
+  const isFree = promptPrices.length > 0 && promptPrices.every((p) => p === 0) && compPrices.every((p) => p === 0);
+
+  return {
+    input: inputStr,
+    output: outputStr,
+    cache: cacheStr,
+    isFree,
+  };
 }
 
 /**

@@ -303,7 +303,8 @@ button:active {
 .view-container {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  scrollbar-gutter: stable;
+  padding: 14px 16px 16px 16px;
 }
 
 /* Cards & Sections */

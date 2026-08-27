@@ -37,10 +37,12 @@ export function SegmentedControl<T extends string>({
         alignItems: "center",
         backgroundColor: "var(--bg-app)",
         padding: "3px",
-        borderRadius: "var(--radius-sm)",
+        borderRadius: "var(--radius-md)",
         border: "1px solid var(--border-subtle)",
-        gap: "3px",
+        gap: "4px",
         userSelect: "none",
+        boxSizing: "border-box",
+        flexShrink: 0,
         ...style,
       }}
     >
@@ -49,6 +51,9 @@ export function SegmentedControl<T extends string>({
         const isDisabled = opt.disabled;
 
         const getBadgeStyle = () => {
+          if (isActive) {
+            return { bg: "rgba(255, 255, 255, 0.25)", text: "#ffffff", border: "rgba(255, 255, 255, 0.4)" };
+          }
           switch (opt.badgeColor) {
             case "success":
               return { bg: "rgba(63, 185, 80, 0.2)", text: "var(--accent-success)", border: "rgba(63, 185, 80, 0.4)" };
@@ -80,22 +85,24 @@ export function SegmentedControl<T extends string>({
               gap: isSmall ? "5px" : "7px",
               height: isSmall ? "28px" : "32px",
               padding: isSmall ? "0 10px" : "0 14px",
-              borderRadius: "calc(var(--radius-sm) - 1px)",
-              border: `1px solid ${isActive ? "var(--border-focus)" : "transparent"}`,
+              borderRadius: "var(--radius-sm)",
+              border: `1px solid ${isActive ? "var(--accent-primary)" : "transparent"}`,
               backgroundColor: isActive
-                ? "var(--accent-primary-subtle)"
+                ? "var(--accent-primary)"
                 : "transparent",
               color: isActive
-                ? "var(--accent-primary)"
+                ? "#ffffff"
                 : isDisabled
                 ? "var(--text-muted)"
                 : "var(--text-secondary)",
-              fontWeight: isActive ? 600 : 500,
+              fontWeight: 600,
               fontSize: isSmall ? "var(--text-xs)" : "var(--text-sm)",
               cursor: isDisabled ? "not-allowed" : "pointer",
               opacity: isDisabled ? 0.5 : 1,
-              transition: "all 0.15s cubic-bezier(0.4, 0, 0.2, 1)",
-              boxShadow: isActive ? "0 1px 4px rgba(78, 115, 223, 0.2)" : "none",
+              whiteSpace: "nowrap",
+              boxSizing: "border-box",
+              flexShrink: 0,
+              transition: "background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease",
             }}
           >
             {opt.icon && (
@@ -103,7 +110,7 @@ export function SegmentedControl<T extends string>({
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  color: isActive ? "var(--accent-primary)" : "var(--text-muted)",
+                  color: isActive ? "#ffffff" : "var(--text-muted)",
                 }}
               >
                 {opt.icon}

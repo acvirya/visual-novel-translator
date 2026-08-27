@@ -35,38 +35,19 @@ export const UnifiedSettingsView: React.FC = () => {
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
-      {/* Settings Sub-tabs Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "8px 16px",
-          backgroundColor: "var(--bg-panel)",
-          borderBottom: "1px solid var(--border-subtle)",
-          flexShrink: 0,
-          flexWrap: "wrap",
-          gap: "8px",
-        }}
-      >
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", maxWidth: "1200px", margin: "0 auto" }}>
+      {/* Settings Sub-tabs Header in Center */}
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", padding: "0 0 12px 0", flexShrink: 0 }}>
         <SegmentedControl<SettingsSubTab>
           options={settingOptions}
           value={activeSubTab}
           onChange={setActiveSubTab}
           size="md"
         />
-
-        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-          {activeSubTab === "providers" && "Configure OpenRouter AI models, API keys, and custom prompts"}
-          {activeSubTab === "custom_rules" && "Universal regex patterns and custom term replacements applied across all sources"}
-          {activeSubTab === "general" && "System-wide hotkeys, language pairs, and app preferences"}
-          {activeSubTab === "logs" && "Live debug console, network errors, and IPC execution logs"}
-        </span>
       </div>
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px", maxWidth: "1200px", margin: "0 auto", width: "100%" }}>
+      <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
         {activeSubTab === "providers" && <TranslationProvidersView />}
         {activeSubTab === "custom_rules" && <CustomReplacementRulesView />}
         {activeSubTab === "general" && <GeneralSettingsView />}

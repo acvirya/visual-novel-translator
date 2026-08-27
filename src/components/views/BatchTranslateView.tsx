@@ -16,10 +16,10 @@ import {
   Activity,
   SlidersHorizontal,
   ExternalLink,
-  FileText,
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
+  Coins,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import { ProviderSelectorMultiSelect } from "../common/ProviderSelectorMultiSelect";
@@ -27,6 +27,9 @@ import { SegmentedControl } from "../common/SegmentedControl";
 import {
   getSelectedModelProviders,
   setSelectedModelProviders,
+  fetchModelEndpoints,
+  getModelPricingSummary,
+  OpenRouterEndpoint,
 } from "../../services/openRouterService";
 import {
   batchTranslateService,
@@ -72,6 +75,25 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     const initModel = localStorage.getItem("vn_batch_selected_model") || "openai/gpt-4o-mini";
     return getSelectedModelProviders(initModel);
   });
+  const [modelEndpoints, setModelEndpoints] = useState<OpenRouterEndpoint[]>([]);
+
+  useEffect(() => {
+    if (!selectedEngine || selectedEngine.startsWith("mt:")) {
+      setModelEndpoints([]);
+      return;
+    }
+    let cancelled = false;
+    fetchModelEndpoints(selectedEngine).then((eps) => {
+      if (!cancelled) setModelEndpoints(eps);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEngine]);
+
+  const pricingSummary = useMemo(() => {
+    return getModelPricingSummary(selectedEngine, selectedProviders, undefined, modelEndpoints);
+  }, [selectedEngine, selectedProviders, modelEndpoints]);
 
   const [linesPerBatch, setLinesPerBatch] = useState<number>(() => {
     const val = parseInt(localStorage.getItem("vn_batch_lines_per_batch") || "10", 10);
@@ -123,10 +145,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   const [translateExplicitOnly, setTranslateExplicitOnly] = useState<boolean>(() => {
     return localStorage.getItem("vn_batch_translate_explicit_only") === "true";
   });
-  const [overrideRawWithPreprocessed, setOverrideRawWithPreprocessed] = useState<boolean>(() => {
-    const val = localStorage.getItem("vn_batch_override_raw");
-    return val === null ? true : val === "true";
-  });
   const [outputDir, setOutputDir] = useState<string>(() => {
     return localStorage.getItem("vn_batch_output_dir") || "";
   });
@@ -145,9 +163,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     localStorage.setItem("vn_batch_max_backoff_seconds", String(maxBackoffSeconds));
     localStorage.setItem("vn_batch_auto_continue", String(autoContinue));
     localStorage.setItem("vn_batch_translate_explicit_only", String(translateExplicitOnly));
-    localStorage.setItem("vn_batch_override_raw", String(overrideRawWithPreprocessed));
     localStorage.setItem("vn_batch_output_dir", outputDir);
-  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, maxBackoffSeconds, autoContinue, translateExplicitOnly, overrideRawWithPreprocessed, outputDir]);
+  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, maxBackoffSeconds, autoContinue, translateExplicitOnly, outputDir]);
 
   // Auto-select first file if none selected
   useEffect(() => {
@@ -324,7 +341,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       maxBackoffSeconds,
       autoContinueUntilCompleted: autoContinue,
       translateExplicitOnly,
-      overrideRawWithPreprocessed,
+      overrideRawWithPreprocessed: true,
       selectedProviders,
       outputDir,
       fileSuffix,
@@ -398,19 +415,35 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     setMaxBackoffSecondsInput(String(valid));
   };
 
-  const handleOpenDebugLog = async () => {
-    try {
-      const logPath = outputDir && outputDir.trim() ? `${outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/batch_debug_log.txt` : "batch_debug_log.txt";
-      await invoke("open_file_in_default_app", { path: logPath });
-    } catch (err) {
-      console.warn("Failed to open debug log in default editor:", err);
-    }
-  };
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", gap: "10px", minWidth: 0, flex: 1, minHeight: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", minWidth: 0, maxWidth: "1200px", margin: "0 auto" }}>
       {/* ========================================================================= */}
-      {/* 1. TOP CONTROL BAR: Model, Actions & Session Usage Statistics             */}
+      {/* 1. TOP SUB-TAB SWITCHER (Centered & Uniform with other Views)              */}
+      {/* ========================================================================= */}
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", padding: "0 0 12px 0", flexShrink: 0 }}>
+        <SegmentedControl<"preview" | "settings">
+          options={[
+            {
+              id: "preview",
+              label: "Script Translation Preview",
+              icon: <FileCode size={14} />,
+              badge: queuedFiles.length > 0 ? `${queuedFiles.length} files` : undefined,
+              badgeColor: "neutral",
+            },
+            {
+              id: "settings",
+              label: "Batch Settings",
+              icon: <Sliders size={14} />,
+            },
+          ]}
+          value={activeTab}
+          onChange={setActiveTab}
+          size="md"
+        />
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 2. PERSISTENT MODEL & SESSION CONTROL BAR (Visible in both subtabs)       */}
       {/* ========================================================================= */}
       <div
         style={{
@@ -418,6 +451,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
           border: "1px solid var(--border-subtle)",
           borderRadius: "var(--radius-md)",
           padding: "8px 14px",
+          marginBottom: "10px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -501,19 +535,34 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
           </div>
         </div>
 
-        {/* Right Side: Incremental Session Statistics Badge & Debug Log Button */}
+        {/* Right Side: Model Pricing Badge & Incremental Session Statistics Badge */}
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={handleOpenDebugLog}
-            className="btn-secondary"
-            style={{ padding: "4px 9px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
-            title="Open batch_debug_log.txt in Notepad / default editor to inspect full prompt and raw model output"
+          {/* Model Pricing Badge (Input / Output / Cache per 1M tokens) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              backgroundColor: "var(--bg-app)",
+              padding: "4px 10px",
+              borderRadius: "20px",
+              border: "1px solid var(--border-subtle)",
+              fontSize: "11px",
+              flexWrap: "wrap",
+            }}
+            title="Model Pricing per 1 Million tokens (Input, Output, and Prompt Cache) based on selected endpoints"
           >
-            <FileText size={12} color="var(--accent-cyan)" />
-            <span>Debug Log</span>
-          </button>
+            <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
+              <Coins size={12} color="var(--accent-primary)" /> Pricing / 1M:
+            </span>
+            <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{pricingSummary.input}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{pricingSummary.output}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Cache: <strong style={{ color: "var(--accent-success)" }}>{pricingSummary.cache}</strong></span>
+          </div>
 
+          {/* Session Usage Badge */}
           <div
             style={{
               display: "flex",
@@ -542,43 +591,13 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* 2. SWITCH SECTION TABS: Preview vs Settings                               */}
-      {/* ========================================================================= */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, flexWrap: "wrap", gap: "8px" }}>
-        <SegmentedControl<"preview" | "settings">
-          options={[
-            {
-              id: "preview",
-              label: "Script Translation Preview",
-              icon: <FileCode size={14} />,
-              badge: queuedFiles.length > 0 ? `${queuedFiles.length} files` : undefined,
-              badgeColor: "neutral",
-            },
-            {
-              id: "settings",
-              label: "Batch Settings",
-              icon: <Sliders size={14} />,
-            },
-          ]}
-          value={activeTab}
-          onChange={setActiveTab}
-          size="md"
-        />
-
-        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-          {activeTab === "preview" && "Browse, inspect, and filter translated lines per file"}
-          {activeTab === "settings" && "Configure AI provider, concurrency, batch sizes, and unified .jsonl script database storage"}
-        </span>
-      </div>
-
-      {/* ========================================================================= */}
       {/* 3. DYNAMIC CONTENT AREA: Stretches 100% full height & width               */}
       {/* ========================================================================= */}
       {activeTab === "settings" ? (
         /* ========================================================================= */
         /* MODE A: BATCH SETTINGS & PARAMETERS                                       */
         /* ========================================================================= */
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", flex: 1, minHeight: 0, paddingRight: "2px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px", width: "100%" }}>
           {/* Card 1: Queued Files Manager in Settings */}
           <div
             style={{
@@ -1038,7 +1057,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               </span>
             </div>
 
-            {/* Automation & Preprocessing Toggles */}
+            {/* Automation Toggles */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px", marginTop: "4px" }}>
               <div
                 style={{
@@ -1070,39 +1089,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   disabled={isRunning}
                   onChange={(e) => setAutoContinue(e.target.checked)}
                   style={{ accentColor: "var(--accent-cyan)", transform: "scale(1.2)", marginTop: "2px", cursor: "pointer" }}
-                />
-              </div>
-
-              <div
-                style={{
-                  backgroundColor: overrideRawWithPreprocessed ? "rgba(234, 179, 8, 0.06)" : "var(--bg-surface-elevated)",
-                  border: overrideRawWithPreprocessed ? "1px solid rgba(234, 179, 8, 0.3)" : "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "10px 12px",
-                  display: "flex",
-                  alignItems: "flex-start",
-                  justifyContent: "space-between",
-                  gap: "8px",
-                }}
-              >
-                <div>
-                  <label
-                    htmlFor="override-raw-checkbox"
-                    style={{ fontSize: "12px", fontWeight: 700, color: overrideRawWithPreprocessed ? "var(--accent-gold)" : "var(--text-primary)", cursor: "pointer" }}
-                  >
-                    Override Raw Dialogue with Preprocessed Text
-                  </label>
-                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                    Saves cleaned Japanese text (stripped of engine tags/ruby readings) into raw fields for clean hook matching.
-                  </span>
-                </div>
-                <input
-                  id="override-raw-checkbox"
-                  type="checkbox"
-                  checked={overrideRawWithPreprocessed}
-                  disabled={isRunning}
-                  onChange={(e) => setOverrideRawWithPreprocessed(e.target.checked)}
-                  style={{ accentColor: "var(--accent-gold)", transform: "scale(1.2)", marginTop: "2px", cursor: "pointer" }}
                 />
               </div>
 
@@ -1180,7 +1166,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
         </div>
       ) : (
         /* ========================================================================= */
-        /* MODE B: SCRIPT TRANSLATION PREVIEW (100% Dynamic Full Height Table View)   */
+        /* MODE B: SCRIPT TRANSLATION PREVIEW (100% Dynamic Table View)               */
         /* ========================================================================= */
         <div
           style={{
@@ -1191,9 +1177,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             display: "flex",
             flexDirection: "column",
             gap: "10px",
-            flex: 1,
-            minHeight: 0,
-            height: "100%",
+            width: "100%",
           }}
         >
           {/* Top Compact Control & File Ribbon for Preview */}
@@ -1299,16 +1283,14 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             </div>
           </div>
 
-          {/* Dynamic Full Height Table Container */}
+          {/* Table Container */}
           <div
             style={{
-              flex: 1,
-              height: "100%",
-              minHeight: 0,
-              overflowY: "auto",
               border: "1px solid var(--border-subtle)",
               borderRadius: "var(--radius-sm)",
               backgroundColor: "var(--bg-app)",
+              width: "100%",
+              overflowX: "auto",
             }}
           >
             {!activeFile || activeFile.items.length === 0 ? (

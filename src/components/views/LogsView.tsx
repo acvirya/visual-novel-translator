@@ -34,7 +34,7 @@ export const LogsView: React.FC = () => {
   });
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: "14px" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "14px" }}>
       {/* Top Filter Bar */}
       <div
         style={{
@@ -93,7 +93,7 @@ export const LogsView: React.FC = () => {
       {/* Terminal-like Log Container */}
       <div
         style={{
-          flex: 1,
+          minHeight: "450px",
           backgroundColor: "var(--bg-app)",
           border: "1px solid var(--border-subtle)",
           borderRadius: "var(--radius-md)",

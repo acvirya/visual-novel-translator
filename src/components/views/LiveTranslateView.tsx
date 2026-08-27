@@ -83,7 +83,7 @@ export const LiveTranslateView: React.FC = () => {
   const isLlmProvider = !selectedProvider.startsWith("mt:");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", gap: "12px", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "12px" }}>
       {/* ========================================================================= */}
       {/* 1. TOP CONTROL & PROVIDER BAR                                            */}
       {/* ========================================================================= */}
@@ -325,17 +325,14 @@ export const LiveTranslateView: React.FC = () => {
       {/* ========================================================================= */}
       <div
         style={{
-          flex: 1,
-          overflowY: "auto",
           display: "flex",
           flexDirection: "column",
           gap: "10px",
-          paddingRight: "4px",
-          minHeight: 0,
+          width: "100%",
         }}
       >
         {liveLogs.length === 0 ? (
-          <div className="empty-state-container" style={{ margin: "auto 0" }}>
+          <div className="empty-state-container" style={{ flex: 1, minHeight: "280px", height: "100%", margin: 0, width: "100%", boxSizing: "border-box" }}>
             <div className="empty-state-icon">
               <MessageSquare size={22} color="var(--accent-primary)" />
             </div>

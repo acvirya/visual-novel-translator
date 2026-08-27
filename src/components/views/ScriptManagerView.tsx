@@ -200,7 +200,7 @@ export const ScriptManagerView: React.FC = () => {
   }, [filteredEntries, safePage, pageSize]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", gap: "14px" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "14px" }}>
       {/* Top Header Card */}
       <div
         style={{
@@ -587,12 +587,10 @@ export const ScriptManagerView: React.FC = () => {
           {/* Entries List */}
           <div
             style={{
-              flex: 1,
-              overflowY: "auto",
               display: "flex",
               flexDirection: "column",
               gap: "8px",
-              paddingRight: "4px",
+              width: "100%",
             }}
           >
             {filteredEntries.length === 0 ? (

@@ -1623,14 +1623,11 @@ class BatchTranslateService {
   public async saveTranslatedFile(file: BatchFileEntry, settings: BatchSettings): Promise<void> {
     try {
       const outputLines = file.items.map((item) => {
-        const finalRawSpeaker =
-          settings.overrideRawWithPreprocessed && item.originalSpeaker
-            ? cleanSpeakerName(executePreprocessingPipeline(item.originalSpeaker, "batch"))
-            : item.originalSpeaker;
+        const finalRawSpeaker = item.originalSpeaker
+          ? cleanSpeakerName(executePreprocessingPipeline(item.originalSpeaker, "batch"))
+          : item.originalSpeaker;
 
-        const finalRawMessage = settings.overrideRawWithPreprocessed
-          ? executePreprocessingPipeline(item.originalMessage, "batch")
-          : item.originalMessage;
+        const finalRawMessage = executePreprocessingPipeline(item.originalMessage, "batch");
 
         return JSON.stringify({
           id: item.id,

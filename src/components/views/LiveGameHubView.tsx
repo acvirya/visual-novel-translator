@@ -48,42 +48,22 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
-      {/* 3-Stage Pipeline Stepper Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "8px 16px",
-          backgroundColor: "var(--bg-panel)",
-          borderBottom: "1px solid var(--border-subtle)",
-          flexShrink: 0,
-          flexWrap: "wrap",
-          gap: "8px",
-        }}
-      >
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", maxWidth: "1200px", margin: "0 auto" }}>
+      {/* 3-Stage Pipeline Stepper in Center */}
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", padding: "0 0 12px 0", flexShrink: 0 }}>
         <SegmentedControl<LivePipelineStage>
           options={stageOptions}
           value={activeStage}
           onChange={setActiveStage}
           size="md"
         />
-
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-            {activeStage === "input" && "Configure Textractor memory hooking or OCR screen regions"}
-            {activeStage === "stream" && "Real-time dialogue translation log and context stream"}
-            {activeStage === "overlay" && "Customize transparent in-game HUD subtitle appearance"}
-          </span>
-        </div>
       </div>
 
       {/* Main Stage Content */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative" }}>
+      <div style={{ flex: 1, minHeight: 0, position: "relative", width: "100%" }}>
         {/* STAGE 1: INPUT SETUP */}
         {activeStage === "input" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "14px", padding: "16px", maxWidth: "1200px", margin: "0 auto", width: "100%" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "14px", width: "100%" }}>
             {/* Input Engine Selector Tabs */}
             <div className="card" style={{ margin: 0 }}>
               <div className="card-header">
@@ -191,14 +171,14 @@ export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSe
 
         {/* STAGE 2: LIVE TRANSLATION STREAM */}
         {activeStage === "stream" && (
-          <div style={{ height: "100%", width: "100%" }}>
+          <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
             <LiveTranslateView />
           </div>
         )}
 
         {/* STAGE 3: IN-GAME OVERLAY */}
         {activeStage === "overlay" && (
-          <div style={{ padding: "16px", maxWidth: "1200px", margin: "0 auto", width: "100%" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "14px", width: "100%" }}>
             <OverlaySettingsView />
           </div>
         )}
