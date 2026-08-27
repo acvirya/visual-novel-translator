@@ -22,6 +22,58 @@ export interface ModelSelectorComboboxProps {
   disabled?: boolean;
 }
 
+export function splitModelProviderAndName(model: { id: string; name?: string }): { provider: string; modelName: string } {
+  const rawName = (model.name || model.id).trim();
+  const idParts = model.id.split("/");
+
+  // 1. If name has "Provider: Model Name" (e.g. "DeepSeek: DeepSeek V3", "Z.ai: GLM 5.2", "Google: Gemini 2.0 Flash")
+  if (rawName.includes(":")) {
+    const colonIdx = rawName.indexOf(":");
+    const prefixProvider = rawName.slice(0, colonIdx).trim();
+    let cleanName = rawName.slice(colonIdx + 1).trim();
+    if (!cleanName) cleanName = rawName;
+    return {
+      provider: prefixProvider,
+      modelName: cleanName,
+    };
+  }
+
+  // 2. If no colon in name, derive clean provider label from model ID prefix
+  let provider = "";
+  if (idParts.length > 1) {
+    const authorSlug = idParts[0].toLowerCase();
+    const KNOWN_PROVIDERS: Record<string, string> = {
+      "openai": "OpenAI",
+      "anthropic": "Anthropic",
+      "google": "Google",
+      "deepseek": "DeepSeek",
+      "meta-llama": "Meta",
+      "qwen": "Qwen",
+      "mistralai": "Mistral",
+      "z-ai": "Z.AI",
+      "minimax": "MiniMax",
+      "cohere": "Cohere",
+      "x-ai": "xAI",
+      "microsoft": "Microsoft",
+      "amazon": "Amazon",
+      "nvidia": "NVIDIA",
+      "ai21": "AI21",
+      "nousresearch": "NousResearch",
+      "gryphe": "Gryphe",
+      "sao10k": "Sao10K",
+      "neversleep": "NeverSleep",
+    };
+    provider = KNOWN_PROVIDERS[authorSlug] || (idParts[0].charAt(0).toUpperCase() + idParts[0].slice(1));
+  } else if (model.id.startsWith("mt:")) {
+    provider = "Free MT";
+  }
+
+  return {
+    provider: provider || "AI Provider",
+    modelName: rawName,
+  };
+}
+
 const INITIAL_STARRED_IDS: string[] = [
   "anthropic/claude-3.5-sonnet",
   "deepseek/deepseek-chat",
@@ -138,7 +190,10 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     }
     if (selectedModelId === "mt:google-translate") return "Google Translate (Free MT)";
     if (selectedModelId === "mt:deepl-free") return "DeepL Free (Web Endpoint)";
-    if (currentModel) return currentModel.name || currentModel.id;
+    if (currentModel) {
+      const parsed = splitModelProviderAndName(currentModel);
+      return parsed.modelName;
+    }
     return selectedModelId || "Select a model...";
   };
 
@@ -149,13 +204,25 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
   const filteredStarred = models.filter((m) => {
     if (!starredIds.includes(m.id)) return false;
     if (!q) return true;
-    return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+    const parsed = splitModelProviderAndName(m);
+    return (
+      m.id.toLowerCase().includes(q) ||
+      m.name.toLowerCase().includes(q) ||
+      parsed.modelName.toLowerCase().includes(q) ||
+      parsed.provider.toLowerCase().includes(q)
+    );
   });
 
   const filteredCatalog = models.filter((m) => {
     if (starredIds.includes(m.id)) return false; // starred are shown in their own section
     if (!q) return true;
-    return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+    const parsed = splitModelProviderAndName(m);
+    return (
+      m.id.toLowerCase().includes(q) ||
+      m.name.toLowerCase().includes(q) ||
+      parsed.modelName.toLowerCase().includes(q) ||
+      parsed.provider.toLowerCase().includes(q)
+    );
   });
 
   return (
@@ -218,6 +285,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
         <input
           ref={inputRef}
           type="text"
+          className="combobox-inner-input"
           value={getDisplayLabel()}
           onChange={(e) => {
             setSearchFilter(e.target.value);
@@ -232,6 +300,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
             backgroundColor: "transparent",
             border: "none",
             outline: "none",
+            boxShadow: "none",
             fontFamily: "var(--font-mono)",
             fontSize: compact ? "12px" : "12.5px",
             color: "var(--text-primary)",
@@ -362,6 +431,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               {filteredStarred.map((m) => {
                 const isSelected = m.id === selectedModelId;
                 const pricing = formatModelPricing(m.pricing);
+                const parsed = splitModelProviderAndName(m);
                 return (
                   <div
                     key={`starred_${m.id}`}
@@ -384,10 +454,10 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                   >
                     <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden" }}>
                       <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                        {m.name}
+                        {parsed.modelName}
                       </span>
-                      <span style={{ fontSize: "10.5px", fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>
-                        {m.id}
+                      <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
+                        {parsed.provider}
                       </span>
                     </div>
 
@@ -525,6 +595,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               {filteredCatalog.map((m) => {
                 const isSelected = m.id === selectedModelId;
                 const pricing = formatModelPricing(m.pricing);
+                const parsed = splitModelProviderAndName(m);
                 return (
                   <div
                     key={`catalog_${m.id}`}
@@ -547,10 +618,10 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                   >
                     <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden" }}>
                       <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                        {m.name}
+                        {parsed.modelName}
                       </span>
-                      <span style={{ fontSize: "10.5px", fontFamily: "var(--font-mono)", color: "var(--accent-cyan)" }}>
-                        {m.id}
+                      <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
+                        {parsed.provider}
                       </span>
                     </div>
 

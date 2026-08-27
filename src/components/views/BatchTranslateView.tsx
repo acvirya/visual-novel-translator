@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Play,
@@ -235,10 +235,23 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
   const PAGE_SIZE = 100;
   const [currentPage, setCurrentPage] = useState(1);
+  const isFirstPageMount = useRef(true);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedFileId, statusFilter, searchFilter]);
+
+  // Auto-scroll to top when page changes
+  useEffect(() => {
+    if (isFirstPageMount.current) {
+      isFirstPageMount.current = false;
+      return;
+    }
+    const mainContainer = document.querySelector(".view-container");
+    if (mainContainer) {
+      mainContainer.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [currentPage]);
 
   const totalPages = Math.max(1, Math.ceil(displayedItems.length / PAGE_SIZE));
   const pagedItems = useMemo(() => {
@@ -688,133 +701,139 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   borderRadius: "var(--radius-sm)",
                   overflow: "hidden",
                   backgroundColor: "var(--bg-app)",
-                  maxHeight: "200px",
-                  overflowY: "auto",
+                  width: "100%",
                 }}
               >
-                <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "12px" }}>
-                  <thead>
-                    <tr
-                      style={{
-                        backgroundColor: "var(--bg-surface-elevated)",
-                        borderBottom: "1px solid var(--border-subtle)",
-                        color: "var(--text-secondary)",
-                        fontSize: "11px",
-                        fontWeight: 700,
-                        position: "sticky",
-                        top: 0,
-                        zIndex: 2,
-                      }}
-                    >
-                      <th style={{ padding: "7px 12px" }}>File</th>
-                      <th style={{ padding: "7px 12px", width: "130px" }}>Progress</th>
-                      <th style={{ padding: "7px 12px", width: "140px" }}>Status</th>
-                      <th style={{ padding: "7px 10px", width: "40px", textAlign: "center" }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {queuedFiles.map((file, idx) => {
-                      const fDone = file.completedLines ?? file.items.filter((it) => isGenuinelyTranslated(it)).length;
-                      const fExp = file.explicitLines ?? file.items.filter((it) => isExplicitTagged(it)).length;
-                      const isFinished = (fDone + fExp >= file.totalLines && file.totalLines > 0) || file.status === "completed";
-                      const isSelected = file.id === selectedFileId;
+                {/* 1. Stationary Header Row (Never touched by scrollbar) */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 120px 130px 36px",
+                    padding: "8px 12px",
+                    backgroundColor: "var(--bg-surface-elevated)",
+                    borderBottom: "1px solid var(--border-subtle)",
+                    color: "var(--text-secondary)",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                  }}
+                >
+                  <div>File</div>
+                  <div>Progress</div>
+                  <div>Status</div>
+                  <div style={{ textAlign: "center" }}></div>
+                </div>
 
-                      // Status Badge Calculation
-                      let statusNode: React.ReactNode;
-                      if (file.status === "processing") {
+                {/* 2. Scrollable Body (Scrollbar strictly contained inside rows) */}
+                <div
+                  style={{
+                    maxHeight: "200px",
+                    overflowY: "auto",
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  {queuedFiles.map((file, idx) => {
+                    const fDone = file.completedLines ?? file.items.filter((it) => isGenuinelyTranslated(it)).length;
+                    const fExp = file.explicitLines ?? file.items.filter((it) => isExplicitTagged(it)).length;
+                    const isFinished = (fDone + fExp >= file.totalLines && file.totalLines > 0) || file.status === "completed";
+                    const isSelected = file.id === selectedFileId;
+
+                    // Status Badge Calculation
+                    let statusNode: React.ReactNode;
+                    if (file.status === "processing") {
+                      statusNode = (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(56, 189, 248, 0.12)", color: "var(--accent-cyan)", border: "1px solid rgba(56, 189, 248, 0.3)" }}>
+                          <Activity size={11} className="animate-spin" /> translating
+                        </span>
+                      );
+                    } else if (isFinished) {
+                      if (fExp > 0) {
                         statusNode = (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(56, 189, 248, 0.12)", color: "var(--accent-cyan)", border: "1px solid rgba(56, 189, 248, 0.3)" }}>
-                            <Activity size={11} className="animate-spin" /> translating
-                          </span>
-                        );
-                      } else if (isFinished) {
-                        if (fExp > 0) {
-                          statusNode = (
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(244, 63, 94, 0.12)", color: "#fb7185", border: "1px solid rgba(244, 63, 94, 0.3)" }}>
-                              <AlertTriangle size={11} /> {fExp} explicit
-                            </span>
-                          );
-                        } else {
-                          statusNode = (
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(34, 197, 94, 0.12)", color: "var(--accent-success)", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
-                              <CheckCircle2 size={11} /> completed
-                            </span>
-                          );
-                        }
-                      } else if (isRunning) {
-                        statusNode = (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(234, 179, 8, 0.1)", color: "var(--accent-gold)", border: "1px solid rgba(234, 179, 8, 0.25)" }}>
-                            <Clock size={11} /> queued
-                          </span>
-                        );
-                      } else if (file.status === "error") {
-                        statusNode = (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(239, 68, 68, 0.12)", color: "var(--accent-danger)", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
-                            error
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(244, 63, 94, 0.12)", color: "#fb7185", border: "1px solid rgba(244, 63, 94, 0.3)" }}>
+                            <AlertTriangle size={11} /> {fExp} explicit
                           </span>
                         );
                       } else {
                         statusNode = (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "var(--bg-surface-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
-                            pending
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(34, 197, 94, 0.12)", color: "var(--accent-success)", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
+                            <CheckCircle2 size={11} /> completed
                           </span>
                         );
                       }
-
-                      return (
-                        <tr
-                          key={file.id}
-                          onClick={() => setSelectedFileId(file.id)}
-                          style={{
-                            borderBottom: idx < queuedFiles.length - 1 ? "1px solid var(--border-subtle)" : "none",
-                            backgroundColor: isSelected ? "var(--accent-surface)" : "transparent",
-                            cursor: "pointer",
-                            transition: "background-color 0.15s ease",
-                          }}
-                        >
-                          {/* 1. File Name without size */}
-                          <td style={{ padding: "6px 12px", color: isSelected ? "var(--accent-primary)" : "var(--text-primary)", fontWeight: 600 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden" }}>
-                              <FileCode size={14} style={{ color: isSelected ? "var(--accent-primary)" : isFinished ? "var(--accent-success)" : "var(--accent-cyan)", flexShrink: 0 }} />
-                              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "320px" }} title={file.path}>
-                                {file.name}
-                              </span>
-                            </div>
-                          </td>
-
-                          {/* 2. Progress "12/100" */}
-                          <td style={{ padding: "6px 12px", whiteSpace: "nowrap" }}>
-                            <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "11.5px" }}>
-                              {fDone}/{file.totalLines}
-                            </span>
-                          </td>
-
-                          {/* 3. Status */}
-                          <td style={{ padding: "6px 12px", whiteSpace: "nowrap" }}>
-                            {statusNode}
-                          </td>
-
-                          {/* 4. Remove Action */}
-                          <td style={{ padding: "6px 10px", textAlign: "center" }}>
-                            {!isRunning && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRemoveFile(file.id);
-                                }}
-                                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "3px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
-                                title="Remove file"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
+                    } else if (isRunning) {
+                      statusNode = (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(234, 179, 8, 0.1)", color: "var(--accent-gold)", border: "1px solid rgba(234, 179, 8, 0.25)" }}>
+                          <Clock size={11} /> queued
+                        </span>
                       );
-                    })}
-                  </tbody>
-                </table>
+                    } else if (file.status === "error") {
+                      statusNode = (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(239, 68, 68, 0.12)", color: "var(--accent-danger)", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
+                          error
+                        </span>
+                      );
+                    } else {
+                      statusNode = (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "var(--bg-surface-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
+                          pending
+                        </span>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={file.id}
+                        onClick={() => setSelectedFileId(file.id)}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 120px 130px 36px",
+                          padding: "6px 12px",
+                          alignItems: "center",
+                          borderBottom: idx < queuedFiles.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none",
+                          backgroundColor: isSelected ? "rgba(78, 115, 223, 0.12)" : "transparent",
+                          cursor: "pointer",
+                          transition: "background-color 0.15s ease",
+                          fontSize: "12px",
+                        }}
+                      >
+                        {/* 1. File Name */}
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden", minWidth: 0 }}>
+                          <FileCode size={14} style={{ color: isSelected ? "var(--accent-primary)" : isFinished ? "var(--accent-success)" : "var(--accent-cyan)", flexShrink: 0 }} />
+                          <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: isSelected ? "var(--accent-primary)" : "var(--text-primary)", fontWeight: 600 }} title={file.path}>
+                            {file.name}
+                          </span>
+                        </div>
+
+                        {/* 2. Progress */}
+                        <div style={{ whiteSpace: "nowrap", fontWeight: 600, color: "var(--text-primary)", fontSize: "11.5px" }}>
+                          {fDone}/{file.totalLines}
+                        </div>
+
+                        {/* 3. Status */}
+                        <div style={{ whiteSpace: "nowrap" }}>
+                          {statusNode}
+                        </div>
+
+                        {/* 4. Action */}
+                        <div style={{ textAlign: "center" }}>
+                          {!isRunning && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveFile(file.id);
+                              }}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "2px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                              title="Remove file"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -1037,26 +1056,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               </div>
             </div>
 
-            {/* Unified Database Format Note */}
-            <div
-              style={{
-                backgroundColor: "rgba(56, 189, 248, 0.06)",
-                border: "1px solid rgba(56, 189, 248, 0.2)",
-                borderRadius: "var(--radius-sm)",
-                padding: "8px 12px",
-                fontSize: "11px",
-                color: "var(--text-secondary)",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-              }}
-            >
-              <FileCode size={14} color="var(--accent-cyan)" style={{ flexShrink: 0 }} />
-              <span>
-                <strong>Unified .jsonl Script Database:</strong> All translations are stored in standardized JSON Lines format, ready for instant offline script lookup by Textractor & Live Translation.
-              </span>
-            </div>
-
             {/* Automation Toggles */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px", marginTop: "4px" }}>
               <div
@@ -1194,14 +1193,13 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                     className="input-field"
                     value={activeFile?.id || ""}
                     onChange={(e) => setSelectedFileId(e.target.value)}
-                    style={{ fontSize: "12px", padding: "4px 8px", maxWidth: "260px", fontWeight: 600 }}
+                    style={{ fontSize: "12px", padding: "5px 28px 5px 10px", minWidth: "180px", maxWidth: "340px", fontWeight: 600 }}
                   >
                     {queuedFiles.map((f) => {
-                      const fDone = f.items.filter((it) => isGenuinelyTranslated(it)).length;
                       const fExp = f.items.filter((it) => isExplicitTagged(it)).length;
                       return (
                         <option key={f.id} value={f.id}>
-                          {f.name} ({fDone}/{f.totalLines} lines{fExp > 0 ? `, ${fExp} explicit` : ""}) {f.status === "completed" ? (fExp > 0 ? "⚠️" : "✓") : ""}
+                          {f.name} {f.status === "completed" ? (fExp > 0 ? "⚠️ (Completed)" : "✓ (Completed)") : ""}
                         </option>
                       );
                     })}
@@ -1267,7 +1265,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 className="input-field"
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as any)}
-                style={{ fontSize: "11.5px", padding: "4px 8px" }}
+                style={{ fontSize: "11.5px", padding: "5px 28px 5px 10px", minWidth: "140px" }}
               >
                 <option value="all">All Lines</option>
                 <option value="completed">Translated Only</option>

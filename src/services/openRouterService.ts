@@ -253,9 +253,15 @@ You MUST ALWAYS respond with a valid, clean JSON object matching this schema:
 }
 
 ### CRITICAL PRESERVATION & TRANSLATION RULES (MANDATORY):
-1. **NEVER Skip Punctuation, Sound Effects, or Silence Lines**: If the input dialogue contains only ellipsis (e.g. 「......」, 「……」, "..."), exclamation marks, question marks, sound effects, or silence, NEVER skip or omit it—output the exact punctuation/silence as-is in "translated_message".
-2. **NEVER Skip Text Already in ${tgtName}**: If the speaker name or dialogue message is already in ${tgtName} (e.g. English loanwords, foreign character names, or phrases), DO NOT skip or omit it—preserve and output it as-is without dropping.
-3. **Strict JSON Only**: Do NOT include commentary, explanations, work logs, or markdown fences outside the JSON object.`;
+1. **1:1 Semantic Fidelity (No Summarization or Added Filler)**: Translate the exact dialogue and narrative content faithfully. Do NOT summarize descriptive text, and do NOT inject unprompted commentary, moral warnings, or fictional padding not present in the original line.
+2. **Proper Names & Transliteration**: Use standard Hepburn Romaji for Japanese character names and proper nouns unless defined otherwise in the Glossary. Never literally translate human names into English word meanings.
+3. **Dialogue Cleanliness & Quote Formatting**:
+   - Strip Japanese quote brackets (「...」, 『...』).
+   - Output clean dialogue directly into "translated_message" without wrapping the entire sentence in redundant outer quotes like ""..."" or \\"...\\".
+   - If dialogue contains quotes within speech, use inner curly quotes “...” or single quotes '...'.
+4. **Punctuation, Reactions & Silence Lines**: If the input dialogue contains only ellipsis (e.g. 「......」, 「……」, "..."), exclamation marks, shouts, sound effects, or silence (e.g. 「──!」, 「っ──!?」, 「フッ…」, 「ハァ…」), NEVER skip or omit it—output the corresponding natural punctuation or reaction as-is in "translated_message". NEVER output an empty string ("").
+5. **Preserve Text Already in ${tgtName}**: If text or names are already in ${tgtName} (e.g. foreign loanwords, phrases, or English terms), preserve and output them as-is without dropping or mangling.
+6. **Strict Pure JSON Only**: Output only valid, raw JSON starting directly with "{" and ending with "}". Do NOT include markdown code fences, conversational preamble, thinking tags, or explanations.`;
   } else {
     part4 = `\n\n### Batch Input & Output Schema Requirements:
 You will receive input dialogue lines in JSON format:
@@ -287,15 +293,17 @@ You MUST ALWAYS respond with a JSON object matching the "translations" schema co
 }
 
 ### CRITICAL BATCH RULES (MANDATORY):
-1. **Translate EVERY Single Line**: You MUST include EVERY input line ID in "translations" (from id: 1 to id: N). NEVER skip, merge, omit, or leave "translated_message" empty for any line ID!
-2. **Dialogue Format & Quote Marks**:
+1. **Translate EVERY Single Line**: You MUST include EVERY input line ID in "translations" (from id: 1 to id: N) in exact sequential order. NEVER skip, merge, reorder, or leave "translated_message" empty for any line ID!
+2. **1:1 Semantic Fidelity (No Summarization or Added Filler)**: Translate the exact dialogue and narrative content faithfully. Do NOT summarize descriptive text, and do NOT inject unprompted commentary, moral warnings, or fictional padding not present in the original line.
+3. **Proper Names & Transliteration**: Use standard Hepburn Romaji for Japanese character names and proper nouns unless defined otherwise in the Glossary. Never literally translate human names into English word meanings.
+4. **Dialogue Format & Quote Marks**:
    - Strip Japanese quote brackets (「...」, 『...』).
    - Write dialogue directly into "translated_message" without wrapping the whole value in outer quotation marks like ""..."" or \\"...\\".
-   - If dialogue contains quotes within speech, use curly quotes “...” or single quotes '...'.
-3. **Punctuation, Reactions & Silence Lines**: Even if a line consists only of ellipsis, groans, shouts, or reactions (e.g. 「......」, 「──!」, 「っ──!?」, 「うわあああ────!」), output the corresponding English punctuation/reaction in "translated_message" (e.g. "......", "──!", "Ghk──!?", "Uwaaaaah────!"). NEVER leave "translated_message" as an empty string ("")!
-4. **Speaker Formatting**: If the input has a speaker, translate the speaker name in "translated_speaker". If no speaker (narration), set "translated_speaker": null.
-5. **Adult & Explicit Content Handling**: If your safety guidelines restrict you from translating explicit adult/sexual lines, DO NOT abort or refuse the entire batch. Instead, preserve the line ID and output 'translated_message': '[EXPLICIT CONTENT]' while translating all other lines normally.
-6. **Strict Valid JSON Only**: Output only valid JSON without any reasoning, markdown code fences, or explanations.`;
+   - If dialogue contains quotes within speech, use inner curly quotes “...” or single quotes '...'.
+5. **Punctuation, Reactions & Silence Lines**: Even if a line consists only of ellipsis, groans, shouts, or reactions (e.g. 「......」, 「──!」, 「っ──!?」, 「うわあああ────!」, 「フッ…」), output the corresponding English punctuation/reaction in "translated_message" (e.g. "......", "──!", "Ghk──!?", "Uwaaaaah────!", "Heh..."). NEVER leave "translated_message" as an empty string ("")!
+6. **Speaker Formatting**: If the input has a speaker, translate the speaker name in "translated_speaker". If no speaker (narration), set "translated_speaker": null.
+7. **Adult & Explicit Content Handling**: If your safety guidelines restrict you from translating explicit adult/sexual lines, DO NOT abort or refuse the entire batch. Instead, preserve the line ID and output 'translated_message': '[EXPLICIT CONTENT]' while translating all other lines normally.
+8. **Strict Pure JSON Only**: Output only valid JSON without any reasoning, preamble, markdown code fences, or explanations.`;
   }
 
   return `${part1}${part2}${part3}${part4}`;

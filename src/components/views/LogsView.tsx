@@ -56,7 +56,7 @@ export const LogsView: React.FC = () => {
               className="select-field"
               value={filterLevel}
               onChange={(e) => setFilterLevel(e.target.value)}
-              style={{ fontSize: "12px", padding: "4px 8px" }}
+              style={{ fontSize: "12px", padding: "5px 28px 5px 10px", minWidth: "120px" }}
             >
               <option value="ALL">All Levels</option>
               <option value="INFO">INFO Only</option>

@@ -553,7 +553,8 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
                       onChange={(e) => TextractorService.setThreadRole(item.threadId, e.target.value as any)}
                       style={{
                         fontSize: "11.5px",
-                        padding: "3px 8px",
+                        padding: "4px 28px 4px 8px",
+                        minWidth: "190px",
                         borderRadius: "4px",
                         fontWeight: 600,
                         backgroundColor: "var(--bg-panel)",
@@ -678,32 +679,34 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
                 fontSize: "12.5px",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden" }}>
-                <Terminal size={14} color="var(--accent-primary)" />
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden", flex: 1, minWidth: 0 }}>
+                <Terminal size={14} color="var(--accent-primary)" style={{ flexShrink: 0 }} />
                 {inspectedThread ? (
                   <>
-                    <span style={{ fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--accent-primary)" }}>
+                    <span style={{ fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--accent-primary)", flexShrink: 0 }}>
                       #{inspectedThread.id}
                     </span>
-                    <span style={{ fontWeight: 600 }}>{inspectedThread.name}</span>
+                    <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {inspectedThread.name}
+                    </span>
                     {capturedThreads.some((c) => c.threadId === inspectedThread.id) ? (
-                      <span className="badge badge-success" style={{ fontSize: "10px", padding: "1px 5px" }}>
+                      <span className="badge badge-success" style={{ fontSize: "10px", padding: "1px 5px", flexShrink: 0 }}>
                         Active Captured
                       </span>
                     ) : (
-                      <span className="badge badge-neutral" style={{ fontSize: "10px", padding: "1px 5px" }}>
+                      <span className="badge badge-neutral" style={{ fontSize: "10px", padding: "1px 5px", flexShrink: 0 }}>
                         Standby ({inspectedThread.totalLines} lines)
                       </span>
                     )}
                   </>
                 ) : (
-                  <span style={{ color: "var(--text-muted)" }}>
+                  <span style={{ color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {allThreadsList.length === 0 ? "No threads discovered yet..." : "Select thread to inspect..."}
                   </span>
                 )}
               </div>
 
-              <ChevronDown size={14} color="var(--text-muted)" />
+              <ChevronDown size={14} color="var(--text-muted)" style={{ flexShrink: 0, marginLeft: "8px" }} />
             </div>
 
             {/* Dropdown Menu */}

@@ -177,7 +177,7 @@ export const ProviderSelectorMultiSelect: React.FC<ProviderSelectorMultiSelectPr
               }}
               title={selectedProviders.join(", ")}
             >
-              {selectedProviders.length} Selected ({selectedProviders.join(", ")})
+              {selectedProviders.length} Selected
             </span>
           )}
         </div>

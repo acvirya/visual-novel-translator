@@ -81,29 +81,28 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [showToast]
   );
 
-  const getIcon = (type: ToastType) => {
+  const getTypeTheme = (type: ToastType) => {
     switch (type) {
       case "success":
-        return <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />;
+        return {
+          icon: <CheckCircle2 size={16} color="var(--accent-success)" style={{ flexShrink: 0, marginTop: "1px" }} />,
+          accentBorder: "var(--accent-success)",
+        };
       case "error":
-        return <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />;
+        return {
+          icon: <AlertCircle size={16} color="var(--accent-danger)" style={{ flexShrink: 0, marginTop: "1px" }} />,
+          accentBorder: "var(--accent-danger)",
+        };
       case "warning":
-        return <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />;
+        return {
+          icon: <AlertTriangle size={16} color="var(--accent-gold)" style={{ flexShrink: 0, marginTop: "1px" }} />,
+          accentBorder: "var(--accent-gold)",
+        };
       default:
-        return <Info className="w-5 h-5 text-sky-400 shrink-0" />;
-    }
-  };
-
-  const getBorderColor = (type: ToastType) => {
-    switch (type) {
-      case "success":
-        return "border-emerald-500/40 bg-emerald-950/80 text-emerald-100";
-      case "error":
-        return "border-rose-500/40 bg-rose-950/80 text-rose-100";
-      case "warning":
-        return "border-amber-500/40 bg-amber-950/80 text-amber-100";
-      default:
-        return "border-sky-500/40 bg-sky-950/80 text-sky-100";
+        return {
+          icon: <Info size={16} color="var(--accent-cyan)" style={{ flexShrink: 0, marginTop: "1px" }} />,
+          accentBorder: "var(--accent-cyan)",
+        };
     }
   };
 
@@ -112,45 +111,86 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       {children}
       {/* Toast Container Floating Top-Right */}
       <div
-        className="toast-container fixed top-4 right-4 z-[9999] flex flex-col gap-2.5 max-w-md w-full pointer-events-none px-3"
-        style={{ position: "fixed", top: "16px", right: "16px", zIndex: 9999, display: "flex", flexDirection: "column", gap: "10px", maxWidth: "420px" }}
+        style={{
+          position: "fixed",
+          top: "16px",
+          right: "16px",
+          zIndex: 9999,
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          maxWidth: "380px",
+          width: "100%",
+          pointerEvents: "none",
+        }}
       >
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`pointer-events-auto flex items-start gap-3 p-3.5 rounded-xl border shadow-2xl backdrop-blur-md transition-all duration-300 animate-in fade-in slide-in-from-top-2 ${getBorderColor(
-              toast.type
-            )}`}
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: "12px",
-              padding: "12px 14px",
-              borderRadius: "12px",
-              backdropFilter: "blur(12px)",
-              boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4)",
-            }}
-          >
-            {getIcon(toast.type)}
-            <div className="flex-1 min-w-0" style={{ flex: 1, minWidth: 0 }}>
-              {toast.title && (
-                <div className="text-xs font-semibold uppercase tracking-wider mb-0.5 opacity-90" style={{ fontWeight: 600, fontSize: "12px", marginBottom: "2px" }}>
-                  {toast.title}
-                </div>
-              )}
-              <div className="text-xs leading-relaxed" style={{ fontSize: "13px", lineHeight: "1.4", wordBreak: "break-word" }}>
-                {toast.message}
-              </div>
-            </div>
-            <button
-              onClick={() => dismissToast(toast.id)}
-              className="text-white/60 hover:text-white p-1 rounded-md transition-colors"
-              style={{ background: "transparent", border: "none", cursor: "pointer", opacity: 0.7, padding: "2px" }}
+        {toasts.map((toast) => {
+          const theme = getTypeTheme(toast.type);
+          return (
+            <div
+              key={toast.id}
+              style={{
+                pointerEvents: "auto",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "10px",
+                padding: "10px 14px",
+                backgroundColor: "var(--bg-surface)",
+                border: "1px solid var(--border-subtle)",
+                borderLeft: `3.5px solid ${theme.accentBorder}`,
+                borderRadius: "var(--radius-md)",
+                boxShadow: "0 4px 14px rgba(0, 0, 0, 0.4)",
+                transition: "opacity 0.2s ease, transform 0.2s ease",
+              }}
             >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        ))}
+              {theme.icon}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {toast.title && (
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: "12.5px",
+                      color: "var(--text-primary)",
+                      marginBottom: "2px",
+                      letterSpacing: "0.2px",
+                    }}
+                  >
+                    {toast.title}
+                  </div>
+                )}
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: "var(--text-secondary)",
+                    lineHeight: "1.45",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {toast.message}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissToast(toast.id)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--text-muted)",
+                  padding: "2px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: "var(--radius-sm)",
+                  transition: "color 0.15s ease",
+                }}
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </ToastContext.Provider>
   );

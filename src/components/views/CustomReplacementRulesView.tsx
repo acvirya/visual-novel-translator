@@ -117,27 +117,6 @@ export const CustomReplacementRulesView: React.FC = () => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", paddingBottom: "24px" }}>
-      {/* Information Banner */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "12px",
-          padding: "14px 16px",
-          backgroundColor: "rgba(59, 130, 246, 0.08)",
-          border: "1px solid rgba(59, 130, 246, 0.25)",
-          borderRadius: "var(--radius-md)",
-        }}
-      >
-        <Sparkles size={18} color="var(--accent-primary)" style={{ flexShrink: 0, marginTop: "2px" }} />
-        <div style={{ fontSize: "12.5px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
-          <strong style={{ color: "var(--text-primary)" }}>Core Preprocessing is Always Active:</strong>{" "}
-          Furigana/Ruby annotation stripping, VN engine control tag cleaning, Unicode NFKC normalization, punctuation standardization, and whitespace trimming are automatically executed across all modules (Textractor, OCR, Batch Translate, and Manual).
-          <br />
-          Use this section if you need <strong>custom regex patterns</strong> or <strong>specific term replacements</strong> for unique visual novel engines.
-        </div>
-      </div>
-
       {/* Main Grid: Custom Rules on Left, Live Workbench on Right */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "16px", alignItems: "flex-start" }}>
         
@@ -339,7 +318,7 @@ export const CustomReplacementRulesView: React.FC = () => {
             <select
               value={testSource}
               onChange={(e) => setTestSource(e.target.value as any)}
-              style={{ fontSize: "11.5px", padding: "4px 8px", borderRadius: "4px" }}
+              style={{ fontSize: "11.5px", padding: "5px 28px 5px 10px", minWidth: "150px", borderRadius: "4px" }}
             >
               <option value="all">🌐 All Sources</option>
               <option value="textractor">🎮 Textractor Hook</option>

@@ -513,7 +513,7 @@ export const GlossaryManagerView: React.FC = () => {
             className="input-field"
             value={newCategory}
             onChange={(e) => setNewCategory(e.target.value)}
-            style={{ fontSize: "12px", padding: "6px 8px" }}
+            style={{ fontSize: "12px", padding: "6px 28px 6px 10px", minWidth: "140px" }}
           >
             {categories.map((c) => (
               <option key={c.id} value={c.name}>
@@ -635,7 +635,7 @@ export const GlossaryManagerView: React.FC = () => {
                               className="input-field"
                               value={editCategory}
                               onChange={(e) => setEditCategory(e.target.value)}
-                              style={{ width: "100%", fontSize: "11.5px", padding: "4px 6px" }}
+                              style={{ width: "100%", fontSize: "11.5px", padding: "4px 28px 4px 8px", minWidth: "130px" }}
                             >
                               {categories.map((c) => (
                                 <option key={c.id} value={c.name}>

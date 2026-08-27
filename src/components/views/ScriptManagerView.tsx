@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   scriptManagerService,
   ScriptEntry,
@@ -60,10 +60,24 @@ export const ScriptManagerView: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  const isFirstPageMount = useRef(true);
+
   // Reset page when searching
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery]);
+
+  // Auto-scroll to top when page changes
+  useEffect(() => {
+    if (isFirstPageMount.current) {
+      isFirstPageMount.current = false;
+      return;
+    }
+    const mainContainer = document.querySelector(".view-container");
+    if (mainContainer) {
+      mainContainer.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [currentPage]);
 
   const handleCreateNewScript = async () => {
     await scriptManagerService.createNewScriptNative("new_script.jsonl");
@@ -874,7 +888,7 @@ export const ScriptManagerView: React.FC = () => {
                     setCurrentPage(1);
                   }}
                   className="input-field"
-                  style={{ padding: "2px 6px", fontSize: "11.5px", height: "26px", cursor: "pointer" }}
+                  style={{ padding: "2px 26px 2px 8px", fontSize: "11.5px", height: "26px", minWidth: "75px", cursor: "pointer" }}
                 >
                   <option value={50}>50</option>
                   <option value={100}>100</option>
