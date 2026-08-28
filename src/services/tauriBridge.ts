@@ -87,15 +87,25 @@ export const TauriBridge = {
       apiKey,
     }),
 
-  openrouterChatCompletion: (
-    apiKey: string,
-    payloadJson: string,
-    timeoutSecs?: number
-  ): Promise<OpenRouterCompletionResponse> =>
+  openrouterChatCompletion: (params: {
+    apiKey: string;
+    modelId: string;
+    messagesJson: string;
+    temperature: number;
+    maxTokens?: number;
+    timeoutSeconds?: number;
+    providers?: string[];
+    reasoning?: any;
+  }): Promise<OpenRouterCompletionResponse> =>
     invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
-      apiKey,
-      payloadJson,
-      timeoutSecs: timeoutSecs || 60,
+      apiKey: params.apiKey,
+      modelId: params.modelId,
+      messagesJson: params.messagesJson,
+      temperature: params.temperature,
+      maxTokens: params.maxTokens,
+      timeoutSeconds: params.timeoutSeconds,
+      providers: params.providers,
+      reasoning: params.reasoning,
     }),
 
   // File Dialogs & Disk I/O

@@ -1,12 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { translateWithFreeMt } from "./freeMtService";
-import { buildCompleteSystemPrompt, ChatMessage, calculateUsageCost, OpenRouterCompletionResponse, getSelectedModelProviders } from "./openRouterService";
+import {
+  buildCompleteSystemPrompt,
+  ChatMessage,
+  calculateUsageCost,
+  OpenRouterCompletionResponse,
+  getSelectedModelProviders,
+  buildReasoningPayload,
+} from "./openRouterService";
 import { cleanSpeakerName, executePreprocessingPipeline } from "../utils/textPreprocessor";
 import { parseLlmBatchResponse } from "../utils/batchJsonParser";
 import { parseScriptContentAsBatchItems } from "../utils/scriptFileParser";
 import { logger } from "./loggerService";
 import { useBatchStore } from "../stores/useBatchStore";
 import { settingsManager } from "./settingsManager";
+import { ReasoningEffort } from "../types";
 
 export interface BatchItem {
   id: number;
@@ -51,6 +59,7 @@ export interface BatchSettings {
   translateExplicitOnly?: boolean; // Only re-translate lines previously flagged as explicit/censored
   overrideRawWithPreprocessed?: boolean; // Overwrite raw Japanese text with cleaned preprocessed text in output
   selectedProviders?: string[]; // Custom provider routing list (e.g. ["Z.AI", "Venice"])
+  reasoningEffort?: ReasoningEffort; // Reasoning effort override for batch
   outputDir: string;
   fileSuffix: string;
 }
@@ -1097,6 +1106,7 @@ class BatchTranslateService {
     const maxTokens = Math.min(16384, Math.max(800, items.length * 350));
 
     const activeProviders = settings.selectedProviders ?? getSelectedModelProviders(settings.modelId);
+    const reasoningPayload = buildReasoningPayload({ effort: settings.reasoningEffort });
 
     try {
       const invokePromise = invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
@@ -1107,6 +1117,7 @@ class BatchTranslateService {
         maxTokens,
         timeoutSeconds,
         providers: activeProviders.length > 0 ? activeProviders : undefined,
+        reasoning: reasoningPayload,
       });
 
       const abortPromise = new Promise<never>((_, reject) => {

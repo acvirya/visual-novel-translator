@@ -4,6 +4,7 @@ import {
   OcrStabilityConfig,
   PreprocessingStep,
   GlossaryEntry,
+  ReasoningEffort,
 } from "../types";
 import { DEFAULT_PREPROCESSING_PIPELINE } from "../utils/textPreprocessor";
 import { OVERLAY_PRESETS, TemplatePreset } from "../utils/overlayTemplateEngine";
@@ -30,6 +31,9 @@ export interface TranslationProviderConfig {
   temperature?: number;
   systemPrompt?: string;
   isEnabled: boolean;
+  reasoningEffort?: ReasoningEffort;
+  reasoningMaxTokens?: number;
+  excludeReasoning?: boolean;
 }
 
 export interface TranslationSettings {
@@ -41,6 +45,9 @@ export interface TranslationSettings {
   maxContextLines: number;
   retainContextLines: number;
   maxCharsPerLine: number;
+  reasoningEffort: ReasoningEffort;
+  reasoningMaxTokens: number;
+  excludeReasoning: boolean;
   providers: Record<string, TranslationProviderConfig>;
 }
 
@@ -125,6 +132,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     maxContextLines: 10,
     retainContextLines: 3,
     maxCharsPerLine: 250,
+    reasoningEffort: "default",
+    reasoningMaxTokens: 0,
+    excludeReasoning: true,
     providers: {
       openai: {
         id: "openai",
@@ -278,6 +288,9 @@ class SettingsManager {
   }
 
   private loadFromStorage(): AppSettings {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") {
+      return JSON.parse(JSON.stringify(DEFAULT_APP_SETTINGS));
+    }
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       let loaded: AppSettings;
@@ -301,6 +314,7 @@ class SettingsManager {
   }
 
   private saveToStorage() {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
     try {
       const cacheToPersist = JSON.parse(JSON.stringify(this.cache));
       if (cacheToPersist.overlay?.config) {
@@ -447,6 +461,29 @@ class SettingsManager {
 
   public updateTranslation(patch: Partial<TranslationSettings>) {
     this.cache.translation = { ...this.cache.translation, ...patch };
+    this.saveToStorage();
+  }
+
+  public getReasoningEffort(): ReasoningEffort {
+    return this.cache.translation.reasoningEffort || "default";
+  }
+
+  public getReasoningMaxTokens(): number {
+    return this.cache.translation.reasoningMaxTokens || 0;
+  }
+
+  public getExcludeReasoning(): boolean {
+    return this.cache.translation.excludeReasoning !== false;
+  }
+
+  public updateReasoningSettings(patch: {
+    effort?: ReasoningEffort;
+    maxTokens?: number;
+    exclude?: boolean;
+  }) {
+    if (patch.effort !== undefined) this.cache.translation.reasoningEffort = patch.effort;
+    if (patch.maxTokens !== undefined) this.cache.translation.reasoningMaxTokens = patch.maxTokens;
+    if (patch.exclude !== undefined) this.cache.translation.excludeReasoning = patch.exclude;
     this.saveToStorage();
   }
 

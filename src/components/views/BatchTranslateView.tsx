@@ -20,6 +20,7 @@ import {
   ChevronRight,
   AlertTriangle,
   Coins,
+  Brain,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import { ProviderSelectorMultiSelect } from "../common/ProviderSelectorMultiSelect";
@@ -30,6 +31,8 @@ import {
   fetchModelEndpoints,
   getModelPricingSummary,
   OpenRouterEndpoint,
+  getModelReasoningCapabilities,
+  formatReasoningEffortLabel,
 } from "../../services/openRouterService";
 import {
   batchTranslateService,
@@ -40,6 +43,7 @@ import {
   isProcessed,
 } from "../../services/batchTranslateService";
 import { useBatchStore } from "../../stores/useBatchStore";
+import { ReasoningEffort } from "../../types";
 
 export interface BatchTranslateViewProps {
   onOpenPreprocessingSettings?: () => void;
@@ -95,6 +99,10 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     return getModelPricingSummary(selectedEngine, selectedProviders, undefined, modelEndpoints);
   }, [selectedEngine, selectedProviders, modelEndpoints]);
 
+  const reasoningCapabilities = useMemo(() => {
+    return getModelReasoningCapabilities(selectedEngine);
+  }, [selectedEngine]);
+
   const [linesPerBatch, setLinesPerBatch] = useState<number>(() => {
     const val = parseInt(localStorage.getItem("vn_batch_lines_per_batch") || "10", 10);
     return isNaN(val) || val < 1 ? 10 : val;
@@ -145,6 +153,9 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   const [translateExplicitOnly, setTranslateExplicitOnly] = useState<boolean>(() => {
     return localStorage.getItem("vn_batch_translate_explicit_only") === "true";
   });
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(() => {
+    return (localStorage.getItem("vn_batch_reasoning_effort") as any) || "default";
+  });
   const [outputDir, setOutputDir] = useState<string>(() => {
     return localStorage.getItem("vn_batch_output_dir") || "";
   });
@@ -163,8 +174,9 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     localStorage.setItem("vn_batch_max_backoff_seconds", String(maxBackoffSeconds));
     localStorage.setItem("vn_batch_auto_continue", String(autoContinue));
     localStorage.setItem("vn_batch_translate_explicit_only", String(translateExplicitOnly));
+    localStorage.setItem("vn_batch_reasoning_effort", reasoningEffort);
     localStorage.setItem("vn_batch_output_dir", outputDir);
-  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, maxBackoffSeconds, autoContinue, translateExplicitOnly, outputDir]);
+  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, maxBackoffSeconds, autoContinue, translateExplicitOnly, reasoningEffort, outputDir]);
 
   // Auto-select first file if none selected
   useEffect(() => {
@@ -356,6 +368,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       translateExplicitOnly,
       overrideRawWithPreprocessed: true,
       selectedProviders,
+      reasoningEffort,
       outputDir,
       fileSuffix,
     };
@@ -481,9 +494,19 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             </span>
             <ModelSelectorCombobox
               selectedModelId={selectedEngine}
-              onSelectModel={(id) => setSelectedEngine(id)}
+              selectedReasoningEffort={reasoningEffort}
+              onSelectModel={(id, eff) => {
+                setSelectedEngine(id);
+                const e = eff || "default";
+                setReasoningEffort(e);
+                localStorage.setItem("vn_batch_reasoning_effort", e);
+              }}
+              onSelectReasoningEffort={(eff) => {
+                setReasoningEffort(eff);
+                localStorage.setItem("vn_batch_reasoning_effort", eff);
+              }}
               disabled={isRunning}
-              width="220px"
+              width="240px"
               compact={true}
             />
             {!selectedEngine.startsWith("mt:") && (
@@ -1006,6 +1029,57 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 />
                 <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
                   Maximum wait limit during rate-limits & retries (e.g. 5s for fast bruteforce, 30s default).
+                </span>
+              </div>
+
+              {/* Reasoning / Thinking Effort */}
+              <div>
+                <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  <Brain size={12} style={{ display: "inline", verticalAlign: "middle", marginRight: "4px", color: "var(--accent-purple, #a855f7)" }} />
+                  Reasoning / Thinking Effort:
+                </label>
+                <select
+                  className="input-field"
+                  value={
+                    reasoningCapabilities.mode === "toggle_only"
+                      ? (reasoningEffort === "none" ? "none" : "default")
+                      : (reasoningCapabilities.supportedEfforts.includes(reasoningEffort) || reasoningEffort === "none" || reasoningEffort === "default" ? reasoningEffort : "default")
+                  }
+                  disabled={isRunning || !reasoningCapabilities.isSupported}
+                  onChange={(e) => {
+                    const val = e.target.value as ReasoningEffort;
+                    setReasoningEffort(val);
+                    localStorage.setItem("vn_batch_reasoning_effort", val);
+                  }}
+                  style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600, backgroundColor: "var(--bg-surface-elevated)" }}
+                >
+                  {!reasoningCapabilities.isSupported ? (
+                    <option value="default">Not Supported by Model</option>
+                  ) : reasoningCapabilities.mode === "efforts_list" ? (
+                    <>
+                      <option value="default">
+                        Default{reasoningCapabilities.defaultEffort ? ` (${reasoningCapabilities.defaultEffort})` : " (Model Standard)"}
+                      </option>
+                      {!reasoningCapabilities.isMandatory && <option value="none">Disabled (Off)</option>}
+                      {reasoningCapabilities.supportedEfforts.map((eff) => (
+                        <option key={eff} value={eff}>
+                          {formatReasoningEffortLabel(eff)}
+                        </option>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      <option value="default">Enabled (Active)</option>
+                      {!reasoningCapabilities.isMandatory && <option value="none">Disabled (Off)</option>}
+                    </>
+                  )}
+                </select>
+                <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
+                  {!reasoningCapabilities.isSupported
+                    ? "Selected model does not accept reasoning / thinking tokens."
+                    : reasoningCapabilities.mode === "efforts_list"
+                    ? `Supported levels: ${reasoningCapabilities.supportedEfforts.join(", ")}.`
+                    : "Binary reasoning toggle supported by this model."}
                 </span>
               </div>
 

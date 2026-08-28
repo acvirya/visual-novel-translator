@@ -256,3 +256,21 @@ export interface OpenRouterCompletionResponse {
   model: string;
 }
 
+export type ReasoningEffort =
+  | "default"
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "custom";
+
+export interface ReasoningConfig {
+  effort: ReasoningEffort;
+  maxTokens?: number;
+  exclude: boolean;
+}
+
+

@@ -50,6 +50,7 @@ export const useBatchStore = create<BatchState>((set) => {
   const savedOverrideRaw = localStorage.getItem("vn_batch_override_raw") !== "false";
   const savedOutputDir = localStorage.getItem("vn_batch_output_dir") || "";
   const savedTemp = Number(localStorage.getItem("vn_batch_temperature") ?? "0.3");
+  const savedReasoningEffort = (localStorage.getItem("vn_batch_reasoning_effort") as any) || "default";
 
   const initialSettings: BatchSettings = {
     linesPerBatch: isNaN(savedLines) || savedLines < 1 ? 10 : savedLines,
@@ -64,6 +65,7 @@ export const useBatchStore = create<BatchState>((set) => {
     autoContinueUntilCompleted: savedAutoContinue,
     translateExplicitOnly: savedTranslateExplicitOnly,
     overrideRawWithPreprocessed: savedOverrideRaw,
+    reasoningEffort: savedReasoningEffort,
     outputDir: savedOutputDir,
     fileSuffix: "_translated",
   };
@@ -114,7 +116,9 @@ export const useBatchStore = create<BatchState>((set) => {
         if (partial.maxBackoffSeconds !== undefined) localStorage.setItem("vn_batch_max_backoff_seconds", String(partial.maxBackoffSeconds));
         if (partial.autoContinueUntilCompleted !== undefined) localStorage.setItem("vn_batch_auto_continue", String(partial.autoContinueUntilCompleted));
         if (partial.overrideRawWithPreprocessed !== undefined) localStorage.setItem("vn_batch_override_raw", String(partial.overrideRawWithPreprocessed));
+        if (partial.translateExplicitOnly !== undefined) localStorage.setItem("vn_batch_translate_explicit_only", String(partial.translateExplicitOnly));
         if (partial.outputDir !== undefined) localStorage.setItem("vn_batch_output_dir", partial.outputDir);
+        if (partial.reasoningEffort !== undefined) localStorage.setItem("vn_batch_reasoning_effort", String(partial.reasoningEffort));
         return { settings: next };
       }),
     addSessionTokens: (promptTokens, completionTokens, cachedTokens, cost) =>

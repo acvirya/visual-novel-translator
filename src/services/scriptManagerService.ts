@@ -168,6 +168,7 @@ class ScriptManagerService {
   }
 
   public async loadPersistedState() {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
     try {
       const savedPath = localStorage.getItem("vn_active_script_filepath");
       const savedFile = localStorage.getItem("vn_active_script_filename");
@@ -209,6 +210,7 @@ class ScriptManagerService {
   }
 
   private saveState(skipRebuild = false) {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
     try {
       if (this.activeFileName) {
         if (this.activeFilePath) {

@@ -1,22 +1,33 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   OpenRouterModel,
   fetchOpenRouterModels,
   formatModelPricing,
+  getModelReasoningCapabilities,
+  formatReasoningEffortLabel,
+  getModelPreferredReasoningEffort,
+  setModelPreferredReasoningEffort,
+  ResolvedModelReasoning,
 } from "../../services/openRouterService";
 import {
   Star,
   Globe,
   Zap,
   ChevronDown,
+  ChevronRight,
   ArrowUp,
   ArrowDown,
   X,
+  Brain,
+  Check,
 } from "lucide-react";
+import { ReasoningEffort } from "../../types";
 
 export interface ModelSelectorComboboxProps {
   selectedModelId: string;
-  onSelectModel: (modelId: string) => void;
+  onSelectModel: (modelId: string, reasoningEffort?: ReasoningEffort) => void;
+  selectedReasoningEffort?: ReasoningEffort;
+  onSelectReasoningEffort?: (effort: ReasoningEffort) => void;
   width?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -98,7 +109,7 @@ const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
     id: "google/gemini-2.5-flash",
     name: "Google: Gemini 2.5 Flash",
     context_length: 1048576,
-    pricing: { prompt: "0.00000015", completion: "0.0000006" },
+    pricing: { prompt: "0.000000075", completion: "0.0000003" },
   },
   {
     id: "openai/gpt-4o-mini",
@@ -107,8 +118,32 @@ const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
     pricing: { prompt: "0.00000015", completion: "0.0000006" },
   },
   {
-    id: "qwen/qwen-2.5-72b-instruct",
-    name: "Qwen: Qwen 2.5 72B Instruct",
+    id: "deepseek/deepseek-r1",
+    name: "DeepSeek: DeepSeek R1 (Reasoning)",
+    context_length: 64000,
+    pricing: { prompt: "0.00000055", completion: "0.0000219" },
+  },
+  {
+    id: "openai/o3-mini",
+    name: "OpenAI: o3-mini (Reasoning)",
+    context_length: 200000,
+    pricing: { prompt: "0.0000011", completion: "0.0000044" },
+  },
+  {
+    id: "anthropic/claude-3.7-sonnet",
+    name: "Anthropic: Claude 3.7 Sonnet (Hybrid Thinking)",
+    context_length: 200000,
+    pricing: { prompt: "0.000003", completion: "0.000015" },
+  },
+  {
+    id: "google/gemini-2.0-flash-thinking-exp:free",
+    name: "Google: Gemini 2.0 Flash Thinking Exp (Free)",
+    context_length: 32000,
+    pricing: { prompt: "0", completion: "0" },
+  },
+  {
+    id: "meta-llama/llama-3.3-70b-instruct",
+    name: "Meta: Llama 3.3 70B Instruct",
     context_length: 131072,
     pricing: { prompt: "0.00000035", completion: "0.0000004" },
   },
@@ -117,6 +152,8 @@ const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
 export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
   selectedModelId,
   onSelectModel,
+  selectedReasoningEffort,
+  onSelectReasoningEffort,
   width = "100%",
   compact = false,
   disabled = false,
@@ -136,7 +173,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-fetch models on mount (with caching)
   useEffect(() => {
     async function load() {
       const list = await fetchOpenRouterModels();
@@ -147,7 +183,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     load();
   }, []);
 
-  // Close dropdown on outside click & reset search filter
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -159,7 +194,15 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, []);
 
-  // Star / Unstar Model
+  const [hoveredSubmenu, setHoveredSubmenu] = useState<{
+    modelId: string;
+    modelName: string;
+    capabilities: ResolvedModelReasoning;
+    x: number;
+    y: number;
+  } | null>(null);
+  const submenuLeaveTimeoutRef = useRef<any>(null);
+
   const handleToggleStar = (modelId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     let updated: string[];
@@ -172,18 +215,97 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     localStorage.setItem("vn_starred_models", JSON.stringify(updated));
   };
 
-  const handleSelect = (modelId: string) => {
-    onSelectModel(modelId);
+  const handleSelect = (modelId: string, effort?: ReasoningEffort) => {
+    let resolvedEffort: ReasoningEffort;
+    if (effort) {
+      setModelPreferredReasoningEffort(modelId, effort);
+      resolvedEffort = effort;
+    } else {
+      const preferred = getModelPreferredReasoningEffort(modelId);
+      resolvedEffort = preferred || "default";
+    }
+
+    onSelectModel(modelId, resolvedEffort);
+    if (onSelectReasoningEffort) {
+      onSelectReasoningEffort(resolvedEffort);
+    }
     setSearchFilter("");
     setIsOpen(false);
+    setHoveredSubmenu(null);
   };
 
-  // Find active model details
+  const handleRowMouseEnter = (e: React.MouseEvent<HTMLDivElement>, m: OpenRouterModel) => {
+    if (submenuLeaveTimeoutRef.current) {
+      clearTimeout(submenuLeaveTimeoutRef.current);
+      submenuLeaveTimeoutRef.current = null;
+    }
+    const capabilities = getModelReasoningCapabilities(m, models);
+    if (capabilities.isSupported) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const submenuWidth = 200;
+      let x = rect.right + 6;
+      if (x + submenuWidth > window.innerWidth) {
+        x = rect.left - submenuWidth - 6;
+      }
+      const parsed = splitModelProviderAndName(m);
+      setHoveredSubmenu({
+        modelId: m.id,
+        modelName: parsed.modelName,
+        capabilities,
+        x: Math.max(10, x),
+        y: rect.top,
+      });
+    } else {
+      setHoveredSubmenu(null);
+    }
+  };
+
+  const handleRowMouseLeave = () => {
+    submenuLeaveTimeoutRef.current = setTimeout(() => {
+      setHoveredSubmenu(null);
+    }, 200);
+  };
+
+  const handleSubmenuMouseEnter = () => {
+    if (submenuLeaveTimeoutRef.current) {
+      clearTimeout(submenuLeaveTimeoutRef.current);
+      submenuLeaveTimeoutRef.current = null;
+    }
+  };
+
+  const handleSubmenuMouseLeave = () => {
+    submenuLeaveTimeoutRef.current = setTimeout(() => {
+      setHoveredSubmenu(null);
+    }, 150);
+  };
+
   const currentModel = models.find((m) => m.id === selectedModelId);
   const currentPricing = currentModel ? formatModelPricing(currentModel.pricing) : null;
   const isSelectedStarred = starredIds.includes(selectedModelId);
 
-  // Display label on the input
+  const activeCapabilities = useMemo(
+    () => getModelReasoningCapabilities(selectedModelId, models),
+    [selectedModelId, models]
+  );
+
+  const getActiveEffortDisplayLabel = (): string | null => {
+    if (!activeCapabilities.isSupported) return null;
+    const effectiveEffort = selectedReasoningEffort || getModelPreferredReasoningEffort(selectedModelId) || "default";
+    if (effectiveEffort === "none") return "Off";
+    if (effectiveEffort && effectiveEffort !== "default" && effectiveEffort !== "custom") {
+      return formatReasoningEffortLabel(effectiveEffort);
+    }
+    if (activeCapabilities.defaultEffort) {
+      return formatReasoningEffortLabel(activeCapabilities.defaultEffort);
+    }
+    if (activeCapabilities.mode === "toggle_only") {
+      return "On";
+    }
+    return "Default";
+  };
+
+  const activeEffortLabel = getActiveEffortDisplayLabel();
+
   const getDisplayLabel = () => {
     if (isOpen) {
       return searchFilter;
@@ -197,8 +319,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     return selectedModelId || "Select a model...";
   };
 
-  // Filtered lists:
-  // If searchFilter is empty, show all starred & all catalog models!
   const q = searchFilter.toLowerCase().trim();
 
   const filteredStarred = models.filter((m) => {
@@ -214,7 +334,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
   });
 
   const filteredCatalog = models.filter((m) => {
-    if (starredIds.includes(m.id)) return false; // starred are shown in their own section
+    if (starredIds.includes(m.id)) return false;
     if (!q) return true;
     const parsed = splitModelProviderAndName(m);
     return (
@@ -235,7 +355,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
         pointerEvents: disabled ? "none" : "auto",
       }}
     >
-      {/* Combobox Trigger & Input */}
       <div
         onClick={() => {
           if (!isOpen) {
@@ -257,7 +376,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           transition: "border-color 0.15s ease, box-shadow 0.15s ease",
         }}
       >
-        {/* Star status toggle on active model */}
         {selectedModelId && !selectedModelId.startsWith("mt:") && (
           <button
             type="button"
@@ -281,7 +399,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           <Globe size={13} style={{ color: "var(--accent-success)", flexShrink: 0 }} />
         )}
 
-        {/* Search / Manual Model ID Input */}
         <input
           ref={inputRef}
           type="text"
@@ -310,7 +427,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           }}
         />
 
-        {/* Clear Search button when typing */}
         {isOpen && searchFilter && (
           <button
             type="button"
@@ -333,7 +449,28 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           </button>
         )}
 
-        {/* Dual Pricing Badges on the right of input if space allows */}
+        {activeEffortLabel && !isOpen && (
+          <span
+            style={{
+              fontSize: "10.5px",
+              color: "var(--accent-purple, #a855f7)",
+              backgroundColor: "rgba(168, 85, 247, 0.15)",
+              border: "1px solid rgba(168, 85, 247, 0.3)",
+              padding: "1px 5px",
+              borderRadius: "3px",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: "3px",
+              flexShrink: 0,
+            }}
+            title={`Active reasoning effort: ${activeEffortLabel}`}
+          >
+            <Brain size={10} />
+            <span>{activeEffortLabel}</span>
+          </span>
+        )}
+
         {currentPricing && !compact && !isOpen && (
           <div style={{ display: "flex", gap: "5px", fontSize: "10.5px", flexShrink: 0 }}>
             <span style={{ color: "var(--accent-cyan)", display: "flex", alignItems: "center", gap: "2px" }} title="Prompt Input Price">
@@ -345,7 +482,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           </div>
         )}
 
-        {/* Dropdown Chevron Button */}
         <button
           type="button"
           onClick={(e) => {
@@ -370,7 +506,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
         </button>
       </div>
 
-      {/* Hierarchical Dropdown Menu */}
       {isOpen && (
         <div
           style={{
@@ -390,7 +525,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
             boxShadow: "0 12px 36px rgba(0,0,0,0.85)",
           }}
         >
-          {/* If user typed a custom model ID that has no matches, allow selecting it directly */}
           {q && filteredStarred.length === 0 && filteredCatalog.length === 0 && (
             <div
               onClick={() => handleSelect(searchFilter.trim())}
@@ -407,7 +541,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
             </div>
           )}
 
-          {/* 1. ⭐ TIER 1: STARRED FAVORITES */}
           {filteredStarred.length > 0 && (
             <div>
               <div
@@ -432,6 +565,12 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                 const isSelected = m.id === selectedModelId;
                 const pricing = formatModelPricing(m.pricing);
                 const parsed = splitModelProviderAndName(m);
+                const capabilities = getModelReasoningCapabilities(m, models);
+                const preferredEffort = getModelPreferredReasoningEffort(m.id);
+                const effortPreviewLabel = preferredEffort && preferredEffort !== "default"
+                  ? formatReasoningEffortLabel(preferredEffort)
+                  : (capabilities.defaultEffort ? formatReasoningEffortLabel(capabilities.defaultEffort) : (capabilities.mode === "toggle_only" ? "On" : "Effort"));
+
                 return (
                   <div
                     key={`starred_${m.id}`}
@@ -444,18 +583,44 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
+                      position: "relative",
                     }}
                     onMouseEnter={(e) => {
                       if (!isSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
+                      handleRowMouseEnter(e, m);
                     }}
                     onMouseLeave={(e) => {
                       if (!isSelected) e.currentTarget.style.backgroundColor = "transparent";
+                      handleRowMouseLeave();
                     }}
                   >
                     <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden" }}>
-                      <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                        {parsed.modelName}
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                        <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
+                          {parsed.modelName}
+                        </span>
+                        {capabilities.isSupported && (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "2px",
+                              fontSize: "9px",
+                              fontWeight: 700,
+                              color: "var(--accent-purple, #a855f7)",
+                              backgroundColor: "rgba(168, 85, 247, 0.12)",
+                              border: "1px solid rgba(168, 85, 247, 0.25)",
+                              padding: "1px 5px",
+                              borderRadius: "3px",
+                            }}
+                            title={`Will select: ${effortPreviewLabel}. Hover to change.`}
+                          >
+                            <Brain size={9} />
+                            <span>{effortPreviewLabel}</span>
+                            <ChevronRight size={9} />
+                          </span>
+                        )}
+                      </div>
                       <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
                         {parsed.provider}
                       </span>
@@ -485,7 +650,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
             </div>
           )}
 
-          {/* 2. 🌐 TIER 2: FREE ONLINE MACHINE TRANSLATION */}
           {(!q || "google translate free".includes(q) || "deepl free".includes(q)) && (
             <div>
               <div
@@ -520,6 +684,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                   }}
                   onMouseEnter={(e) => {
                     if (selectedModelId !== "mt:google-translate") e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
+                    setHoveredSubmenu(null);
                   }}
                   onMouseLeave={(e) => {
                     if (selectedModelId !== "mt:google-translate") e.currentTarget.style.backgroundColor = "transparent";
@@ -551,6 +716,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                   }}
                   onMouseEnter={(e) => {
                     if (selectedModelId !== "mt:deepl-free") e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
+                    setHoveredSubmenu(null);
                   }}
                   onMouseLeave={(e) => {
                     if (selectedModelId !== "mt:deepl-free") e.currentTarget.style.backgroundColor = "transparent";
@@ -570,7 +736,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
             </div>
           )}
 
-          {/* 3. ⚡ TIER 3: OPENROUTER CATALOG */}
           {filteredCatalog.length > 0 && (
             <div>
               <div
@@ -596,6 +761,12 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                 const isSelected = m.id === selectedModelId;
                 const pricing = formatModelPricing(m.pricing);
                 const parsed = splitModelProviderAndName(m);
+                const capabilities = getModelReasoningCapabilities(m, models);
+                const preferredEffort = getModelPreferredReasoningEffort(m.id);
+                const effortPreviewLabel = preferredEffort && preferredEffort !== "default"
+                  ? formatReasoningEffortLabel(preferredEffort)
+                  : (capabilities.defaultEffort ? formatReasoningEffortLabel(capabilities.defaultEffort) : (capabilities.mode === "toggle_only" ? "On" : "Effort"));
+
                 return (
                   <div
                     key={`catalog_${m.id}`}
@@ -608,18 +779,44 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
+                      position: "relative",
                     }}
                     onMouseEnter={(e) => {
                       if (!isSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
+                      handleRowMouseEnter(e, m);
                     }}
                     onMouseLeave={(e) => {
                       if (!isSelected) e.currentTarget.style.backgroundColor = "transparent";
+                      handleRowMouseLeave();
                     }}
                   >
                     <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden" }}>
-                      <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                        {parsed.modelName}
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                        <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
+                          {parsed.modelName}
+                        </span>
+                        {capabilities.isSupported && (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "2px",
+                              fontSize: "9px",
+                              fontWeight: 700,
+                              color: "var(--accent-purple, #a855f7)",
+                              backgroundColor: "rgba(168, 85, 247, 0.12)",
+                              border: "1px solid rgba(168, 85, 247, 0.25)",
+                              padding: "1px 5px",
+                              borderRadius: "3px",
+                            }}
+                            title={`Will select: ${effortPreviewLabel}. Hover to change.`}
+                          >
+                            <Brain size={9} />
+                            <span>{effortPreviewLabel}</span>
+                            <ChevronRight size={9} />
+                          </span>
+                        )}
+                      </div>
                       <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
                         {parsed.provider}
                       </span>
@@ -648,6 +845,143 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {isOpen && hoveredSubmenu && (
+        <div
+          onMouseEnter={handleSubmenuMouseEnter}
+          onMouseLeave={handleSubmenuMouseLeave}
+          style={{
+            position: "fixed",
+            top: hoveredSubmenu.y,
+            left: hoveredSubmenu.x,
+            width: "200px",
+            backgroundColor: "#161B26",
+            border: "1px solid var(--accent-purple, #a855f7)",
+            borderRadius: "var(--radius-sm)",
+            boxShadow: "0 14px 40px rgba(0,0,0,0.9)",
+            zIndex: 1000000,
+            padding: "4px 0",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1px",
+          }}
+        >
+          <div
+            style={{
+              padding: "6px 10px",
+              borderBottom: "1px solid rgba(168, 85, 247, 0.25)",
+              backgroundColor: "rgba(168, 85, 247, 0.12)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--accent-purple, #a855f7)", display: "flex", alignItems: "center", gap: "4px" }}>
+              <Brain size={12} /> Thinking Effort
+            </span>
+            {hoveredSubmenu.capabilities.isMandatory && (
+              <span style={{ fontSize: "9.5px", color: "var(--accent-gold)", fontWeight: 600 }}>Required</span>
+            )}
+          </div>
+
+          <div style={{ maxHeight: "240px", overflowY: "auto" }}>
+            {(() => {
+              const currentPreferred = getModelPreferredReasoningEffort(hoveredSubmenu.modelId);
+              const isDefaultSelected = !currentPreferred || currentPreferred === "default";
+              const isOffSelected = currentPreferred === "none";
+
+              return (
+                <>
+                  <div
+                    onClick={() => handleSelect(hoveredSubmenu.modelId, "default")}
+                    style={{
+                      padding: "7px 10px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      fontSize: "11.5px",
+                      backgroundColor: isDefaultSelected ? "rgba(168, 85, 247, 0.18)" : "transparent",
+                      color: isDefaultSelected ? "var(--accent-purple, #a855f7)" : "var(--text-primary)",
+                      fontWeight: isDefaultSelected ? 700 : 500,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isDefaultSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isDefaultSelected) e.currentTarget.style.backgroundColor = "transparent";
+                    }}
+                  >
+                    <span>
+                      Default{hoveredSubmenu.capabilities.defaultEffort ? `: ${formatReasoningEffortLabel(hoveredSubmenu.capabilities.defaultEffort)}` : ""}
+                    </span>
+                    {isDefaultSelected && <Check size={12} color="var(--accent-purple, #a855f7)" />}
+                  </div>
+
+                  {!hoveredSubmenu.capabilities.isMandatory && (
+                    <div
+                      onClick={() => handleSelect(hoveredSubmenu.modelId, "none")}
+                      style={{
+                        padding: "7px 10px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        fontSize: "11.5px",
+                        backgroundColor: isOffSelected ? "rgba(168, 85, 247, 0.18)" : "transparent",
+                        color: isOffSelected ? "var(--accent-purple, #a855f7)" : "var(--text-primary)",
+                        fontWeight: isOffSelected ? 700 : 500,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isOffSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isOffSelected) e.currentTarget.style.backgroundColor = "transparent";
+                      }}
+                    >
+                      <span>Off</span>
+                      {isOffSelected && <Check size={12} color="var(--accent-purple, #a855f7)" />}
+                    </div>
+                  )}
+
+                  {hoveredSubmenu.capabilities.mode === "efforts_list" &&
+                    hoveredSubmenu.capabilities.supportedEfforts
+                      .filter((eff) => eff !== "none")
+                      .map((eff) => {
+                        const isEffSelected = currentPreferred === eff;
+                        return (
+                          <div
+                            key={eff}
+                            onClick={() => handleSelect(hoveredSubmenu.modelId, eff as ReasoningEffort)}
+                            style={{
+                              padding: "7px 10px",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              fontSize: "11.5px",
+                              backgroundColor: isEffSelected ? "rgba(168, 85, 247, 0.18)" : "transparent",
+                              color: isEffSelected ? "var(--accent-purple, #a855f7)" : "var(--text-primary)",
+                              fontWeight: isEffSelected ? 700 : 500,
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isEffSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isEffSelected) e.currentTarget.style.backgroundColor = "transparent";
+                            }}
+                          >
+                            <span>{formatReasoningEffortLabel(eff)}</span>
+                            {isEffSelected && <Check size={12} color="var(--accent-purple, #a855f7)" />}
+                          </div>
+                        );
+                      })}
+                </>
+              );
+            })()}
+          </div>
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { TranslationLogItem } from "../types";
+import { TranslationLogItem, ReasoningEffort } from "../types";
 import { LlmContextSettings } from "../services/translationManager";
 import { scriptManagerService } from "../services/scriptManagerService";
 import { settingsManager } from "../services/settingsManager";
@@ -8,6 +8,7 @@ export interface TranslationState {
   liveLogs: TranslationLogItem[];
   isPaused: boolean;
   selectedProvider: string;
+  reasoningEffort: ReasoningEffort;
   useScriptOnly: boolean;
   scriptThreshold: number;
   contextSettings: LlmContextSettings;
@@ -19,6 +20,7 @@ export interface TranslationState {
   clearLiveLogs: () => void;
   setIsPaused: (isPaused: boolean) => void;
   setSelectedProvider: (provider: string) => void;
+  setReasoningEffort: (effort: ReasoningEffort) => void;
   setUseScriptOnly: (useScriptOnly: boolean) => void;
   setScriptThreshold: (threshold: number) => void;
   setContextSettings: (settings: LlmContextSettings) => void;
@@ -27,6 +29,7 @@ export interface TranslationState {
 
 export const useTranslationStore = create<TranslationState>((set) => {
   const savedProvider = localStorage.getItem("vn_selected_model") || "mt:google-translate";
+  const savedEffort = (localStorage.getItem("vn_live_reasoning_effort") as any) || "default";
   const savedUseScriptOnly = localStorage.getItem("vn_use_script_only") === "true";
   const savedThreshold = scriptManagerService.getMatchThreshold();
   const savedMax = parseInt(localStorage.getItem("vn_llm_max_context_lines") || "10", 10);
@@ -43,6 +46,7 @@ export const useTranslationStore = create<TranslationState>((set) => {
     liveLogs: [],
     isPaused: false,
     selectedProvider: savedProvider,
+    reasoningEffort: savedEffort,
     useScriptOnly: savedUseScriptOnly,
     scriptThreshold: savedThreshold,
     contextSettings: initialContext,
@@ -59,6 +63,10 @@ export const useTranslationStore = create<TranslationState>((set) => {
       localStorage.setItem("vn_selected_model", selectedProvider);
       settingsManager.updateTranslation({ liveModel: selectedProvider, activeProviderId: selectedProvider });
       set({ selectedProvider });
+    },
+    setReasoningEffort: (reasoningEffort) => {
+      localStorage.setItem("vn_live_reasoning_effort", reasoningEffort);
+      set({ reasoningEffort });
     },
     setUseScriptOnly: (useScriptOnly) => {
       localStorage.setItem("vn_use_script_only", String(useScriptOnly));

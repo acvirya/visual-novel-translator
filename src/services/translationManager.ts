@@ -495,6 +495,7 @@ class TranslationManager {
         sourceLang,
         targetLang,
         contextHistory: this.contextHistory,
+        reasoningEffort: useTranslationStore.getState().reasoningEffort,
       });
 
       isSuccess = res.success;

@@ -507,6 +507,7 @@ async fn openrouter_chat_completion(
     max_tokens: Option<u32>,
     timeout_seconds: Option<u64>,
     providers: Option<Vec<String>>,
+    reasoning: Option<serde_json::Value>,
 ) -> Result<OpenRouterCompletionResponse, String> {
     let client = get_http_client();
     let timeout_duration = std::time::Duration::from_secs(timeout_seconds.unwrap_or(600)); // Default 10 min
@@ -520,6 +521,12 @@ async fn openrouter_chat_completion(
         "temperature": temperature,
         "response_format": { "type": "json_object" },
     });
+
+    if let Some(ref r) = reasoning {
+        if r.is_object() && !r.as_object().unwrap().is_empty() {
+            payload["reasoning"] = r.clone();
+        }
+    }
 
     if let Some(ref list) = providers {
         if !list.is_empty() {
@@ -567,6 +574,12 @@ async fn openrouter_chat_completion(
                 "messages": messages,
                 "temperature": temperature,
             });
+
+            if let Some(ref r) = reasoning {
+                if r.is_object() && !r.as_object().unwrap().is_empty() {
+                    fallback_payload["reasoning"] = r.clone();
+                }
+            }
 
             if let Some(ref list) = providers {
                 if !list.is_empty() {

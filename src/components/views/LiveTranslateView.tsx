@@ -21,10 +21,12 @@ export const LiveTranslateView: React.FC = () => {
     liveLogs,
     isPaused,
     selectedProvider,
+    reasoningEffort,
     useScriptOnly,
     contextSettings,
     contextHistoryLength,
     setSelectedProvider,
+    setReasoningEffort,
     setUseScriptOnly,
     clearLiveLogs,
   } = useTranslationStore();
@@ -80,7 +82,7 @@ export const LiveTranslateView: React.FC = () => {
     translationManager.clearContextHistory();
   };
 
-  const isLlmProvider = !selectedProvider.startsWith("mt:");
+  const isLlmProvider = selectedProvider && !selectedProvider.startsWith("mt:");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "12px" }}>
@@ -120,15 +122,18 @@ export const LiveTranslateView: React.FC = () => {
             <span>{!isPaused ? "Auto-Translate: Active" : "Stream Paused"}</span>
           </button>
 
-          {/* Translation Model Selector */}
+          {/* Translation Model Selector with Integrated Hover Reasoning Submenu */}
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <ModelSelectorCombobox
               selectedModelId={selectedProvider}
-              onSelectModel={(id) => {
+              selectedReasoningEffort={reasoningEffort}
+              onSelectModel={(id, eff) => {
                 setSelectedProvider(id);
+                setReasoningEffort(eff || "default");
               }}
+              onSelectReasoningEffort={(eff) => setReasoningEffort(eff)}
               disabled={useScriptOnly}
-              width="250px"
+              width="260px"
               compact={true}
             />
           </div>

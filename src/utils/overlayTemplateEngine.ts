@@ -1,6 +1,5 @@
 import { OverlayConfig } from "../types";
 import { OverlayDialogueMessage } from "./overlayChannel";
-import { settingsManager } from "../services/settingsManager";
 
 export interface TemplatePreset {
   id: string;
@@ -936,8 +935,15 @@ function escapeHtml(text: string): string {
 
 export function loadUserCustomPresets(): TemplatePreset[] {
   try {
-    const list = settingsManager.getOverlay()?.userCustomPresets;
-    if (Array.isArray(list)) return list;
+    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem("vn_app_settings");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed?.overlay?.userCustomPresets)) {
+          return parsed.overlay.userCustomPresets;
+        }
+      }
+    }
   } catch (e) {
     console.error("Failed to load custom user presets:", e);
   }
@@ -946,7 +952,13 @@ export function loadUserCustomPresets(): TemplatePreset[] {
 
 export function saveUserCustomPresets(presets: TemplatePreset[]) {
   try {
-    settingsManager.updateOverlay({ userCustomPresets: presets });
+    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem("vn_app_settings");
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (!parsed.overlay) parsed.overlay = {};
+      parsed.overlay.userCustomPresets = presets;
+      localStorage.setItem("vn_app_settings", JSON.stringify(parsed));
+    }
   } catch (e) {
     console.error("Failed to save custom user presets:", e);
   }

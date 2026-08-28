@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { parseSpeakerMessageTranslation } from "./freeMtService";
 import { logger } from "./loggerService";
+import { settingsManager } from "./settingsManager";
+import { ReasoningEffort } from "../types";
 
 export interface OpenRouterModelPricing {
   prompt: string;
@@ -11,12 +13,27 @@ export interface OpenRouterModelPricing {
   input_cache_write?: string;
 }
 
+export interface OpenRouterModelReasoning {
+  mandatory?: boolean;
+  default_enabled?: boolean;
+  supported_efforts?: string[];
+  default_effort?: string;
+  supports_max_tokens?: boolean;
+}
+
 export interface OpenRouterModel {
   id: string;
   name: string;
   description?: string;
   context_length: number;
   pricing: OpenRouterModelPricing;
+  supported_parameters?: string[];
+  architecture?: {
+    modality?: string;
+    instruct_type?: string;
+    reasoning?: boolean | OpenRouterModelReasoning;
+  };
+  reasoning?: OpenRouterModelReasoning;
 }
 
 export interface OpenRouterEndpoint {
@@ -210,9 +227,26 @@ export const OPENROUTER_STORAGE_KEYS = {
   TARGET_LANG: "vn_target_lang",
 } as const;
 
+function safeStorageGet(key: string): string | null {
+  try {
+    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+      return localStorage.getItem(key);
+    }
+  } catch {}
+  return null;
+}
+
+function safeStorageSet(key: string, value: string): void {
+  try {
+    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+      localStorage.setItem(key, value);
+    }
+  } catch {}
+}
+
 export function loadUserStylePresets(): PromptStylePreset[] {
   try {
-    const raw = localStorage.getItem(OPENROUTER_STORAGE_KEYS.USER_STYLE_PRESETS);
+    const raw = safeStorageGet(OPENROUTER_STORAGE_KEYS.USER_STYLE_PRESETS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -225,7 +259,7 @@ export function loadUserStylePresets(): PromptStylePreset[] {
 
 export function saveUserStylePresets(presets: PromptStylePreset[]) {
   try {
-    localStorage.setItem(OPENROUTER_STORAGE_KEYS.USER_STYLE_PRESETS, JSON.stringify(presets));
+    safeStorageSet(OPENROUTER_STORAGE_KEYS.USER_STYLE_PRESETS, JSON.stringify(presets));
   } catch (e) {
     console.error("Failed to save custom style presets:", e);
   }
@@ -237,11 +271,11 @@ export function getAllStylePresets(customPresets?: PromptStylePreset[]): PromptS
 }
 
 export function getActiveStylePresetId(): string {
-  return localStorage.getItem(OPENROUTER_STORAGE_KEYS.ACTIVE_STYLE_PRESET_ID) || "natural_anime";
+  return safeStorageGet(OPENROUTER_STORAGE_KEYS.ACTIVE_STYLE_PRESET_ID) || "natural_anime";
 }
 
 export function getActiveStyleInstructions(): string {
-  const saved = localStorage.getItem(OPENROUTER_STORAGE_KEYS.ACTIVE_STYLE_INSTRUCTIONS);
+  const saved = safeStorageGet(OPENROUTER_STORAGE_KEYS.ACTIVE_STYLE_INSTRUCTIONS);
   if (saved !== null && saved.trim()) return saved.trim();
   const activeId = getActiveStylePresetId();
   const found = getAllStylePresets().find((p) => p.id === activeId);
@@ -266,8 +300,8 @@ export interface BuildSystemPromptOptions {
 export function buildCompleteSystemPrompt(options: BuildSystemPromptOptions): string {
   const {
     mode,
-    sourceLang = localStorage.getItem(OPENROUTER_STORAGE_KEYS.SOURCE_LANG) || "ja",
-    targetLang = localStorage.getItem(OPENROUTER_STORAGE_KEYS.TARGET_LANG) || "en",
+    sourceLang = safeStorageGet(OPENROUTER_STORAGE_KEYS.SOURCE_LANG) || "ja",
+    targetLang = safeStorageGet(OPENROUTER_STORAGE_KEYS.TARGET_LANG) || "en",
     styleInstructions = getActiveStyleInstructions(),
     includeGlossary = true,
   } = options;
@@ -414,6 +448,9 @@ export async function fetchOpenRouterModels(forceRefresh = false): Promise<OpenR
             prompt: m.pricing?.prompt || "0",
             completion: m.pricing?.completion || "0",
           },
+          supported_parameters: Array.isArray(m.supported_parameters) ? m.supported_parameters : undefined,
+          architecture: m.architecture || undefined,
+          reasoning: m.reasoning || (typeof m.architecture?.reasoning === "object" ? m.architecture.reasoning : undefined),
         }));
         cachedModels = parsedModels;
         try {
@@ -752,7 +789,7 @@ export function parseStructuredDialogueOutput(
  */
 export function buildGlossarySystemPrompt(): string {
   try {
-    const saved = localStorage.getItem(OPENROUTER_STORAGE_KEYS.GLOSSARY_ENTRIES);
+    const saved = safeStorageGet(OPENROUTER_STORAGE_KEYS.GLOSSARY_ENTRIES);
     if (!saved) return "";
     const entries: Array<{ original: string; translation: string; category?: string; notes?: string }> = JSON.parse(saved);
     if (!Array.isArray(entries) || entries.length === 0) return "";
@@ -783,6 +820,253 @@ ${lines.join("\n")}
   }
 }
 
+export interface ResolvedModelReasoning {
+  isSupported: boolean;
+  isMandatory: boolean;
+  supportsEffort: boolean;
+  supportedEfforts: string[];
+  defaultEffort?: string;
+  supportsMaxTokens: boolean;
+  defaultEnabled: boolean;
+  mode: "none" | "toggle_only" | "efforts_list";
+}
+
+export function formatReasoningEffortLabel(effort: string): string {
+  switch (effort.toLowerCase()) {
+    case "none":
+      return "Off";
+    case "minimal":
+      return "Minimal";
+    case "low":
+      return "Low";
+    case "medium":
+      return "Medium";
+    case "high":
+      return "High";
+    case "xhigh":
+      return "Xhigh";
+    case "max":
+      return "Max";
+    case "default":
+      return "Default";
+    case "custom":
+      return "Custom";
+    default:
+      return effort.charAt(0).toUpperCase() + effort.slice(1);
+  }
+}
+
+export function getModelPreferredReasoningEffort(modelId: string): ReasoningEffort | undefined {
+  if (!modelId || typeof window === "undefined" || typeof localStorage === "undefined") return undefined;
+  try {
+    const raw = localStorage.getItem("vn_model_preferred_efforts");
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw);
+    return parsed[modelId];
+  } catch {
+    return undefined;
+  }
+}
+
+export function setModelPreferredReasoningEffort(modelId: string, effort: ReasoningEffort): void {
+  if (!modelId || typeof window === "undefined" || typeof localStorage === "undefined") return;
+  try {
+    const raw = localStorage.getItem("vn_model_preferred_efforts");
+    const map = raw ? JSON.parse(raw) : {};
+    if (effort === "default") {
+      delete map[modelId];
+    } else {
+      map[modelId] = effort;
+    }
+    localStorage.setItem("vn_model_preferred_efforts", JSON.stringify(map));
+  } catch (e) {
+    console.error("Failed to save preferred effort:", e);
+  }
+}
+
+export function getModelReasoningCapabilities(
+  model: OpenRouterModel | string,
+  allModels?: OpenRouterModel[]
+): ResolvedModelReasoning {
+  let modelObj: OpenRouterModel | undefined;
+  let modelId = "";
+
+  if (typeof model === "string") {
+    modelId = model.toLowerCase().trim();
+    const list = allModels && allModels.length > 0 ? allModels : cachedModels || [];
+    modelObj = list.find((m) => m.id.toLowerCase() === modelId);
+  } else if (model) {
+    modelObj = model;
+    modelId = (model.id || "").toLowerCase().trim();
+  }
+
+  // If Free MT or empty
+  if (!modelId || modelId.startsWith("mt:")) {
+    return {
+      isSupported: false,
+      isMandatory: false,
+      supportsEffort: false,
+      supportedEfforts: [],
+      supportsMaxTokens: false,
+      defaultEnabled: false,
+      mode: "none",
+    };
+  }
+
+  const rawReasoning =
+    modelObj?.reasoning ||
+    (typeof modelObj?.architecture?.reasoning === "object" ? (modelObj.architecture.reasoning as any) : undefined);
+
+  if (rawReasoning && typeof rawReasoning === "object") {
+    const isMandatory = Boolean(rawReasoning.mandatory);
+    const supportsMaxTokens = Boolean(rawReasoning.supports_max_tokens);
+    const defaultEnabled = rawReasoning.default_enabled !== false;
+    const supportedEfforts = Array.isArray(rawReasoning.supported_efforts)
+      ? rawReasoning.supported_efforts.map(String)
+      : [];
+    const defaultEffort = rawReasoning.default_effort ? String(rawReasoning.default_effort) : undefined;
+
+    if (supportedEfforts.length > 0) {
+      return {
+        isSupported: true,
+        isMandatory,
+        supportsEffort: true,
+        supportedEfforts,
+        defaultEffort,
+        supportsMaxTokens,
+        defaultEnabled,
+        mode: "efforts_list",
+      };
+    } else {
+      return {
+        isSupported: true,
+        isMandatory,
+        supportsEffort: false,
+        supportedEfforts: [],
+        defaultEffort,
+        supportsMaxTokens,
+        defaultEnabled,
+        mode: "toggle_only",
+      };
+    }
+  }
+
+  // If parameters metadata indicates reasoning support
+  if (
+    modelObj?.supported_parameters?.includes("reasoning") ||
+    modelObj?.supported_parameters?.includes("include_reasoning") ||
+    modelObj?.architecture?.reasoning === true
+  ) {
+    return {
+      isSupported: true,
+      isMandatory: false,
+      supportsEffort: false,
+      supportedEfforts: [],
+      supportsMaxTokens: true,
+      defaultEnabled: true,
+      mode: "toggle_only",
+    };
+  }
+
+  // Fallback heuristics for common reasoning model IDs (when offline / metadata pending)
+  if (modelId.includes("claude-3-7-sonnet")) {
+    return {
+      isSupported: true,
+      isMandatory: false,
+      supportsEffort: false,
+      supportedEfforts: [],
+      supportsMaxTokens: true,
+      defaultEnabled: true,
+      mode: "toggle_only",
+    };
+  }
+
+  if (modelId.includes("/o1") || modelId.includes("/o3") || modelId.includes("o1-") || modelId.includes("o3-")) {
+    return {
+      isSupported: true,
+      isMandatory: true,
+      supportsEffort: true,
+      supportedEfforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+      supportsMaxTokens: false,
+      defaultEnabled: true,
+      mode: "efforts_list",
+    };
+  }
+
+  if (
+    modelId.includes("r1") ||
+    modelId.includes("qwq") ||
+    modelId.includes("thinking") ||
+    modelId.includes("reasoning")
+  ) {
+    return {
+      isSupported: true,
+      isMandatory: false,
+      supportsEffort: false,
+      supportedEfforts: [],
+      supportsMaxTokens: false,
+      defaultEnabled: true,
+      mode: "toggle_only",
+    };
+  }
+
+  return {
+    isSupported: false,
+    isMandatory: false,
+    supportsEffort: false,
+    supportedEfforts: [],
+    supportsMaxTokens: false,
+    defaultEnabled: false,
+    mode: "none",
+  };
+}
+
+export function isReasoningModel(model: OpenRouterModel | string, allModels?: OpenRouterModel[]): boolean {
+  return getModelReasoningCapabilities(model, allModels).isSupported;
+}
+
+export function buildReasoningPayload(options?: {
+  modelId?: string;
+  effort?: ReasoningEffort;
+  maxTokens?: number;
+  exclude?: boolean;
+}): Record<string, any> | undefined {
+  const effort = options?.effort || settingsManager.getReasoningEffort();
+  const maxTokens = options?.maxTokens !== undefined ? options.maxTokens : settingsManager.getReasoningMaxTokens();
+  const exclude = options?.exclude !== undefined ? options.exclude : settingsManager.getExcludeReasoning();
+
+  const capabilities = options?.modelId ? getModelReasoningCapabilities(options.modelId) : null;
+
+  // If model is resolved and does not support reasoning at all, do not send reasoning object
+  if (capabilities && !capabilities.isSupported) {
+    return undefined;
+  }
+
+  const payload: Record<string, any> = {};
+
+  if (effort === "none") {
+    // If user explicitly disabled reasoning
+    if (capabilities?.supportsEffort && capabilities.supportedEfforts.includes("none")) {
+      payload.effort = "none";
+    } else {
+      payload.exclude = true;
+    }
+  } else if (effort && effort !== "default" && effort !== "custom") {
+    payload.effort = effort;
+  }
+
+  if (maxTokens && maxTokens > 0) {
+    payload.max_tokens = maxTokens;
+  }
+
+  if (exclude !== undefined) {
+    payload.exclude = exclude;
+  }
+
+  return Object.keys(payload).length > 0 ? payload : undefined;
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -801,6 +1085,9 @@ export interface OpenRouterTranslateOptions {
   maxTokens?: number;
   providers?: string[];
   contextHistory?: { user: string; assistant: string }[];
+  reasoningEffort?: ReasoningEffort;
+  reasoningMaxTokens?: number;
+  excludeReasoning?: boolean;
 }
 
 export interface OpenRouterTranslateResult {
@@ -831,6 +1118,9 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
     temperature = 0.3,
     maxTokens,
     contextHistory = [],
+    reasoningEffort,
+    reasoningMaxTokens,
+    excludeReasoning,
   } = options;
 
   // Dynamic token ceiling: protects against truncation on long monologues while preventing run-away hallucination
@@ -886,9 +1176,15 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
   const activeUserPayload = formatStructuredDialogueInput(speaker, message);
   messages.push({ role: "user", content: activeUserPayload });
 
+  const reasoningPayload = buildReasoningPayload({
+    effort: reasoningEffort,
+    maxTokens: reasoningMaxTokens,
+    exclude: excludeReasoning,
+  });
+
   logger.info(
     "OpenRouter::API",
-    `Sending structured request to model: ${modelId} (${messages.length} messages, ${contextHistory.length} history turns, maxTokens: ${dynamicMaxTokens})`
+    `Sending structured request to model: ${modelId} (${messages.length} messages, ${contextHistory.length} history turns, maxTokens: ${dynamicMaxTokens}${reasoningPayload ? `, reasoning: ${JSON.stringify(reasoningPayload)}` : ""})`
   );
 
   const startTime = Date.now();
@@ -911,6 +1207,7 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
         temperature,
         maxTokens: dynamicMaxTokens,
         providers: activeProviders.length > 0 ? activeProviders : undefined,
+        reasoning: reasoningPayload,
       });
 
       if (nativeRes && nativeRes.content) {
