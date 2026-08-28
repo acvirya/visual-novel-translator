@@ -11,8 +11,10 @@ import { OVERLAY_PRESETS, TemplatePreset } from "../utils/overlayTemplateEngine"
 export interface GeneralSettings {
   sourceLang: string;
   targetLang: string;
+  theme?: "dark" | "light" | "system";
   autoStartWithWindows: boolean;
   minimizeToTray: boolean;
+  globalHotkeysEnabled?: boolean;
   hotkeyLockOverlay: string;
   hotkeyTogglePause: string;
   hotkeyOcrScan: string;
@@ -35,6 +37,10 @@ export interface TranslationSettings {
   liveModel: string;
   manualModel: string;
   batchModel: string;
+  useScriptOnly: boolean;
+  maxContextLines: number;
+  retainContextLines: number;
+  maxCharsPerLine: number;
   providers: Record<string, TranslationProviderConfig>;
 }
 
@@ -102,17 +108,23 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   general: {
     sourceLang: "ja",
     targetLang: "en",
+    theme: "dark",
     autoStartWithWindows: false,
     minimizeToTray: true,
-    hotkeyLockOverlay: "Ctrl+Shift+L",
-    hotkeyTogglePause: "Ctrl+Shift+P",
-    hotkeyOcrScan: "F9",
+    globalHotkeysEnabled: true,
+    hotkeyLockOverlay: "Alt+L",
+    hotkeyTogglePause: "Alt+P",
+    hotkeyOcrScan: "Alt+S",
   },
   translation: {
-    activeProviderId: "openai",
-    liveModel: "gpt-4o-mini",
-    manualModel: "gpt-4o-mini",
-    batchModel: "gpt-4o-mini",
+    activeProviderId: "mt:google-translate",
+    liveModel: "mt:google-translate",
+    manualModel: "mt:google-translate",
+    batchModel: "openai/gpt-4o-mini",
+    useScriptOnly: false,
+    maxContextLines: 10,
+    retainContextLines: 3,
+    maxCharsPerLine: 250,
     providers: {
       openai: {
         id: "openai",
@@ -276,29 +288,7 @@ class SettingsManager {
         loaded = JSON.parse(JSON.stringify(DEFAULT_APP_SETTINGS));
       }
 
-      // Sync legacy flat keys if present to maintain cross-system consistency
-      const flatSource = localStorage.getItem("vn_source_lang");
-      if (flatSource) loaded.general.sourceLang = flatSource;
-      const flatTarget = localStorage.getItem("vn_target_lang");
-      if (flatTarget) loaded.general.targetLang = flatTarget;
-      const flatModel = localStorage.getItem("vn_selected_model");
-      if (flatModel) loaded.translation.activeProviderId = flatModel;
-      const flatOpenRouterKey = localStorage.getItem("vn_openrouter_api_key");
-      if (flatOpenRouterKey) {
-        if (!loaded.translation.providers.openrouter) {
-          loaded.translation.providers.openrouter = {
-            id: "openrouter",
-            name: "OpenRouter",
-            type: "openrouter",
-            apiKey: flatOpenRouterKey,
-            isEnabled: true,
-          };
-        } else {
-          loaded.translation.providers.openrouter.apiKey = flatOpenRouterKey;
-        }
-      }
-
-      // Always reset overlay isEnabled to false on app load to prevent startup bugs
+      // Always reset overlay isEnabled to false on app load to prevent startup ghost windows
       if (loaded.overlay?.config) {
         loaded.overlay.config.isEnabled = false;
       }
@@ -310,32 +300,6 @@ class SettingsManager {
     return JSON.parse(JSON.stringify(DEFAULT_APP_SETTINGS));
   }
 
-  private syncFlatKeys() {
-    try {
-      if (this.cache.general?.sourceLang) {
-        localStorage.setItem("vn_source_lang", this.cache.general.sourceLang);
-      }
-      if (this.cache.general?.targetLang) {
-        localStorage.setItem("vn_target_lang", this.cache.general.targetLang);
-      }
-      if (this.cache.translation?.activeProviderId) {
-        localStorage.setItem("vn_selected_model", this.cache.translation.activeProviderId);
-      }
-      const openRouterKey =
-        this.cache.translation?.providers?.openrouter?.apiKey ||
-        this.cache.translation?.providers?.openai?.apiKey;
-      if (openRouterKey) {
-        localStorage.setItem("vn_openrouter_api_key", openRouterKey);
-      }
-      const deepLKey = this.cache.translation?.providers?.deepl?.apiKey;
-      if (deepLKey) {
-        localStorage.setItem("vn_deepl_api_key", deepLKey);
-      }
-    } catch {
-      // Ignored if localStorage is restricted
-    }
-  }
-
   private saveToStorage() {
     try {
       const cacheToPersist = JSON.parse(JSON.stringify(this.cache));
@@ -343,7 +307,6 @@ class SettingsManager {
         cacheToPersist.overlay.config.isEnabled = false;
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheToPersist));
-      this.syncFlatKeys();
       this.notifyListeners();
     } catch (e) {
       console.error("Failed to save settings to localStorage:", e);
@@ -357,6 +320,37 @@ class SettingsManager {
         if (this.isObject(source[key])) {
           if (!(key in target)) Object.assign(output, { [key]: source[key] });
           else output[key] = this.deepMerge(target[key], source[key]);
+        } else if (Array.isArray(source[key]) && Array.isArray(target[key])) {
+          if (key === "pipeline") {
+            // Merge built-in steps with user custom steps by id
+            const sourceSteps = source[key] as PreprocessingStep[];
+            const targetSteps = target[key] as PreprocessingStep[];
+            const merged: PreprocessingStep[] = [];
+            const processedIds = new Set<string>();
+
+            // 1. Process target default steps, updating with user's enabled status if present
+            for (const tStep of targetSteps) {
+              const userMatch = sourceSteps.find((s) => s.id === tStep.id);
+              if (userMatch) {
+                merged.push({ ...tStep, isEnabled: userMatch.isEnabled, options: { ...tStep.options, ...userMatch.options } });
+              } else {
+                merged.push({ ...tStep });
+              }
+              processedIds.add(tStep.id);
+            }
+
+            // 2. Append any custom user-added steps
+            for (const sStep of sourceSteps) {
+              if (!processedIds.has(sStep.id)) {
+                merged.push(sStep);
+                processedIds.add(sStep.id);
+              }
+            }
+            output[key] = merged;
+          } else {
+            // For user data arrays (regions, glossary terms, custom presets), user array takes precedence
+            output[key] = source[key];
+          }
         } else {
           Object.assign(output, { [key]: source[key] });
         }
@@ -370,10 +364,14 @@ class SettingsManager {
   }
 
   private notifyListeners() {
-    this.listeners.forEach((listener) => listener(this.getSettings()));
+    const snapshot = this.getSettings();
+    this.listeners.forEach((listener) => listener(snapshot));
   }
 
   public getSettings(): AppSettings {
+    if (typeof structuredClone === "function") {
+      return structuredClone(this.cache);
+    }
     return JSON.parse(JSON.stringify(this.cache));
   }
 

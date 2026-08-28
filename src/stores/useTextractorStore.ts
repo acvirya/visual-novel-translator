@@ -12,9 +12,6 @@ export interface TextractorState {
   isAttaching: boolean;
   attachedPid: number | null;
   hookError: string | null;
-  discoveryDuration: number;
-  discoverySecondsLeft: number;
-  isDiscoveryActive: boolean;
   debounceMs: number;
   threadSyncWaitMs: number;
   threads: Map<number, TextractorThread>;
@@ -44,9 +41,6 @@ export interface TextractorState {
   setIsAttaching: (attaching: boolean) => void;
   setAttachedPid: (pid: number | null) => void;
   setHookError: (error: string | null) => void;
-  setDiscoveryDuration: (dur: number) => void;
-  setDiscoverySecondsLeft: (sec: number) => void;
-  setIsDiscoveryActive: (active: boolean) => void;
   setDebounceMs: (ms: number) => void;
   setThreadSyncWaitMs: (ms: number) => void;
   setThreads: (threads: Map<number, TextractorThread> | ((prev: Map<number, TextractorThread>) => Map<number, TextractorThread>)) => void;
@@ -73,13 +67,12 @@ export interface TextractorState {
 export const useTextractorStore = create<TextractorState>((set) => {
   const savedExePath = localStorage.getItem("vn_textractor_path") || DEFAULT_TEXTRACTOR_PATH;
   const savedArch = (localStorage.getItem("vn_textractor_arch") as "x86" | "x64") || "x86";
-  const savedDebounce = Number(localStorage.getItem("vn_textractor_debounce_ms")) || 250;
-  const savedThreadSync = Number(localStorage.getItem("vn_textractor_thread_sync_ms")) || 150;
-  const savedMaxLogs = Number(localStorage.getItem("vn_textractor_max_log_lines")) || 100;
-  const savedDiscovery = Number(localStorage.getItem("vn_textractor_discovery_duration")) || 10;
+  const savedDebounce = Number(localStorage.getItem("vn_textractor_debounce_ms") ?? "250");
+  const savedThreadSync = Number(localStorage.getItem("vn_textractor_thread_sync_ms") ?? "150");
+  const savedMaxLogs = Number(localStorage.getItem("vn_textractor_max_log_lines") ?? "100");
   const savedIgnoreDup = localStorage.getItem("vn_ignore_duplicate_lines") !== "false";
   const savedAutoForward = localStorage.getItem("vn_textractor_auto_forward") !== "false";
-  const savedCharDedup = Number(localStorage.getItem("vn_textractor_char_dedup_count")) || 0;
+  const savedCharDedup = Number(localStorage.getItem("vn_textractor_char_dedup_count") ?? "0");
   const savedLoopDedup = localStorage.getItem("vn_textractor_loop_dedup") !== "false";
   const savedStutter = localStorage.getItem("vn_textractor_stutter_reduction") !== "false";
 
@@ -93,21 +86,18 @@ export const useTextractorStore = create<TextractorState>((set) => {
     isAttaching: false,
     attachedPid: null,
     hookError: null,
-    discoveryDuration: savedDiscovery,
-    discoverySecondsLeft: 0,
-    isDiscoveryActive: false,
-    debounceMs: savedDebounce,
-    threadSyncWaitMs: Math.max(50, savedThreadSync),
+    debounceMs: isNaN(savedDebounce) || savedDebounce < 0 ? 250 : savedDebounce,
+    threadSyncWaitMs: isNaN(savedThreadSync) || savedThreadSync < 50 ? 150 : savedThreadSync,
     threads: new Map(),
     combinedThreadId: null,
     messageThreadId: null,
     speakerThreadId: null,
     capturedThreads: [],
     inspectedThreadId: null,
-    maxLogLines: savedMaxLogs,
+    maxLogLines: isNaN(savedMaxLogs) || savedMaxLogs < 1 ? 100 : savedMaxLogs,
     threadLogs: new Map(),
     ignoreDuplicateLines: savedIgnoreDup,
-    charDeduplicationCount: savedCharDedup,
+    charDeduplicationCount: isNaN(savedCharDedup) || savedCharDedup < 0 ? 0 : savedCharDedup,
     loopDeduplication: savedLoopDedup,
     stutterReduction: savedStutter,
     latestSpeaker: "",
@@ -130,12 +120,6 @@ export const useTextractorStore = create<TextractorState>((set) => {
     setIsAttaching: (isAttaching) => set({ isAttaching }),
     setAttachedPid: (attachedPid) => set({ attachedPid }),
     setHookError: (hookError) => set({ hookError }),
-    setDiscoveryDuration: (discoveryDuration) => {
-      localStorage.setItem("vn_textractor_discovery_duration", String(discoveryDuration));
-      set({ discoveryDuration });
-    },
-    setDiscoverySecondsLeft: (discoverySecondsLeft) => set({ discoverySecondsLeft }),
-    setIsDiscoveryActive: (isDiscoveryActive) => set({ isDiscoveryActive }),
     setDebounceMs: (debounceMs) => {
       localStorage.setItem("vn_textractor_debounce_ms", String(debounceMs));
       set({ debounceMs });
@@ -146,9 +130,10 @@ export const useTextractorStore = create<TextractorState>((set) => {
       set({ threadSyncWaitMs: clamped });
     },
     setThreads: (threadsOrFn) =>
-      set((state) => ({
-        threads: typeof threadsOrFn === "function" ? threadsOrFn(state.threads) : threadsOrFn,
-      })),
+      set((state) => {
+        const next = typeof threadsOrFn === "function" ? threadsOrFn(state.threads) : threadsOrFn;
+        return { threads: new Map(next) };
+      }),
     setCombinedThreadId: (combinedThreadId) => set({ combinedThreadId }),
     setMessageThreadId: (messageThreadId) => set({ messageThreadId }),
     setSpeakerThreadId: (speakerThreadId) => set({ speakerThreadId }),
@@ -184,9 +169,10 @@ export const useTextractorStore = create<TextractorState>((set) => {
       set({ maxLogLines });
     },
     setThreadLogs: (logsOrFn) =>
-      set((state) => ({
-        threadLogs: typeof logsOrFn === "function" ? logsOrFn(state.threadLogs) : logsOrFn,
-      })),
+      set((state) => {
+        const next = typeof logsOrFn === "function" ? logsOrFn(state.threadLogs) : logsOrFn;
+        return { threadLogs: new Map(next) };
+      }),
     setIgnoreDuplicateLines: (ignoreDuplicateLines) => {
       localStorage.setItem("vn_ignore_duplicate_lines", String(ignoreDuplicateLines));
       set({ ignoreDuplicateLines });

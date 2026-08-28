@@ -76,28 +76,28 @@ export const useOcrStore = create<OcrState>((set) => {
     return DEFAULT_REGIONS;
   })();
 
-  const savedScale = Number(localStorage.getItem("vn_ocr_scale_percent")) || 100;
-  const savedInterval = Number(localStorage.getItem("vn_ocr_scan_interval")) || 350;
+  const savedScale = Number(localStorage.getItem("vn_ocr_scale_percent") ?? "100");
+  const savedInterval = Number(localStorage.getItem("vn_ocr_scan_interval") ?? "350");
   const savedCustomPath = localStorage.getItem("vn_ocr_custom_path") || "";
   const savedTargetMonitor = localStorage.getItem("vn_ocr_target_monitor") || "monitor_1";
   const savedAutoForward = localStorage.getItem("vn_ocr_auto_forward") !== "false";
   const savedEnableMotion = localStorage.getItem("vn_ocr_enable_motion") !== "false";
-  const savedSettleTime = Number(localStorage.getItem("vn_ocr_settle_time_ms")) || 250;
-  const savedMotionSens = Number(localStorage.getItem("vn_ocr_motion_sensitivity")) || 3;
+  const savedSettleTime = Number(localStorage.getItem("vn_ocr_settle_time_ms") ?? "250");
+  const savedMotionSens = Number(localStorage.getItem("vn_ocr_motion_sensitivity") ?? "3");
   const savedIgnoreBlinking = localStorage.getItem("vn_ocr_ignore_blinking") !== "false";
 
   return {
     engineStatus: { isAvailable: false, dllPath: "", modelPath: "" },
     isScanning: false,
     regions: savedRegions,
-    scalePercent: savedScale,
-    scanInterval: savedInterval,
+    scalePercent: isNaN(savedScale) || savedScale < 10 ? 100 : savedScale,
+    scanInterval: isNaN(savedInterval) || savedInterval < 50 ? 350 : savedInterval,
     targetMonitor: savedTargetMonitor,
     customPath: savedCustomPath,
     autoForwardToOverlay: savedAutoForward,
     enableMotionDetection: savedEnableMotion,
-    settleTimeMs: savedSettleTime,
-    motionSensitivity: savedMotionSens,
+    settleTimeMs: isNaN(savedSettleTime) || savedSettleTime < 0 ? 250 : savedSettleTime,
+    motionSensitivity: isNaN(savedMotionSens) || savedMotionSens < 1 ? 3 : savedMotionSens,
     ignoreBlinkingPrompt: savedIgnoreBlinking,
     latestSpeaker: "",
     latestMessage: "",

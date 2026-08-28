@@ -15,6 +15,7 @@ import {
   isBuiltInPreset,
 } from "../../utils/overlayTemplateEngine";
 import { settingsManager } from "../../services/settingsManager";
+import { shortcutService } from "../../services/shortcutService";
 import { formatMonitorLabel } from "../../utils/monitorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -92,7 +93,7 @@ export const OverlaySettingsView: React.FC = () => {
     return {
       ...INITIAL_OVERLAY_CONFIG,
       ...(saved || {}),
-      isEnabled: false, // Always default inactive on app startup to prevent bugs
+      isEnabled: saved?.isEnabled ?? false,
       isExcludedFromCapture: true, // Always guaranteed active
       useCustomTemplate: true,
       customTemplateHtml: saved?.customTemplateHtml || OVERLAY_PRESETS[0].html,
@@ -288,6 +289,7 @@ export const OverlaySettingsView: React.FC = () => {
   const handleToggleEditMode = async () => {
     const nextEditState = !isEditingPosition;
     setIsEditingPosition(nextEditState);
+    shortcutService.setOverlayClickThrough(!nextEditState);
 
     overlayChannel.send({ type: "SET_EDIT_MODE", isEditing: nextEditState });
 

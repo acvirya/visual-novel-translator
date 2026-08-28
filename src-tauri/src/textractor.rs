@@ -89,8 +89,9 @@ mod win32 {
             return 1;
         }
 
-        let mut title_buf = vec![0u16; (len + 1) as usize];
-        let read_len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), len + 1);
+        let mut title_buf = [0u16; 256];
+        let max_read = (len.min(255) + 1) as i32;
+        let read_len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), max_read);
         if read_len <= 0 {
             return 1;
         }
@@ -115,7 +116,7 @@ mod win32 {
         let mut exe_name = String::new();
         let h_proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if !h_proc.is_null() {
-            let mut name_buf = vec![0u16; 1024];
+            let mut name_buf = [0u16; 512];
             let mut size: DWORD = name_buf.len() as DWORD;
             if QueryFullProcessImageNameW(h_proc, 0, name_buf.as_mut_ptr(), &mut size) != 0 {
                 let full_path = String::from_utf16_lossy(&name_buf[..size as usize]);
@@ -233,7 +234,7 @@ pub fn start_textractor(
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         let resolved_exe = resolve_textractor_exe(&exe_path);
-        println!("[Textractor start] Target PID: {}, Executable: {:?}", target_pid, resolved_exe);
+        eprintln!("[Textractor::Start] Target PID: {}, Executable: {:?}", target_pid, resolved_exe);
 
         let mut cmd = Command::new(&resolved_exe);
 
@@ -265,8 +266,14 @@ pub fn start_textractor(
 
         // Send initial attach command to stdin (UTF-16LE encoded for Textractor std::wcin)
         let attach_cmd = format!("attach -P{}\r\n", target_pid);
-        let _ = stdin.write_all(&str_to_utf16_bytes(&attach_cmd));
-        let _ = stdin.flush();
+        if let Err(e) = stdin.write_all(&str_to_utf16_bytes(&attach_cmd)) {
+            let _ = child.kill();
+            return Err(format!("Failed to send attach command to Textractor stdin: {}", e));
+        }
+        if let Err(e) = stdin.flush() {
+            let _ = child.kill();
+            return Err(format!("Failed to flush Textractor stdin: {}", e));
+        }
 
         // Store child & stdin safely (recovering from poisoned mutex if previous thread panicked)
         {
@@ -282,19 +289,6 @@ pub fn start_textractor(
             *p = Some(target_pid);
         }
 
-        // Background delayed stdin attach retry to ensure Textractor CLI's std::getline loop processes it
-        let stdin_clone = state.stdin.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            if let Ok(mut s) = stdin_clone.lock() {
-                if let Some(ref mut sin) = *s {
-                    let cmd = format!("attach -P{}\r\n", target_pid);
-                    let _ = sin.write_all(&str_to_utf16_bytes(&cmd));
-                    let _ = sin.flush();
-                }
-            }
-        });
-
         // Spawn async reader thread for stderr
         if let Some(err_stream) = stderr {
             std::thread::spawn(move || {
@@ -304,7 +298,7 @@ pub fn start_textractor(
                     if n == 0 {
                         break;
                     }
-                    eprintln!("[Textractor stderr] {}", line.trim());
+                    eprintln!("[Textractor::Stderr] {}", line.trim());
                     line.clear();
                 }
             });
@@ -332,7 +326,7 @@ pub fn start_textractor(
                     let line_str = String::from_utf16_lossy(&u16_buf);
                     let trimmed = line_str.trim().trim_matches('\r').trim();
                     if !trimmed.is_empty() {
-                        println!("[Textractor stdout] {}", trimmed);
+                        eprintln!("[Textractor::Stdout] {}", trimmed);
                         if let Some(msg) = parse_textractor_line(trimmed, target_pid) {
                             let _ = app_clone.emit("textractor-text-event", &msg);
                         }
@@ -486,6 +480,37 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
         text,
         timestamp,
     })
+}
+
+#[tauri::command]
+pub fn find_textractor_installation() -> Option<String> {
+    let candidates = [
+        r"C:\Program Files\Textractor\x86\TextractorCLI.exe",
+        r"C:\Program Files (x86)\Textractor\x86\TextractorCLI.exe",
+        r"C:\Program Files\Textractor\x64\TextractorCLI.exe",
+        r"C:\Program Files (x86)\Textractor\x64\TextractorCLI.exe",
+        r"D:\Program Files\Textractor\x86\TextractorCLI.exe",
+        r"D:\Program Files\Textractor\x64\TextractorCLI.exe",
+    ];
+
+    for path in &candidates {
+        if Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let p86 = Path::new(&local_app_data).join("Textractor").join("x86").join("TextractorCLI.exe");
+        if p86.exists() {
+            return Some(p86.to_string_lossy().to_string());
+        }
+        let p64 = Path::new(&local_app_data).join("Textractor").join("x64").join("TextractorCLI.exe");
+        if p64.exists() {
+            return Some(p64.to_string_lossy().to_string());
+        }
+    }
+
+    None
 }
 
 fn chrono_local_time() -> String {

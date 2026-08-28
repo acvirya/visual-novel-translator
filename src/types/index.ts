@@ -62,6 +62,16 @@ export interface ManualDialogueInput {
   message: string;  // Manual input without speaker name
 }
 
+export interface ScriptEntry {
+  id: string;
+  speaker?: string;
+  translated_speaker?: string;
+  message: string;
+  translated_message: string;
+  matchedCount?: number;
+  lastUsed?: string;
+}
+
 export interface ScriptLineItem {
   id: string;
   speaker?: string;
@@ -76,6 +86,7 @@ export interface TranslationLogItem {
   id: string;
   timestamp: string;
   provider: string; // e.g. "OpenRouter (Claude 3.5 Sonnet)" or empty if matched from script
+  sourceType?: "textractor" | "ocr" | "manual" | "batch";
   durationMs: number;
   matchedFromScript?: boolean;
   similarityScore?: number;
@@ -97,6 +108,9 @@ export interface GlossaryEntry {
   notes?: string;
 }
 
+export type PickFileTuple = [filePath: string, fileName: string, fileSize: number];
+export type ScriptOpenTuple = [filePath: string, content: string];
+
 export interface TextractorProcessInfo {
   pid: number;
   name: string;
@@ -115,7 +129,7 @@ export interface TextractorMessage {
   timestamp: string;
 }
 
-export type TextractorThreadRole = "combined" | "message" | "speaker" | "ignored";
+export type TextractorThreadRole = "combined" | "dialogue" | "message" | "speaker" | "ignored";
 
 export interface TextractorThread {
   id: number; // handle
@@ -207,6 +221,8 @@ export interface OcrRegion {
   targetMonitor?: string;
 }
 
+export type CaptureRegion = OcrRegion;
+
 export interface OcrStabilityConfig {
   enableMotionDetection: boolean;
   settleTimeMs: number; // e.g. 100 - 800ms, default 250ms
@@ -229,5 +245,14 @@ export interface OcrEngineStatus {
   dllPath: string;
   modelPath: string;
   error?: string;
+}
+
+export interface OpenRouterCompletionResponse {
+  content: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  cost: number;
+  model: string;
 }
 

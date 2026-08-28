@@ -1,0 +1,37 @@
+/**
+ * Centralized Application Defaults & Threshold Constants
+ */
+
+export const APP_DEFAULTS = {
+  // Script Matching
+  MATCH_THRESHOLD: 0.85,
+  MAX_NGRAM_BIGRAMS_PER_LINE: 80,
+
+  // LLM Context Window
+  MAX_CONTEXT_LINES: 10,
+  RETAIN_CONTEXT_LINES: 5,
+  MAX_CHARS_PER_LINE: 300,
+
+  // Textractor
+  TEXTRACTOR_DEBOUNCE_MS: 250,
+  DEFAULT_TEXTRACTOR_PATH: "C:\\Program Files\\Textractor\\x86\\TextractorCLI.exe",
+
+  // OCR
+  OCR_DEFAULT_SCALE_PERCENT: 100,
+  OCR_DEFAULT_SCAN_INTERVAL_MS: 350,
+  OCR_SETTLE_TIME_MS: 250,
+  OCR_MOTION_SENSITIVITY: 3,
+
+  // Overlay
+  OVERLAY_FONT_SIZE: 22,
+  OVERLAY_SPEAKER_FONT_SIZE: 18,
+  OVERLAY_MESSAGE_FONT_SIZE: 22,
+  OVERLAY_BG_OPACITY: 75,
+  OVERLAY_MAX_EXPAND_RATIO: 2,
+
+  // Batch Translation
+  BATCH_LINES_PER_REQUEST: 15,
+  BATCH_CONCURRENCY: 2,
+  BATCH_TEMPERATURE: 0.3,
+  BATCH_DELAY_MS: 500,
+} as const;

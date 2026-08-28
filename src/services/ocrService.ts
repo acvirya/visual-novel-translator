@@ -1,14 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { OcrEngineStatus, OcrRegion, OcrScanResult, OcrStabilityConfig } from "../types";
 import { useOcrStore } from "../stores/useOcrStore";
-import { useTranslationStore } from "../stores/useTranslationStore";
 import { executePreprocessingPipeline, cleanSpeakerName } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
 
 export class OcrService {
-  private static scanTimer: any = null;
+  private static scanTimer: ReturnType<typeof setTimeout> | null = null;
   private static isProcessing = false;
   private static lastSentText = { speaker: "", message: "" };
+  private static consecutiveErrorCount = 0;
 
   /**
    * Auto-detect OneOCR files from Windows Snipping Tool directory
@@ -110,6 +110,7 @@ export class OcrService {
    */
   public static startAutoScan() {
     if (this.scanTimer) return;
+    this.consecutiveErrorCount = 0;
     useOcrStore.getState().setIsScanning(true);
     this.scheduleNextScan(10);
   }
@@ -122,6 +123,7 @@ export class OcrService {
       clearTimeout(this.scanTimer);
       this.scanTimer = null;
     }
+    this.consecutiveErrorCount = 0;
     this.isProcessing = false;
     useOcrStore.getState().setIsScanning(false);
   }
@@ -144,7 +146,15 @@ export class OcrService {
       return;
     }
 
+    // Skip scanning if no regions are configured (M9)
+    if (!store.regions || store.regions.length === 0) {
+      this.scheduleNextScan(1000);
+      return;
+    }
+
     this.isProcessing = true;
+    let nextDelay: number | undefined = undefined;
+
     try {
       const stabilityConfig: OcrStabilityConfig = {
         enableMotionDetection: store.enableMotionDetection,
@@ -160,6 +170,7 @@ export class OcrService {
         stabilityConfig
       );
 
+      this.consecutiveErrorCount = 0;
       store.setScanResult(result);
 
       // Preprocess and forward to Translation pipeline if dialogue is settled and changed
@@ -172,19 +183,20 @@ export class OcrService {
 
       if (hasText && isSettled && hasChanged) {
         this.lastSentText = { speaker: cleanSpk, message: cleanMsg };
-        const translationStore = useTranslationStore.getState();
-        if (!translationStore.isPaused) {
-          translationManager.translate({
-            speaker: cleanSpk || undefined,
-            message: cleanMsg,
-          });
-        }
+        translationManager.translate({
+          speaker: cleanSpk || undefined,
+          message: cleanMsg,
+          sourceType: "ocr",
+        });
       }
     } catch (err: any) {
+      this.consecutiveErrorCount++;
       store.setScanError(err?.message || String(err));
+      // Exponential backoff up to 5000ms on repeated errors (H4)
+      nextDelay = Math.min(5000, store.scanInterval * Math.pow(1.5, Math.min(this.consecutiveErrorCount, 6)));
     } finally {
       this.isProcessing = false;
-      this.scheduleNextScan();
+      this.scheduleNextScan(nextDelay);
     }
   }
 
@@ -213,6 +225,13 @@ export class OcrService {
     } catch (err) {
       console.warn("Failed to close region selector overlay:", err);
     }
+  }
+
+  /**
+   * Dispose and cleanup all running scans and resources
+   */
+  public static dispose(): void {
+    this.stopAutoScan();
   }
 }
 

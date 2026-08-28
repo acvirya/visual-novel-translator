@@ -34,32 +34,33 @@ export interface BatchState {
 
 export const useBatchStore = create<BatchState>((set) => {
   const savedModel = localStorage.getItem("vn_batch_selected_model") || "openai/gpt-4o-mini";
-  const savedLines = Number(localStorage.getItem("vn_batch_lines_per_batch")) || 10;
+  const savedLines = Number(localStorage.getItem("vn_batch_lines_per_batch") ?? "10");
   const rawMaxBatch = localStorage.getItem("vn_batch_max_batch_context") ?? localStorage.getItem("vn_batch_max_context_lines");
   const savedMaxBatchCtx = rawMaxBatch !== null && !isNaN(Number(rawMaxBatch)) ? Number(rawMaxBatch) : 2;
 
   const rawRetainBatch = localStorage.getItem("vn_batch_retain_batch_context") ?? localStorage.getItem("vn_batch_retain_context_lines");
   const savedRetainBatchCtx = rawRetainBatch !== null && !isNaN(Number(rawRetainBatch)) ? Number(rawRetainBatch) : 1;
 
-  const savedConcurrency = Number(localStorage.getItem("vn_batch_concurrency")) || 2;
-  const savedDelay = Number(localStorage.getItem("vn_batch_delay_ms")) || 300;
-  const savedTimeoutMinutes = Number(localStorage.getItem("vn_batch_timeout_minutes")) || 10;
-  const savedMaxBackoff = Number(localStorage.getItem("vn_batch_max_backoff_seconds")) || 30;
+  const savedConcurrency = Number(localStorage.getItem("vn_batch_concurrency") ?? "2");
+  const savedDelay = Number(localStorage.getItem("vn_batch_delay_ms") ?? "300");
+  const savedTimeoutMinutes = Number(localStorage.getItem("vn_batch_timeout_minutes") ?? "10");
+  const savedMaxBackoff = Number(localStorage.getItem("vn_batch_max_backoff_seconds") ?? "30");
   const savedAutoContinue = localStorage.getItem("vn_batch_auto_continue") !== "false";
   const savedTranslateExplicitOnly = localStorage.getItem("vn_batch_translate_explicit_only") === "true";
   const savedOverrideRaw = localStorage.getItem("vn_batch_override_raw") !== "false";
   const savedOutputDir = localStorage.getItem("vn_batch_output_dir") || "";
+  const savedTemp = Number(localStorage.getItem("vn_batch_temperature") ?? "0.3");
 
   const initialSettings: BatchSettings = {
-    linesPerBatch: savedLines,
+    linesPerBatch: isNaN(savedLines) || savedLines < 1 ? 10 : savedLines,
     maxBatchContext: savedMaxBatchCtx,
     retainBatchContext: savedRetainBatchCtx,
-    concurrency: savedConcurrency,
+    concurrency: isNaN(savedConcurrency) || savedConcurrency < 1 ? 2 : savedConcurrency,
     modelId: savedModel,
-    temperature: 0.3,
-    delayMs: savedDelay,
-    timeoutMinutes: savedTimeoutMinutes,
-    maxBackoffSeconds: savedMaxBackoff,
+    temperature: isNaN(savedTemp) || savedTemp < 0 ? 0.3 : savedTemp,
+    delayMs: isNaN(savedDelay) || savedDelay < 0 ? 300 : savedDelay,
+    timeoutMinutes: isNaN(savedTimeoutMinutes) || savedTimeoutMinutes < 1 ? 10 : savedTimeoutMinutes,
+    maxBackoffSeconds: isNaN(savedMaxBackoff) || savedMaxBackoff < 1 ? 30 : savedMaxBackoff,
     autoContinueUntilCompleted: savedAutoContinue,
     translateExplicitOnly: savedTranslateExplicitOnly,
     overrideRawWithPreprocessed: savedOverrideRaw,
@@ -103,6 +104,7 @@ export const useBatchStore = create<BatchState>((set) => {
       set((state) => {
         const next = { ...state.settings, ...partial };
         if (partial.modelId !== undefined) localStorage.setItem("vn_batch_selected_model", partial.modelId);
+        if (partial.temperature !== undefined) localStorage.setItem("vn_batch_temperature", String(partial.temperature));
         if (partial.linesPerBatch !== undefined) localStorage.setItem("vn_batch_lines_per_batch", String(partial.linesPerBatch));
         if (partial.maxBatchContext !== undefined) localStorage.setItem("vn_batch_max_batch_context", String(partial.maxBatchContext));
         if (partial.retainBatchContext !== undefined) localStorage.setItem("vn_batch_retain_batch_context", String(partial.retainBatchContext));

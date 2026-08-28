@@ -3,6 +3,7 @@ import { PreprocessingStep, PreprocessingSource } from "../../types";
 import {
   DEFAULT_PREPROCESSING_SOURCES,
   executePreprocessingPipeline,
+  invalidateCustomRulesCache,
 } from "../../utils/textPreprocessor";
 import {
   Plus,
@@ -36,9 +37,10 @@ export const CustomReplacementRulesView: React.FC = () => {
   );
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Save custom rules to localStorage
+  // Save custom rules to localStorage and invalidate high-speed in-memory cache
   useEffect(() => {
     localStorage.setItem("vn_custom_replacement_rules", JSON.stringify(customRules));
+    invalidateCustomRulesCache();
   }, [customRules]);
 
   // Compute live output using the universal pipeline

@@ -1,0 +1,125 @@
+import { invoke } from "@tauri-apps/api/core";
+import {
+  TextractorProcessInfo,
+  MonitorInfo,
+  OcrScanResult,
+  OcrStabilityConfig,
+  CaptureRegion,
+  OcrEngineStatus,
+  OpenRouterCompletionResponse,
+} from "../types";
+
+/**
+ * Type-Safe Bridge for all Backend Tauri Commands
+ */
+export const TauriBridge = {
+  // Monitor & Overlay Controls
+  getMonitors: (): Promise<MonitorInfo[]> =>
+    invoke<MonitorInfo[]>("get_monitors"),
+
+  showOverlay: (monitorName?: string | null): Promise<void> =>
+    invoke("show_overlay", { monitorName }),
+
+  hideOverlay: (): Promise<void> =>
+    invoke("hide_overlay"),
+
+  setOverlayClickThrough: (enable: boolean): Promise<void> =>
+    invoke("set_overlay_click_through", { enable }),
+
+  setOverlayEditMode: (isEditing: boolean): Promise<void> =>
+    invoke("set_overlay_edit_mode", { isEditing }),
+
+  openRegionSelectorOverlay: (monitorName?: string | null): Promise<void> =>
+    invoke("open_region_selector_overlay", { monitorName }),
+
+  closeRegionSelectorOverlay: (): Promise<void> =>
+    invoke("close_region_selector_overlay"),
+
+  // Textractor Sidecar
+  listTargetProcesses: (): Promise<TextractorProcessInfo[]> =>
+    invoke<TextractorProcessInfo[]>("list_target_processes"),
+
+  findTextractorInstallation: (): Promise<string | null> =>
+    invoke<string | null>("find_textractor_installation"),
+
+  startTextractor: (exePath: string, targetPid: number): Promise<void> =>
+    invoke("start_textractor", { exePath, targetPid }),
+
+  sendTextractorCommand: (command: string): Promise<void> =>
+    invoke("send_textractor_command", { command }),
+
+  stopTextractor: (): Promise<void> =>
+    invoke("stop_textractor"),
+
+  // OCR Subsystem
+  detectOneOcrPath: (customPath?: string | null): Promise<OcrEngineStatus> =>
+    invoke<OcrEngineStatus>("detect_oneocr_path", { customPath }),
+
+  captureRegionsPreview: (regions: CaptureRegion[]): Promise<{ [regionId: string]: string }> =>
+    invoke<{ [regionId: string]: string }>("capture_regions_preview", { regions }),
+
+  runOneOcrScan: (
+    regions: CaptureRegion[],
+    scalePercent: number,
+    customPath?: string | null,
+    stabilityConfig?: OcrStabilityConfig | null
+  ): Promise<OcrScanResult> =>
+    invoke<OcrScanResult>("run_oneocr_scan", {
+      regions,
+      scalePercent,
+      customPath,
+      stabilityConfig,
+    }),
+
+  // Translation & Networking
+  translateFreeMt: (
+    text: string,
+    sourceLang: string,
+    targetLang: string,
+    provider: string,
+    apiKey?: string | null
+  ): Promise<string> =>
+    invoke<string>("translate_free_mt", {
+      text,
+      sourceLang,
+      targetLang,
+      provider,
+      apiKey,
+    }),
+
+  openrouterChatCompletion: (
+    apiKey: string,
+    payloadJson: string,
+    timeoutSecs?: number
+  ): Promise<OpenRouterCompletionResponse> =>
+    invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
+      apiKey,
+      payloadJson,
+      timeoutSecs: timeoutSecs || 60,
+    }),
+
+  // File Dialogs & Disk I/O
+  showOpenScriptDialog: (): Promise<[string, string] | null> =>
+    invoke<[string, string] | null>("show_open_script_dialog"),
+
+  showSaveScriptDialog: (defaultName?: string | null): Promise<string | null> =>
+    invoke<string | null>("show_save_script_dialog", { defaultName }),
+
+  showPickFilesDialog: (): Promise<Array<[string, string, number]>> =>
+    invoke<Array<[string, string, number]>>("show_pick_files_dialog"),
+
+  showPickDirectoryDialog: (): Promise<string | null> =>
+    invoke<string | null>("show_pick_directory_dialog"),
+
+  saveScriptFile: (path: string, content: string): Promise<void> =>
+    invoke("save_script_file", { path, content }),
+
+  readScriptFileByPath: (path: string): Promise<string | null> =>
+    invoke<string | null>("read_script_file_by_path", { path }),
+
+  appendDebugLog: (fileName: string, content: string): Promise<void> =>
+    invoke("append_debug_log", { fileName, content }),
+
+  openFilesInDefaultApp: (path: string): Promise<void> =>
+    invoke("open_file_in_default_app", { path }),
+};

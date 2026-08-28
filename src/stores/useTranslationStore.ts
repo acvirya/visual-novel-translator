@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { TranslationLogItem } from "../types";
 import { LlmContextSettings } from "../services/translationManager";
 import { scriptManagerService } from "../services/scriptManagerService";
+import { settingsManager } from "../services/settingsManager";
 
 export interface TranslationState {
   liveLogs: TranslationLogItem[];
@@ -40,7 +41,7 @@ export const useTranslationStore = create<TranslationState>((set) => {
 
   return {
     liveLogs: [],
-    isPaused: true,
+    isPaused: false,
     selectedProvider: savedProvider,
     useScriptOnly: savedUseScriptOnly,
     scriptThreshold: savedThreshold,
@@ -56,6 +57,7 @@ export const useTranslationStore = create<TranslationState>((set) => {
     setIsPaused: (isPaused) => set({ isPaused }),
     setSelectedProvider: (selectedProvider) => {
       localStorage.setItem("vn_selected_model", selectedProvider);
+      settingsManager.updateTranslation({ liveModel: selectedProvider, activeProviderId: selectedProvider });
       set({ selectedProvider });
     },
     setUseScriptOnly: (useScriptOnly) => {

@@ -2,10 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { TextractorProcessInfo, TextractorMessage } from "../types";
 import { useTextractorStore } from "../stores/useTextractorStore";
-import { useTranslationStore } from "../stores/useTranslationStore";
 import { cleanSpeakerName, executePreprocessingPipeline, extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
-import { overlayChannel } from "../utils/overlayChannel";
 
 export interface EngineHookPreset {
   name: string;
@@ -71,8 +69,17 @@ export const POPULAR_HOOK_PRESETS: EngineHookPreset[] = [
   },
 ];
 
-export const DEFAULT_TEXTRACTOR_PATH = "D:\\Program Files\\Textractor\\x86\\TextractorCLI.exe";
-export const DEFAULT_TEXTRACTOR_DIR = "D:\\Program Files\\Textractor";
+export const DEFAULT_TEXTRACTOR_PATH = "C:\\Program Files\\Textractor\\x86\\TextractorCLI.exe";
+export const DEFAULT_TEXTRACTOR_DIR = "C:\\Program Files\\Textractor";
+
+export async function detectTextractorPath(): Promise<string | null> {
+  try {
+    const found = await invoke<string | null>("find_textractor_installation");
+    return found || null;
+  } catch {
+    return null;
+  }
+}
 
 // Normalizes multi-line packet bursts:
 // If every line is identical, takes only 1 line.
@@ -112,7 +119,8 @@ export function isDistinctNewLine(current: string, incoming: string): boolean {
   // If one is not a substring of the other and they have zero overlap
   if (!cur.includes(inc) && !inc.includes(cur)) {
     let hasOverlap = false;
-    for (let len = Math.min(cur.length, inc.length); len >= 2; len--) {
+    const maxLen = Math.min(cur.length, inc.length, 60);
+    for (let len = maxLen; len >= 2; len--) {
       if (cur.slice(-len) === inc.slice(0, len)) {
         hasOverlap = true;
         break;
@@ -144,8 +152,9 @@ export function mergeDialogueFragments(current: string, incoming: string): strin
     return inc;
   }
 
-  // 3. Suffix-prefix overlap merge (e.g. cur: "かような機会があれば、" inc: "あれば、是が非でも」")
-  for (let len = Math.min(cur.length, inc.length); len >= 2; len--) {
+  // 3. Suffix-prefix overlap merge (bounded to max 60 characters)
+  const maxLen = Math.min(cur.length, inc.length, 60);
+  for (let len = maxLen; len >= 2; len--) {
     const curEnd = cur.slice(-len);
     const incStart = inc.slice(0, len);
     if (curEnd === incStart) {
@@ -170,9 +179,10 @@ export function mergeDialogueFragments(current: string, incoming: string): strin
 
 export class TextractorService {
   private static unlistenFn: UnlistenFn | null = null;
+  private static unlistenTermFn: UnlistenFn | null = null;
 
   // Unified Multi-Thread Coordinator State
-  private static syncTimer: any = null;
+  private static syncTimer: ReturnType<typeof setTimeout> | null = null;
   private static syncFirstThreadRole: "speaker" | "dialogue" | "combined" | null = null;
   private static bufferedSpeaker = "";
   private static bufferedDialogue = "";
@@ -190,12 +200,30 @@ export class TextractorService {
         this.handleIncomingMessage(event.payload);
       });
 
-      await listen<{ pid: number }>("textractor-process-terminated", (_event) => {
+      this.unlistenTermFn = await listen<{ pid: number }>("textractor-process-terminated", (_event) => {
         useTextractorStore.getState().setIsHooked(false);
         useTextractorStore.getState().setAttachedPid(null);
       });
     } catch (err) {
       console.warn("Failed to register Textractor global event listener:", err);
+    }
+  }
+
+  /**
+   * Cleanup event listeners
+   */
+  public static cleanupListener() {
+    if (this.syncTimer) {
+      clearTimeout(this.syncTimer);
+      this.syncTimer = null;
+    }
+    if (this.unlistenFn) {
+      this.unlistenFn();
+      this.unlistenFn = null;
+    }
+    if (this.unlistenTermFn) {
+      this.unlistenTermFn();
+      this.unlistenTermFn = null;
     }
   }
 
@@ -258,6 +286,7 @@ export class TextractorService {
   public static async stopSidecar(): Promise<{ success: boolean }> {
     try {
       await invoke("stop_textractor");
+      this.cleanupListener();
       useTextractorStore.getState().resetTextractor();
       return { success: true };
     } catch (error) {
@@ -356,7 +385,7 @@ export class TextractorService {
 
     // 2. Process message according to designated Thread Role (robust matching)
     const isCombined = store.combinedThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && c.role === "combined");
-    const isMessage = store.messageThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && (c.role === "dialogue" || (c as any).role === "message"));
+    const isMessage = store.messageThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && (c.role === "dialogue" || (c.role as string) === "message"));
     const isSpeaker = store.speakerThreadId === handle || store.capturedThreads.some((c) => c.threadId === handle && c.role === "speaker");
 
     if (!isCombined && !isMessage && !isSpeaker) return;
@@ -450,29 +479,13 @@ export class TextractorService {
     store.setLatestSpeaker(spk);
     store.setLatestMessage(msg);
 
-    // Rule 4: Send Raw Japanese Text immediately to Overlay with dialogueId
-    if (store.autoForwardToOverlay !== false) {
-      overlayChannel.send({
-        type: "DIALOGUE_UPDATE",
-        dialogue: {
-          id: dialogueId,
-          speaker: spk || undefined,
-          translatedSpeaker: spk || undefined,
-          message: msg,
-          translatedMessage: "",
-        },
-      });
-    }
-
-    // Rule 4: Forward to Live Translation with dialogueId
-    const translationStore = useTranslationStore.getState();
-    if (!translationStore.isPaused) {
-      translationManager.translate({
-        id: dialogueId,
-        speaker: spk || undefined,
-        message: msg,
-      });
-    }
+    // Forward directly to Translation Pipeline (Single Point of Dispatch)
+    translationManager.translate({
+      id: dialogueId,
+      speaker: spk || undefined,
+      message: msg,
+      sourceType: "textractor",
+    });
   }
 
   /**
@@ -621,6 +634,13 @@ export class TextractorService {
     } else {
       store.setThreadLogs(new Map());
     }
+  }
+
+  /**
+   * Dispose and cleanup all Textractor listeners and processes
+   */
+  public static async dispose() {
+    await this.stopSidecar();
   }
 }
 

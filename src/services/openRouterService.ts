@@ -71,36 +71,81 @@ export const BUILTIN_STYLE_PRESETS: PromptStylePreset[] = [
   {
     id: "natural_anime",
     name: "Natural Anime & VN Localization (Default)",
-    description: "Natural dialogue flow, preserves character personality, emotional nuance, and Japanese honorifics",
-    instructions: "Translate accurately, preserving character personality, emotional nuance, tone, and Japanese honorifics (-san, -kun, -chan, -senpai, -sensei, -sama) where appropriate. Ensure dialogue flows smoothly and naturally without stiff phrasing.",
+    description: "Fluent dialogue flow, preserves character personality, Japanese honorifics, and expressive punctuation",
+    instructions: `1. General Tone & Dialogue Flow:
+- Deliver fluent, dynamic, and idiomatic dialogue that sounds natural to native speakers while strictly preserving the emotional weight, subtext, and pacing of the original Japanese visual novel.
+- Distinguish clearly between internal monologues (reflective, introspective) and spoken lines (punchy, expressive, conversational).
+
+2. Japanese Honorifics & Addressing Register:
+- Preserve standard Japanese honorific suffixes attached via hyphens (e.g., -san, -kun, -chan, -senpai, -sensei, -sama, -dono, -tan, -shi).
+- Preserve cultural kinship addressing forms when used as names or titles (e.g., Onii-san, Onee-chan, Senpai, Sensei) unless the glossary specifies otherwise.
+- Reflect the attitude and politeness level behind first/second-person pronouns (Ore vs. Boku vs. Watashi vs. Atashi; Anta vs. Omae vs. Anata vs. Kisama) through word choice and sentence stance.
+
+3. Character Archetypes & Personality Nuances:
+- Faithfully express distinct character archetypes (e.g., Tsundere, Kuudere, Gyaru, Ojou-sama, Bokukko, Chuunibyou, Delinquent, Polite Kouhai).
+- Do not flatten unique verbal tics, polite keigo/desu-masu speech, or deliberate casual roughness into generic, uniform English.
+
+4. Punctuation & Expressive Emotion:
+- Retain expressive punctuation conventions: stuttering/hesitation (e.g., "W-What...", "I-I didn't..."), emotional ellipses ("……"), exclamation-question combos ("！？" -> "!?"), wave dashes ("~" / "〜"), and dramatic trailing em-dashes ("――").`,
     isBuiltIn: true,
   },
   {
     id: "literal_accurate",
     name: "Literal & Faithful",
     description: "Strict sentence structure, high grammatical fidelity, ideal for language learners and close reading",
-    instructions: "Translate faithfully and accurately to the original sentence structure and meaning. Preserve grammatical nuances, idioms with direct equivalents, and avoid excessive localization or slang deviations.",
+    instructions: `1. Strict Semantic & Syntactic Fidelity:
+- Translate with utmost precision and grammatical fidelity to the original Japanese sentence structure and clause relationships.
+- Prioritize exact semantic meaning and factual accuracy over creative embellishment or westernized colloquial adaptation.
+
+2. Terminology & Metaphor Handling:
+- Retain Japanese cultural idioms, proverbs, and metaphorical expressions with their direct linguistic equivalents rather than replacing them with western pop-culture analogies.
+- Translate formal keigo registers, passive constructions, and causative forms as closely as possible to their literal Japanese grammatical intent.
+
+3. Name and Kinship Preservation:
+- Keep all character names, honorific suffixes (-san, -kun, -chan, -sama, etc.), and kinship terms (Onii-chan, Onee-sama, Ojisan, Oba-san) in standard Hepburn Romaji.
+- Never convert traditional Japanese family addressing into western equivalents (e.g., do not translate 'Onii-chan' to 'Bro' or 'Brother').`,
     isBuiltIn: true,
   },
   {
     id: "light_novel",
     name: "Light Novel & Literary Prose",
     description: "Polished, evocative narrative prose with rich descriptive flow for emotional & deep visual novels",
-    instructions: "Translate with polished literary flair suitable for high-quality light novels. Render narrative prose evocatively while keeping dialogue vivid, expressive, and true to character voices.",
+    instructions: `1. Evocative Literary Atmosphere:
+- Render descriptive narrative prose with rich, evocative, and sensory prose style reminiscent of professionally published light novels and literary fiction.
+- Employ elevated vocabulary, elegant rhythmic pacing, and vivid descriptive imagery to heighten tension, romance, or melancholy.
+
+2. Dynamic Narrative vs. Character Dialogue:
+- Maintain a sharp stylistic distinction between polished descriptive prose and vivid, character-driven spoken dialogue.
+- Elevate poetic, philosophical, and dramatic passages while ensuring character conversations remain natural, emotionally resonant, and true to character voices.
+
+3. Emotional Subtext & Pacing:
+- Capture subtle psychological tension, unspoken romantic tension, and dramatic pauses with graceful prose flow.`,
     isBuiltIn: true,
   },
   {
     id: "rpg_fantasy",
     name: "RPG & High Fantasy Lore",
     description: "Heroic, dramatic styling with attention to titles, spells, factions, and worldbuilding terminology",
-    instructions: "Translate with atmospheric fantasy and adventure tone. Use fitting vocabulary for titles, magic spells, archaic speech, and world lore without sacrificing clarity.",
+    instructions: `1. Worldbuilding & Heroic Atmosphere:
+- Translate with an epic, atmospheric tone suitable for fantasy adventures, kingdom chronicles, and magic battle visual novels.
+- Utilize fitting heroic terminology, chivalric registers for knights and royalty, and theatrical archaic flair for ancient deities, demons, and sorcerers.
+
+2. Magic Spells, Techniques & Factions:
+- Translate martial arts techniques, magic chant invocations, noble titles, and guild/faction ranks with grand, consistent, and impactful naming conventions.
+- When kanji terms possess furigana or fantasy rubies, prioritize the intended lore meaning and heroic impact.`,
     isBuiltIn: true,
   },
   {
     id: "humorous_vibrant",
     name: "Vibrant & Dynamic Slang",
     description: "Expressive, witty localization for comedy, moe, and slice-of-life visual novels",
-    instructions: "Translate with witty, punchy, and modern colloquial dialogue fitting for comedy and slice-of-life visual novels. Make banter dynamic and humorous while respecting original character intent.",
+    instructions: `1. Comedic Timing & Punchy Banter:
+- Prioritize sharp comedic timing, witty banter, humorous exasperation, playful teasing, and dynamic tsukkomi (straight man) vs. boke (funny man) chemistry.
+- Adapt slapstick gags and comedic exaggerations so they hit with maximum comedic impact in the target language.
+
+2. Modern Colloquialisms & Slang:
+- Employ natural modern conversational slang, internet humor, and gaming expressions where appropriate to the character's personality and the scene's comedic context.
+- Keep the dialogue lively, colorful, and engaging without drifting away from the original scene intent.`,
     isBuiltIn: true,
   },
 ];
@@ -339,55 +384,65 @@ export function formatModelPricing(pricing: OpenRouterModelPricing): {
 }
 
 let cachedModels: OpenRouterModel[] | null = null;
+let activeModelsFetchPromise: Promise<OpenRouterModel[]> | null = null;
 
 /**
- * Fetch available models from OpenRouter public API (No key required) with caching
+ * Fetch available models from OpenRouter public API (No key required) with caching & deduplicated in-flight promise
  */
 export async function fetchOpenRouterModels(forceRefresh = false): Promise<OpenRouterModel[]> {
   if (!forceRefresh && cachedModels && cachedModels.length > 50) {
     return cachedModels;
   }
-
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/models");
-    if (!response.ok) {
-      throw new Error(`Failed to fetch models (HTTP ${response.status})`);
-    }
-    const json = await response.json();
-    if (Array.isArray(json.data) && json.data.length > 0) {
-      const parsedModels = json.data.map((m: any) => ({
-        id: m.id,
-        name: m.name || m.id,
-        description: m.description || "",
-        context_length: m.context_length || 0,
-        pricing: {
-          prompt: m.pricing?.prompt || "0",
-          completion: m.pricing?.completion || "0",
-        },
-      }));
-      cachedModels = parsedModels;
-      try {
-        localStorage.setItem(OPENROUTER_STORAGE_KEYS.CACHED_MODELS, JSON.stringify(parsedModels));
-      } catch {}
-      return parsedModels;
-    }
-  } catch (error: any) {
-    console.warn("Failed to fetch live OpenRouter models, trying cache:", error);
+  if (activeModelsFetchPromise) {
+    return activeModelsFetchPromise;
   }
 
-  // Fallback to localStorage cache if network fails
-  try {
-    const stored = localStorage.getItem(OPENROUTER_STORAGE_KEYS.CACHED_MODELS);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        cachedModels = parsed;
-        return parsed;
+  activeModelsFetchPromise = (async () => {
+    try {
+      const response = await fetch("https://openrouter.ai/api/v1/models");
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models (HTTP ${response.status})`);
       }
+      const json = await response.json();
+      if (Array.isArray(json.data) && json.data.length > 0) {
+        const parsedModels: OpenRouterModel[] = json.data.map((m: any) => ({
+          id: m.id,
+          name: m.name || m.id,
+          description: m.description || "",
+          context_length: m.context_length || 0,
+          pricing: {
+            prompt: m.pricing?.prompt || "0",
+            completion: m.pricing?.completion || "0",
+          },
+        }));
+        cachedModels = parsedModels;
+        try {
+          localStorage.setItem(OPENROUTER_STORAGE_KEYS.CACHED_MODELS, JSON.stringify(parsedModels));
+        } catch {}
+        return parsedModels;
+      }
+    } catch (error: any) {
+      console.warn("Failed to fetch live OpenRouter models, trying cache:", error);
     }
-  } catch {}
 
-  return cachedModels || [];
+    // Fallback to localStorage cache if network fails
+    try {
+      const stored = localStorage.getItem(OPENROUTER_STORAGE_KEYS.CACHED_MODELS);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          cachedModels = parsed;
+          return parsed;
+        }
+      }
+    } catch {}
+
+    return cachedModels || [];
+  })().finally(() => {
+    activeModelsFetchPromise = null;
+  });
+
+  return activeModelsFetchPromise;
 }
 
 const ENDPOINTS_CACHE_MAP: Map<string, OpenRouterEndpoint[]> = new Map();
@@ -888,58 +943,8 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
         continue;
       }
 
-      // If it's not a rate-limit/transient or max retries reached, break
       logger.error("OpenRouter::API", `OpenRouter API error: ${errStr}`);
       break;
-    }
-  }
-
-  // If native failed or was unavailable, try fallback fetch as last resort
-  if (!content) {
-    logger.warn("OpenRouter::API", "Native completion failed or unavailable. Attempting fallback HTTP fetch...");
-    try {
-      const fetchPayload: any = {
-        model: modelId,
-        messages,
-        temperature,
-        max_tokens: dynamicMaxTokens,
-      };
-
-      if (activeProviders.length > 0) {
-        fetchPayload.provider = {
-          allow_fallbacks: true,
-          only: activeProviders,
-        };
-      }
-
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${cleanKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://github.com/acvirya/visual-novel-translator",
-          "X-Title": "VN Translator Desktop",
-        },
-        body: JSON.stringify(fetchPayload),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        content = data.choices?.[0]?.message?.content?.trim() || "";
-        exactPromptTokens = data.usage?.prompt_tokens || 0;
-        exactCompletionTokens = data.usage?.completion_tokens || 0;
-        exactCachedTokens = data.usage?.prompt_tokens_details?.cached_tokens || 0;
-        exactCost = typeof data.usage?.total_cost === "number" ? data.usage.total_cost : (typeof data.usage?.cost === "number" ? data.usage.cost : 0);
-      } else {
-        const errBody = await response.text().catch(() => "");
-        const statusMsg = `Fallback fetch returned HTTP ${response.status}: ${errBody}`;
-        logger.error("OpenRouter::API", statusMsg);
-        if (!lastErr) lastErr = statusMsg;
-      }
-    } catch (fetchErr: any) {
-      const fetchErrMsg = `Fallback fetch network error: ${fetchErr?.message || fetchErr}`;
-      logger.error("OpenRouter::API", fetchErrMsg);
-      if (!lastErr) lastErr = fetchErrMsg;
     }
   }
 

@@ -1,5 +1,6 @@
 import { OverlayConfig } from "../types";
 import { OverlayDialogueMessage } from "./overlayChannel";
+import { settingsManager } from "../services/settingsManager";
 
 export interface TemplatePreset {
   id: string;
@@ -903,14 +904,15 @@ export function sanitizeOverlayHtml(html: string): string {
   // 1. Remove <script> tags and contents
   let clean = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
 
-  // 2. Remove <iframe>, <object>, <embed>, <applet>, <form>, <link>, <meta> tags
-  clean = clean.replace(/<\/?(iframe|object|embed|applet|form|link|meta|base)\b[^>]*>/gi, "");
+  // 2. Remove <iframe>, <object>, <embed>, <applet>, <form>, <link>, <meta>, <base>, <svg>, <math> tags
+  clean = clean.replace(/<\/?(iframe|object|embed|applet|form|link|meta|base|svg|math)\b[^>]*>/gi, "");
 
-  // 3. Remove inline event handlers like onclick=, onerror=, onload=, etc.
-  clean = clean.replace(/\son[a-z]+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, "");
+  // 3. Remove inline event handlers like onclick=, onerror=, onload=, onmouseover=, etc.
+  clean = clean.replace(/\son[a-z0-9_-]+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, "");
 
-  // 4. Disallow javascript: pseudo protocols in href/src
-  clean = clean.replace(/(href|src)\s*=\s*(?:'javascript:[^']*'|"javascript:[^"]*"|javascript:[^\s>]+)/gi, '$1="#"');
+  // 4. Disallow javascript: and vbscript: pseudo protocols in attributes
+  clean = clean.replace(/(href|src|action|data)\s*=\s*(?:'javascript:[^']*'|"javascript:[^"]*"|javascript:[^\s>]+)/gi, '$1="#"');
+  clean = clean.replace(/(href|src|action|data)\s*=\s*(?:'vbscript:[^']*'|"vbscript:[^"]*"|vbscript:[^\s>]+)/gi, '$1="#"');
 
   return clean;
 }
@@ -932,24 +934,19 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
-const USER_PRESETS_STORAGE_KEY = "vn_overlay_user_presets_v1";
-
 export function loadUserCustomPresets(): TemplatePreset[] {
   try {
-    const raw = localStorage.getItem(USER_PRESETS_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
+    const list = settingsManager.getOverlay()?.userCustomPresets;
+    if (Array.isArray(list)) return list;
   } catch (e) {
-    console.warn("Failed to load custom user presets:", e);
+    console.error("Failed to load custom user presets:", e);
   }
   return [];
 }
 
 export function saveUserCustomPresets(presets: TemplatePreset[]) {
   try {
-    localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    settingsManager.updateOverlay({ userCustomPresets: presets });
   } catch (e) {
     console.error("Failed to save custom user presets:", e);
   }
@@ -1000,5 +997,17 @@ export function getOverlayAnimationCss(animationMode?: string, speedMs?: number)
   animation: vnTextBlurReveal ${duration}ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 `;
+}
+
+/**
+ * Sanitizes user-supplied custom CSS, stripping javascript / behavioral expressions
+ */
+export function sanitizeCustomCss(css: string): string {
+  if (!css) return "";
+  return css
+    .replace(/expression\s*\(.*?\)/gi, "")
+    .replace(/behavior\s*:[^;}]*/gi, "")
+    .replace(/url\s*\(\s*["']?\s*javascript:[^)]*?\)/gi, "none")
+    .replace(/@import\s+[^;]+;/gi, "");
 }
 

@@ -3,6 +3,7 @@ import {
   TextractorService,
   POPULAR_HOOK_PRESETS,
   EngineHookPreset,
+  detectTextractorPath,
 } from "../../services/textractorService";
 import { useTextractorStore } from "../../stores/useTextractorStore";
 import {
@@ -989,9 +990,35 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
               </div>
 
               <div>
-                <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
-                  TextractorCLI.exe File Path (Auto-resolved from drive D:\ and C:\)
-                </label>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "3px" }}>
+                  <label style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                    TextractorCLI.exe File Path (Auto-resolved from standard Program Files & %LOCALAPPDATA%)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const detected = await detectTextractorPath();
+                      if (detected) {
+                        setExePath(detected);
+                      }
+                    }}
+                    style={{
+                      fontSize: "10.5px",
+                      padding: "2px 8px",
+                      background: "rgba(78, 115, 223, 0.15)",
+                      border: "1px solid rgba(78, 115, 223, 0.4)",
+                      color: "var(--accent-primary)",
+                      borderRadius: "var(--radius-sm)",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                  >
+                    <Search size={11} />
+                    <span>Auto Detect</span>
+                  </button>
+                </div>
                 <input
                   type="text"
                   value={exePath}

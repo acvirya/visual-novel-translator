@@ -8,6 +8,8 @@ import { invoke } from "@tauri-apps/api/core";
 class ShortcutService {
   private isInitialized = false;
   private isOverlayClickThrough = true;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastRegisteredKeys = { lockKey: "", pauseKey: "", ocrKey: "" };
 
   public async init() {
     if (this.isInitialized) return;
@@ -19,10 +21,38 @@ class ShortcutService {
       logger.warn("Shortcuts", `Failed to initialize global shortcuts: ${err}`);
     }
 
-    // Subscribe to settings changes to auto-update shortcuts
+    // Subscribe to settings changes to auto-update shortcuts with 300ms debounce
     settingsManager.subscribe(() => {
-      this.reloadShortcuts();
+      if (this.debounceTimer) clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => {
+        const general = settingsManager.getGeneral();
+        const currentKeys = {
+          lockKey: (general.hotkeyLockOverlay || "").trim(),
+          pauseKey: (general.hotkeyTogglePause || "").trim(),
+          ocrKey: (general.hotkeyOcrScan || "").trim(),
+        };
+
+        // Only reload if actual shortcut key combinations changed
+        if (
+          currentKeys.lockKey !== this.lastRegisteredKeys.lockKey ||
+          currentKeys.pauseKey !== this.lastRegisteredKeys.pauseKey ||
+          currentKeys.ocrKey !== this.lastRegisteredKeys.ocrKey
+        ) {
+          this.reloadShortcuts();
+        }
+      }, 300);
     });
+  }
+
+  /**
+   * Synchronize click-through state when changed externally (e.g. from UI edit mode toggles)
+   */
+  public setOverlayClickThrough(enable: boolean) {
+    this.isOverlayClickThrough = enable;
+  }
+
+  public getOverlayClickThrough(): boolean {
+    return this.isOverlayClickThrough;
   }
 
   public async reloadShortcuts() {
@@ -30,9 +60,11 @@ class ShortcutService {
       await unregisterAll();
 
       const general = settingsManager.getGeneral();
-      const lockKey = general.hotkeyLockOverlay?.trim();
-      const pauseKey = general.hotkeyTogglePause?.trim();
-      const ocrKey = general.hotkeyOcrScan?.trim();
+      const lockKey = general.hotkeyLockOverlay?.trim() || "";
+      const pauseKey = general.hotkeyTogglePause?.trim() || "";
+      const ocrKey = general.hotkeyOcrScan?.trim() || "";
+
+      this.lastRegisteredKeys = { lockKey, pauseKey, ocrKey };
 
       // 1. Lock/Unlock Overlay Click-Through
       if (lockKey) {
@@ -107,6 +139,21 @@ class ShortcutService {
     } catch (err) {
       logger.warn("Shortcuts", `Failed to reload global shortcuts: ${err}`);
     }
+  }
+
+  public async dispose() {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    try {
+      await unregisterAll();
+    } catch {}
+    this.isInitialized = false;
+  }
+
+  public async destroy() {
+    await this.dispose();
   }
 }
 

@@ -15,6 +15,7 @@ export interface TranslatePipelineOptions {
   targetLang?: string;
   providerId?: string; // "mt:google-translate", "mt:deepl-free", or OpenRouter model ID
   useScriptOnly?: boolean;
+  sourceType?: "textractor" | "ocr" | "manual" | "batch";
 }
 
 export interface TranslatePipelineResult {
@@ -54,8 +55,9 @@ class TranslationManager {
   private contextHistory: { user: string; assistant: string }[] = [];
   private queue: TranslationTask[] = [];
   private isProcessingQueue = false;
-  private isPausedInternal = true;
+  private isPausedInternal = false;
   private dialogueSeq = 0;
+  private lastUsedProviderId = "";
 
   public subscribe(callback: (item: TranslationLogItem) => void) {
     this.listeners.push(callback);
@@ -90,12 +92,12 @@ class TranslationManager {
   }
 
   public getMaxCharsPerLine(): number {
-    const val = parseInt(localStorage.getItem("vn_max_chars_per_line") || "250", 10);
-    return isNaN(val) ? 250 : val;
+    const t = settingsManager.getTranslation();
+    return t?.maxCharsPerLine ?? 250;
   }
 
   public setMaxCharsPerLine(val: number) {
-    localStorage.setItem("vn_max_chars_per_line", String(val));
+    settingsManager.updateTranslation({ maxCharsPerLine: val });
     useTranslationStore.getState().setContextSettings({
       ...this.getContextSettings(),
       maxCharsPerLine: val,
@@ -103,25 +105,26 @@ class TranslationManager {
   }
 
   public getContextSettings(): LlmContextSettings {
-    const max = parseInt(localStorage.getItem("vn_llm_max_context_lines") || "10", 10);
-    const retain = parseInt(localStorage.getItem("vn_llm_retain_context_lines") || "3", 10);
+    const t = settingsManager.getTranslation();
+    const max = t?.maxContextLines ?? 10;
+    const retain = t?.retainContextLines ?? 3;
     return {
-      maxContextLines: isNaN(max) || max < 1 ? 10 : max,
-      retainContextLines: isNaN(retain) || retain < 1 ? 3 : retain,
+      maxContextLines: max < 1 ? 10 : max,
+      retainContextLines: retain < 1 ? 3 : retain,
       maxCharsPerLine: this.getMaxCharsPerLine(),
     };
   }
 
   public setContextSettings(settings: Partial<LlmContextSettings>) {
-    if (settings.maxContextLines !== undefined) {
-      localStorage.setItem("vn_llm_max_context_lines", String(settings.maxContextLines));
+    const patch: any = {};
+    if (settings.maxContextLines !== undefined) patch.maxContextLines = settings.maxContextLines;
+    if (settings.retainContextLines !== undefined) patch.retainContextLines = settings.retainContextLines;
+    if (settings.maxCharsPerLine !== undefined) patch.maxCharsPerLine = settings.maxCharsPerLine;
+
+    if (Object.keys(patch).length > 0) {
+      settingsManager.updateTranslation(patch);
     }
-    if (settings.retainContextLines !== undefined) {
-      localStorage.setItem("vn_llm_retain_context_lines", String(settings.retainContextLines));
-    }
-    if (settings.maxCharsPerLine !== undefined) {
-      this.setMaxCharsPerLine(settings.maxCharsPerLine);
-    }
+
     const currentMax = settings.maxContextLines ?? this.getContextSettings().maxContextLines;
     const currentRetain = settings.retainContextLines ?? this.getContextSettings().retainContextLines;
 
@@ -135,11 +138,11 @@ class TranslationManager {
   }
 
   public getUseScriptOnly(): boolean {
-    return localStorage.getItem("vn_use_script_only") === "true";
+    return settingsManager.getTranslation()?.useScriptOnly ?? false;
   }
 
   public setUseScriptOnly(val: boolean) {
-    localStorage.setItem("vn_use_script_only", String(val));
+    settingsManager.updateTranslation({ useScriptOnly: val });
     useTranslationStore.getState().setUseScriptOnly(val);
   }
 
@@ -237,41 +240,47 @@ class TranslationManager {
     if (this.isProcessingQueue) return;
     this.isProcessingQueue = true;
 
-    while (this.queue.length > 0) {
-      if (this.isPausedInternal) {
-        break; // Wait until resumed
+    try {
+      while (this.queue.length > 0) {
+        if (this.isPausedInternal) {
+          break; // Wait until resumed
+        }
+
+        const task = this.queue.shift();
+        if (!task) break;
+
+        try {
+          const result = await this.executeTranslate(task.options, task.reqSeq);
+          task.resolve(result);
+        } catch (err: any) {
+          logger.error("TranslationManager", `Queue task failed: ${err?.message || err}`);
+          const errorItem: TranslationLogItem = {
+            id: `err_${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString(),
+            provider: "Error",
+            durationMs: 0,
+            name: task.options.speaker ? { source: task.options.speaker, translated: task.options.speaker } : undefined,
+            message: { source: task.options.message, translated: `[Error: ${err?.message || err}]` },
+          };
+          task.resolve({
+            success: false,
+            item: errorItem,
+            speaker: task.options.speaker,
+            translatedSpeaker: task.options.speaker,
+            message: task.options.message,
+            translatedMessage: `[Error: ${err?.message || err}]`,
+            provider: "Error",
+            durationMs: 0,
+          });
+        }
       }
-
-      const task = this.queue.shift();
-      if (!task) break;
-
-      try {
-        const result = await this.executeTranslate(task.options, task.reqSeq);
-        task.resolve(result);
-      } catch (err: any) {
-        logger.error("TranslationManager", `Queue task failed: ${err?.message || err}`);
-        const errorItem: TranslationLogItem = {
-          id: `err_${Date.now()}`,
-          timestamp: new Date().toLocaleTimeString(),
-          provider: "Error",
-          durationMs: 0,
-          name: task.options.speaker ? { source: task.options.speaker, translated: task.options.speaker } : undefined,
-          message: { source: task.options.message, translated: `[Error: ${err?.message || err}]` },
-        };
-        task.resolve({
-          success: false,
-          item: errorItem,
-          speaker: task.options.speaker,
-          translatedSpeaker: task.options.speaker,
-          message: task.options.message,
-          translatedMessage: `[Error: ${err?.message || err}]`,
-          provider: "Error",
-          durationMs: 0,
-        });
+    } finally {
+      this.isProcessingQueue = false;
+      // Re-trigger if tasks were enqueued concurrently during completion
+      if (this.queue.length > 0 && !this.isPausedInternal) {
+        this.processQueue();
       }
     }
-
-    this.isProcessingQueue = false;
   }
 
   /**
@@ -295,6 +304,16 @@ class TranslationManager {
 
     const cleanMsg = message.trim();
     const cleanSpk = speaker?.trim() || undefined;
+
+    // Reset context window if switching between different models or MT providers (H10)
+    if (this.lastUsedProviderId && this.lastUsedProviderId !== providerId) {
+      logger.info(
+        "TranslationManager",
+        `Translation model switched from "${this.lastUsedProviderId}" to "${providerId}". Resetting conversation context turns.`
+      );
+      this.clearContextHistory();
+    }
+    this.lastUsedProviderId = providerId;
 
     if (!cleanMsg) {
       const emptyItem: TranslationLogItem = {
@@ -326,6 +345,7 @@ class TranslationManager {
     const scriptMatch = scriptManagerService.findMatch(cleanMsg, cleanSpk);
 
     if (scriptMatch.matched && scriptMatch.entry) {
+      scriptManagerService.recordMatch(scriptMatch.entry.id);
       const durationMs = Date.now() - startTime;
       const translatedSpeaker = scriptMatch.entry.translated_speaker || cleanSpk;
       const translatedMessage = scriptMatch.entry.translated_message;
@@ -338,6 +358,7 @@ class TranslationManager {
         id: generateLogId("log"),
         timestamp: new Date().toLocaleTimeString(),
         provider: "Script Database",
+        sourceType: options.sourceType,
         durationMs,
         matchedFromScript: true,
         similarityScore: scriptMatch.similarityScore,
@@ -511,6 +532,7 @@ class TranslationManager {
       id: generateLogId("log"),
       timestamp: new Date().toLocaleTimeString(),
       provider: providerLabel,
+      sourceType: options.sourceType,
       durationMs,
       matchedFromScript: false,
       name: cleanSpk

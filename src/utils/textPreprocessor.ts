@@ -220,17 +220,21 @@ export function applyPreprocessingStep(text: string, step: PreprocessingStep): s
       const pattern = opts.pattern || "";
       const replacement = opts.replacement || "";
 
-      if (pattern) {
+      if (pattern && pattern.length <= 250) {
         try {
           if (opts.isRegex) {
-            const flags = opts.ignoreCase ? "gi" : "g";
-            const regex = new RegExp(pattern, flags);
-            result = result.replace(regex, replacement);
+            // Guard against common catastrophic backtracking patterns like (a+)+ or ([a-z]+)+
+            const hasCatastrophicPattern = /\([^()]+\+[()]+\+|\([^()]+\*[()]+\*/.test(pattern);
+            if (!hasCatastrophicPattern) {
+              const flags = opts.ignoreCase ? "gi" : "g";
+              const regex = new RegExp(pattern, flags);
+              result = result.replace(regex, replacement);
+            }
           } else {
             result = result.split(pattern).join(replacement);
           }
         } catch {
-          // Invalid regex pattern, skip
+          // Invalid regex pattern, skip safely
         }
       }
       break;
@@ -276,6 +280,42 @@ export function executePipelineWithTrace(
   return { finalOutput: current, traces };
 }
 
+let cachedCustomRules: PreprocessingStep[] | null = null;
+
+/**
+ * Invalidate cached custom rules (called when settings or custom rules are modified)
+ */
+export function invalidateCustomRulesCache(): void {
+  cachedCustomRules = null;
+}
+
+/**
+ * Retrieve active custom preprocessing rules from in-memory cache (or initial localStorage load)
+ */
+export function getCustomPreprocessingRules(): PreprocessingStep[] {
+  if (cachedCustomRules !== null) {
+    return cachedCustomRules;
+  }
+  try {
+    const customRulesJson =
+      localStorage.getItem("vn_custom_replacement_rules") ||
+      localStorage.getItem("vn_preprocessing_pipeline");
+    if (customRulesJson) {
+      const parsed = JSON.parse(customRulesJson);
+      if (Array.isArray(parsed)) {
+        cachedCustomRules = parsed.filter(
+          (r) => r && r.isEnabled && (r.type === "custom_regex" || r.isCustom)
+        );
+        return cachedCustomRules;
+      }
+    }
+  } catch {
+    // Ignore parse error and fallback to empty
+  }
+  cachedCustomRules = [];
+  return cachedCustomRules;
+}
+
 /**
  * Convenience helper to execute active stored pipeline on raw input text for a given source
  */
@@ -293,18 +333,11 @@ export function executePreprocessingPipeline(
       }
     }
 
-    // 2. Custom User-Defined Replacement Rules
-    const customRulesJson = localStorage.getItem("vn_custom_replacement_rules") || localStorage.getItem("vn_preprocessing_pipeline");
-    if (customRulesJson) {
-      const parsed = JSON.parse(customRulesJson);
-      if (Array.isArray(parsed)) {
-        for (const rule of parsed) {
-          if (rule.isEnabled && (rule.type === "custom_regex" || rule.isCustom)) {
-            if (isStepApplicableForSource(rule, source)) {
-              current = applyPreprocessingStep(current, rule);
-            }
-          }
-        }
+    // 2. Custom User-Defined Replacement Rules (read from high-speed in-memory cache)
+    const customRules = getCustomPreprocessingRules();
+    for (const rule of customRules) {
+      if (isStepApplicableForSource(rule, source)) {
+        current = applyPreprocessingStep(current, rule);
       }
     }
 
@@ -325,6 +358,9 @@ export interface ExtractedDialogue {
   message: string;
 }
 
+const speakerCleanCache = new Map<string, string>();
+const MAX_SPEAKER_CACHE = 500;
+
 // Visual novel engine dummy/placeholder tags indicating narration, monologue, or system notes rather than a real character name
 const MONOLOGUE_SPEAKER_REGEX = /^(?:地の文|地の文章|地文|地|ナレーション|ナレ|ナレ[0-9１２345]|独白|モノローグ|内心|心の声|心声|心|思い|思考|旁白|内心独白|ト書き|解説|状況|システム|システムメッセージ|アナウンス|narration|narr|narrator|monologue|mono|thought|thoughts|inner|inner_voice|none|null|undefined|void|empty|blank|no_name|noname|[-―—─_・…\s]+)$/i;
 
@@ -343,6 +379,9 @@ const MONOLOGUE_SPEAKER_REGEX = /^(?:地の文|地の文章|地文|地|ナレー
  */
 export function cleanSpeakerName(rawSpeaker: string): string {
   if (!rawSpeaker) return "";
+  const cached = speakerCleanCache.get(rawSpeaker);
+  if (cached !== undefined) return cached;
+
   let spk = rawSpeaker.trim();
 
   // 1. If text contains bracketed segments (e.g. 【伊織】【伊織】 or 【【伊織】【伊織】】),
@@ -385,13 +424,23 @@ export function cleanSpeakerName(rawSpeaker: string): string {
   }
 
   const finalClean = spk.trim();
+  let result = finalClean;
 
   // 5. If speaker name is a VN engine dummy placeholder for monologue/narration, eliminate it!
   if (MONOLOGUE_SPEAKER_REGEX.test(finalClean)) {
-    return "";
+    result = "";
   }
 
-  return finalClean;
+  if (speakerCleanCache.size >= MAX_SPEAKER_CACHE) {
+    let count = 0;
+    for (const key of speakerCleanCache.keys()) {
+      speakerCleanCache.delete(key);
+      if (++count >= 50) break;
+    }
+  }
+  speakerCleanCache.set(rawSpeaker, result);
+
+  return result;
 }
 
 /**

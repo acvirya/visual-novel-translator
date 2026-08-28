@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { translateWithFreeMt } from "./freeMtService";
 import { buildCompleteSystemPrompt, ChatMessage, calculateUsageCost, OpenRouterCompletionResponse, getSelectedModelProviders } from "./openRouterService";
-import { extractSpeakerAndDialogue, cleanSpeakerName, executePreprocessingPipeline } from "../utils/textPreprocessor";
+import { cleanSpeakerName, executePreprocessingPipeline } from "../utils/textPreprocessor";
+import { parseLlmBatchResponse } from "../utils/batchJsonParser";
+import { parseScriptContentAsBatchItems } from "../utils/scriptFileParser";
 import { logger } from "./loggerService";
 import { useBatchStore } from "../stores/useBatchStore";
 import { settingsManager } from "./settingsManager";
@@ -134,15 +136,16 @@ export function isProcessed(item: {
 export function cancellableSleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
-    const timer = setTimeout(() => resolve(), ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true }
-    );
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -266,90 +269,7 @@ class BatchTranslateService {
    * Parses script content (JSONL, JSON, CSV, KS, or plain text) into standard BatchItem[]
    */
   public parseScriptContent(content: string): BatchItem[] {
-    const items: BatchItem[] = [];
-    const trimmed = content.trim();
-    if (!trimmed) return items;
-
-    const extractFromObject = (obj: any, idx: number): BatchItem => {
-      let spk: string | undefined = undefined;
-      let msg = "";
-
-      // Auto-detect speaker keys
-      const detectedSpk = obj.speaker ?? obj.name ?? obj.character ?? obj.chara ?? obj.jp_name ?? obj.speaker_name ?? obj.actor;
-      if (detectedSpk !== undefined && detectedSpk !== null && detectedSpk !== "") {
-        spk = cleanSpeakerName(String(detectedSpk).trim());
-      }
-
-      // Auto-detect message keys
-      const detectedMsg = obj.message ?? obj.text ?? obj.dialogue ?? obj.msg ?? obj.original_message ?? obj.original ?? obj.body ?? obj.content ?? obj.line;
-      if (detectedMsg !== undefined && detectedMsg !== null) {
-        msg = String(detectedMsg).trim();
-      }
-
-      const rawTgtSpk = obj.translated_speaker ?? obj.translatedSpeaker ?? obj.speaker_en ?? obj.trans_speaker;
-      const rawTgtMsg = obj.translated_message ?? obj.translatedMessage ?? obj.message_en ?? obj.trans_message;
-
-      const tgtSpk = rawTgtSpk !== undefined && rawTgtSpk !== null && rawTgtSpk !== "null" ? String(rawTgtSpk).trim() : undefined;
-      const tgtMsg = rawTgtMsg !== undefined && rawTgtMsg !== null ? String(rawTgtMsg).trim() : (!msg ? "" : undefined);
-
-      return {
-        id: typeof obj.id === "number" ? obj.id : idx + 1,
-        originalSpeaker: spk || undefined,
-        originalMessage: msg,
-        translatedSpeaker: tgtSpk,
-        translatedMessage: tgtMsg,
-      };
-    };
-
-    // 1. Try JSON Array format
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((obj, idx) => {
-            if (typeof obj === "string") {
-              const ext = extractSpeakerAndDialogue(obj);
-              items.push({
-                id: idx + 1,
-                originalSpeaker: ext.speaker || undefined,
-                originalMessage: ext.message,
-                translatedMessage: !ext.message ? "" : undefined,
-              });
-            } else if (typeof obj === "object" && obj !== null) {
-              items.push(extractFromObject(obj, idx));
-            }
-          });
-          if (items.length > 0) return items;
-        }
-      } catch {}
-    }
-
-    // 2. Line-by-line parser for JSONL, text dialogue, and standard script formats
-    const rawLines = trimmed.split(/\r?\n/);
-    for (let i = 0; i < rawLines.length; i++) {
-      const line = rawLines[i].trim();
-      if (!line) continue;
-
-      // Fast single-line JSON (JSONL) parsing
-      if (line.startsWith("{") && line.endsWith("}")) {
-        try {
-          const obj = JSON.parse(line);
-          items.push(extractFromObject(obj, items.length));
-          continue;
-        } catch {}
-      }
-
-      // Plain text or standard script line format
-      const ext = extractSpeakerAndDialogue(line);
-      items.push({
-        id: items.length + 1,
-        originalSpeaker: ext.speaker || undefined,
-        originalMessage: ext.message,
-        translatedMessage: !ext.message ? "" : undefined,
-      });
-    }
-
-    return items;
+    return parseScriptContentAsBatchItems(content);
   }
 
   public async runBatchTranslation(
@@ -595,6 +515,7 @@ class BatchTranslateService {
       let fileHalted = false;
       let lastErrorMessage = "";
       let explicitBatchNum = 0;
+      let lastDiskSaveTime = 0;
 
       while (true) {
         if (this.abortController?.signal.aborted) return;
@@ -610,7 +531,7 @@ class BatchTranslateService {
 
         explicitBatchNum++;
         const endIdx = Math.min(file.items.length, startIdx + batchSize);
-        const chunkItems = file.items.slice(startIdx, endIdx);
+        const chunkItems = file.items.slice(startIdx, endIdx).map((it) => ({ ...it }));
 
         // Keep track of which IDs in chunkItems were originally explicit
         const originallyExplicitIds = new Set(
@@ -730,7 +651,11 @@ class BatchTranslateService {
             });
             file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
             file.explicitLines = file.items.filter((it) => isExplicitTagged(it)).length;
-            await this.saveTranslatedFile(file, settings);
+            const now = Date.now();
+            if (now - lastDiskSaveTime >= 3000) {
+              lastDiskSaveTime = now;
+              await this.saveTranslatedFile(file, settings);
+            }
             onFileUpdated({ ...file, items: [...file.items] });
 
             const recentLine = chunkItems[0]
@@ -802,6 +727,7 @@ class BatchTranslateService {
         file.status = "error";
         file.error = `Paused: ${remainingExplicit} explicit-tagged lines remaining`;
       }
+      await this.saveTranslatedFile(file, settings);
       onFileUpdated({ ...file });
       return;
     }
@@ -870,12 +796,13 @@ class BatchTranslateService {
 
     let fileHalted = false;
     let lastErrorMessage = "";
+    let lastDiskSaveTime = 0;
 
     for (let bIdx = 0; bIdx < batchChunks.length; bIdx++) {
       if (this.abortController?.signal.aborted) return;
 
       const chunkIndices = batchChunks[bIdx];
-      const chunkItems = chunkIndices.map((idx) => file.items[idx]);
+      const chunkItems = chunkIndices.map((idx) => ({ ...file.items[idx] }));
 
       let batchSuccess = false;
       let retryAttempts = 0;
@@ -966,11 +893,16 @@ class BatchTranslateService {
           });
           file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
           file.explicitLines = file.items.filter((it) => isExplicitTagged(it)).length;
-          if (file.completedLines + (file.explicitLines || 0) >= file.totalLines && file.totalLines > 0) {
+          const isFileFinished = file.completedLines + (file.explicitLines || 0) >= file.totalLines && file.totalLines > 0;
+          if (isFileFinished) {
             file.status = "completed";
           }
-          // Synchronize output file to disk progressively
-          await this.saveTranslatedFile(file, settings);
+          // Synchronize output file to disk with 3s throttling to prevent SSD thrashing (M8)
+          const now = Date.now();
+          if (now - lastDiskSaveTime >= 3000 || isFileFinished || bIdx === batchChunks.length - 1) {
+            lastDiskSaveTime = now;
+            await this.saveTranslatedFile(file, settings);
+          }
           onFileUpdated({ ...file, items: [...file.items] });
 
           const recentLine = chunkItems[0]
@@ -1052,6 +984,7 @@ class BatchTranslateService {
       file.error = `Halted at batch (${file.completedLines}/${file.totalLines} lines translated): ${lastErrorMessage || "Stopped"}`;
     }
 
+    await this.saveTranslatedFile(file, settings);
     onFileUpdated({ ...file, items: [...file.items] });
   }
 
@@ -1202,63 +1135,8 @@ class BatchTranslateService {
         throw new Error("Translation cancelled by user.");
       }
       lastErr = e?.message || String(e);
-      logger.warn("BatchTranslate", `Native completion failed: ${lastErr}, trying fetch fallback...`);
-    }
-
-    if (!content) {
-      if (this.abortController?.signal.aborted) {
-        throw new Error("Translation cancelled by user.");
-      }
-      const fetchAbort = new AbortController();
-      const fetchTimer = setTimeout(() => fetchAbort.abort(), timeoutSeconds * 1000);
-      const onMainAbort = () => fetchAbort.abort();
-      this.abortController?.signal.addEventListener("abort", onMainAbort, { once: true });
-      try {
-        const fetchBody: any = {
-          model: settings.modelId,
-          messages,
-          temperature: settings.temperature,
-          max_tokens: maxTokens,
-        };
-
-        if (activeProviders.length > 0) {
-          fetchBody.provider = {
-            allow_fallbacks: true,
-            only: activeProviders,
-          };
-        }
-
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          signal: fetchAbort.signal,
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey.trim()}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/acvirya/visual-novel-translator",
-            "X-Title": "VN Translator Desktop",
-          },
-          body: JSON.stringify(fetchBody),
-        });
-        if (!res.ok) {
-          const errBody = await res.text().catch(() => "");
-          const networkErr = `OpenRouter HTTP ${res.status}: ${errBody}`;
-          throw new Error(networkErr);
-        }
-        const data = await responseToJson(res);
-        content = data.choices?.[0]?.message?.content?.trim() || "";
-        if (data.usage) {
-          exactPromptTokens = data.usage.prompt_tokens || 0;
-          exactCompletionTokens = data.usage.completion_tokens || 0;
-          exactCachedTokens = data.usage.prompt_tokens_details?.cached_tokens || 0;
-          exactCost = typeof data.usage.total_cost === "number" ? data.usage.total_cost : (data.usage.cost || 0);
-          hasExactUsage = true;
-        }
-      } catch (fetchErr: any) {
-        const fullErr = lastErr || fetchErr?.message || String(fetchErr);
-        throw new Error(fullErr);
-      } finally {
-        clearTimeout(fetchTimer);
-      }
+      logger.error("BatchTranslate", `Native OpenRouter completion failed: ${lastErr}`);
+      throw new Error(lastErr);
     }
 
     if (!content) {
@@ -1273,239 +1151,7 @@ class BatchTranslateService {
       throw new Error("Empty batch response returned from LLM");
     }
 
-    // Ultra-Resilient JSON Parser for LLM batch responses
-    // Handles:
-    // - Unescaped doubled quotes (e.g. ""Do not flock together."")
-    // - Unescaped nested inner quotes (e.g. "perhaps "vision" wasn't...")
-    // - Wrapped { translations: [...] } or { items: [...] } objects
-    // - Code fences ```json ... ``` and leading "json" words
-    // - Reasoning model preambles and JSON lines
-    // - Direct regex extraction fallback for malformed JSON structures
-    const parseLlmBatchResponse = (raw: string): any[] => {
-      if (!raw || !raw.trim()) return [];
-
-      // Check if LLM refused to translate due to safety / explicit content policies
-      const isRefusal =
-        /not able to complete|cannot produce or translate|can't continue translating|explicit sexual content|safety guidelines|content safety|content policy|policy refusal|safety policy/i.test(
-          raw
-        );
-
-      if (isRefusal) {
-        logger.warn(
-          "BatchTranslate",
-          `Content safety refusal detected from LLM. Tagging batch lines [${items.map((i) => i.id).join(", ")}] as [EXPLICIT CONTENT]`
-        );
-        return items.map((it) => ({
-          id: it.id,
-          translated_speaker: it.originalSpeaker ? `[EXPLICIT] ${it.originalSpeaker}` : null,
-          translated_message: `[EXPLICIT CONTENT] ${it.originalMessage}`,
-        }));
-      }
-
-      const unwrapCandidate = (data: any): any[] | null => {
-        if (!data) return null;
-        if (Array.isArray(data)) {
-          if (data.length > 0) return data;
-        }
-        if (typeof data === "object") {
-          // 1. Direct "translations" key
-          if (Array.isArray(data.translations) && data.translations.length > 0) {
-            return data.translations;
-          }
-          // 2. Common wrapped keys
-          for (const key of ["items", "lines", "results", "dialogues", "output", "data"]) {
-            if (Array.isArray(data[key]) && data[key].length > 0) {
-              return data[key];
-            }
-          }
-          // 3. Any array of objects inside the wrapper
-          for (const val of Object.values(data)) {
-            if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object") {
-              return val;
-            }
-          }
-          // 4. Single translation item object: { id: 1, translated_message: "..." }
-          if (data.id !== undefined || data.translated_message || data.translatedMessage || data.message) {
-            return [data];
-          }
-        }
-        return null;
-      };
-
-      // Repairs common LLM JSON syntax errors (like doubled/triple quotes `""text""` or malformed quotes)
-      const repairJsonQuotes = (str: string): string => {
-        let s = str.trim();
-        s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-        s = s.replace(/^json\s*(?=[{\[])/i, "").trim();
-        // Fix targeted doubled or triple quotes specifically around property values:
-        s = s.replace(/("translated_message"\s*:\s*)""+([\s\S]*?)""+(\s*[,}\]])/g, '$1"$2"$3');
-        s = s.replace(/("translated_speaker"\s*:\s*)""+([\s\S]*?)""+(\s*[,}\]])/g, '$1"$2"$3');
-        return s;
-      };
-
-      const sanitizeCandidate = (str: string): string => {
-        let s = str.trim();
-        s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-        s = s.replace(/^json\s*(?=[{\[])/i, "").trim();
-        return s;
-      };
-
-      // 1. Try parsing extracted markdown code fence ```json ... ```
-      const codeFenceMatches = raw.match(/```(?:json)?\s*([\s\S]*?)```/gi);
-      if (codeFenceMatches) {
-        for (const fence of codeFenceMatches) {
-          const inner = fence.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-          try {
-            const parsed = JSON.parse(inner);
-            const unwrapped = unwrapCandidate(parsed);
-            if (unwrapped && unwrapped.length > 0) return unwrapped;
-          } catch {
-            try {
-              const repaired = JSON.parse(repairJsonQuotes(inner));
-              const unwrapped = unwrapCandidate(repaired);
-              if (unwrapped && unwrapped.length > 0) return unwrapped;
-            } catch {}
-          }
-        }
-      }
-
-      // 2. Direct JSON.parse on sanitized string (with and without quote repairs)
-      const sanitized = sanitizeCandidate(raw);
-      try {
-        const direct = JSON.parse(sanitized);
-        const unwrapped = unwrapCandidate(direct);
-        if (unwrapped && unwrapped.length > 0) return unwrapped;
-      } catch {
-        try {
-          const repaired = JSON.parse(repairJsonQuotes(sanitized));
-          const unwrapped = unwrapCandidate(repaired);
-          if (unwrapped && unwrapped.length > 0) return unwrapped;
-        } catch {}
-      }
-
-      // 3. Extract bracketed array [...] or brace object {...}
-      const braceMatch = sanitized.match(/\{[\s\S]*\}/);
-      if (braceMatch) {
-        try {
-          const obj = JSON.parse(braceMatch[0]);
-          const unwrapped = unwrapCandidate(obj);
-          if (unwrapped && unwrapped.length > 0) return unwrapped;
-        } catch {
-          try {
-            const repaired = JSON.parse(repairJsonQuotes(braceMatch[0]));
-            const unwrapped = unwrapCandidate(repaired);
-            if (unwrapped && unwrapped.length > 0) return unwrapped;
-          } catch {}
-        }
-      }
-
-      const bracketMatch = sanitized.match(/\[[\s\S]*\]/);
-      if (bracketMatch) {
-        try {
-          const arr = JSON.parse(bracketMatch[0]);
-          const unwrapped = unwrapCandidate(arr);
-          if (unwrapped && unwrapped.length > 0) return unwrapped;
-        } catch {
-          try {
-            const repaired = JSON.parse(repairJsonQuotes(bracketMatch[0]));
-            const unwrapped = unwrapCandidate(repaired);
-            if (unwrapped && unwrapped.length > 0) return unwrapped;
-          } catch {}
-        }
-      }
-
-      // 4. Extract JSON Lines format (e.g. {"id":1,...}\n{"id":2,...})
-      const lineObjects: any[] = [];
-      const lines = raw.split(/\r?\n/);
-      for (const line of lines) {
-        const trimmed = line.trim().replace(/^json\s*/i, "").trim();
-        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-          try {
-            const obj = JSON.parse(trimmed);
-            if (obj && typeof obj === "object") {
-              const unwrapped = unwrapCandidate(obj);
-              if (unwrapped) lineObjects.push(...unwrapped);
-              else lineObjects.push(obj);
-            }
-          } catch {
-            try {
-              const repaired = JSON.parse(repairJsonQuotes(trimmed));
-              if (repaired && typeof repaired === "object") {
-                const unwrapped = unwrapCandidate(repaired);
-                if (unwrapped) lineObjects.push(...unwrapped);
-                else lineObjects.push(repaired);
-              }
-            } catch {}
-          }
-        }
-      }
-      if (lineObjects.length > 0) {
-        return lineObjects;
-      }
-
-      // 5. Linear balanced-bracket scan for top-level JSON objects {...}
-      const scannedObjects: any[] = [];
-      let depth = 0;
-      let startIdx = -1;
-      for (let i = 0; i < raw.length; i++) {
-        const ch = raw[i];
-        if (ch === "{") {
-          if (depth === 0) startIdx = i;
-          depth++;
-        } else if (ch === "}") {
-          if (depth > 0) {
-            depth--;
-            if (depth === 0 && startIdx !== -1) {
-              const candidate = raw.slice(startIdx, i + 1);
-              try {
-                const obj = JSON.parse(candidate);
-                if (obj && typeof obj === "object") {
-                  const unwrapped = unwrapCandidate(obj);
-                  if (unwrapped) scannedObjects.push(...unwrapped);
-                  else scannedObjects.push(obj);
-                }
-              } catch {
-                try {
-                  const repaired = JSON.parse(repairJsonQuotes(candidate));
-                  if (repaired && typeof repaired === "object") {
-                    const unwrapped = unwrapCandidate(repaired);
-                    if (unwrapped) scannedObjects.push(...unwrapped);
-                    else scannedObjects.push(repaired);
-                  }
-                } catch {}
-              }
-              startIdx = -1;
-            }
-          }
-        }
-      }
-      if (scannedObjects.length > 0) {
-        return scannedObjects;
-      }
-
-      // 6. Robust Regex Key-Value Extraction Fallback for Truncated/Malformed Responses
-      const regexExtracted: any[] = [];
-      const itemPattern =
-        /\{\s*"id"\s*:\s*(\d+)[\s\S]*?(?:"translated_message"|"translatedMessage"|"message")\s*:\s*(?:"((?:\\.|[^"\\])*)"|"""([\s\S]*?)"""|'([^']*)')[\s\S]*?\}/gi;
-      let match: RegExpExecArray | null;
-      while ((match = itemPattern.exec(raw)) !== null) {
-        const id = parseInt(match[1], 10);
-        const msg = match[2] !== undefined ? match[2] : match[3] !== undefined ? match[3] : match[4] || "";
-        const spkMatch = match[0].match(/(?:"translated_speaker"|"translatedSpeaker"|"speaker")\s*:\s*"((?:\\.|[^"\\])*)"/i);
-        regexExtracted.push({
-          id,
-          translated_speaker: spkMatch ? spkMatch[1] : null,
-          translated_message: msg.replace(/\\"/g, '"').replace(/\\n/g, "\n"),
-        });
-      }
-      if (regexExtracted.length > 0) {
-        return regexExtracted;
-      }
-
-      return [];
-    };
-
-    const parsedArray = parseLlmBatchResponse(content);
+    const parsedArray = parseLlmBatchResponse(content, items);
 
     if (!Array.isArray(parsedArray) || parsedArray.length === 0) {
       await this.writeBatchDebugLog({
@@ -1600,6 +1246,11 @@ class BatchTranslateService {
         cost = calculateUsageCost(settings.modelId, promptTokens, completionTokens, cachedTokens);
       }
 
+      promptTokens = isNaN(promptTokens) || promptTokens < 0 ? 0 : promptTokens;
+      completionTokens = isNaN(completionTokens) || completionTokens < 0 ? 0 : completionTokens;
+      cachedTokens = isNaN(cachedTokens) || cachedTokens < 0 ? 0 : cachedTokens;
+      cost = isNaN(cost) || cost < 0 ? 0 : cost;
+
       useBatchStore.getState().addSessionTokens(promptTokens, completionTokens, cachedTokens, cost);
     } catch (statErr) {
       console.warn("Failed to record batch session stats:", statErr);
@@ -1653,15 +1304,6 @@ class BatchTranslateService {
       this.abortController.abort();
     }
     logger.info("BatchTranslate", "Batch translation cancellation requested.");
-  }
-}
-
-async function responseToJson(res: Response) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`Invalid JSON response from OpenRouter (HTTP ${res.status}): ${text.slice(0, 150)}`);
   }
 }
 

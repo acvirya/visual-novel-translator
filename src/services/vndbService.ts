@@ -51,6 +51,9 @@ class VndbService {
       });
 
       if (!res.ok) {
+        if (res.status === 429) {
+          throw new Error("VNDB API rate limit reached. Please wait a few seconds before searching again.");
+        }
         throw new Error(`VNDB API HTTP ${res.status}: ${await res.text()}`);
       }
 
@@ -93,6 +96,9 @@ class VndbService {
       });
 
       if (!res.ok) {
+        if (res.status === 429) {
+          throw new Error("VNDB API rate limit reached. Please wait a few seconds before searching again.");
+        }
         throw new Error(`VNDB API HTTP ${res.status}: ${await res.text()}`);
       }
 

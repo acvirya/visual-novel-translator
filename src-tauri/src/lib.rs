@@ -299,48 +299,62 @@ async fn translate_free_mt(
         }
     }
 
-    // 2. Google Translate Free MT
-    let url = "https://translate.googleapis.com/translate_a/single";
-    let resp = client
-        .get(url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-        .query(&[
-            ("client", "gtx"),
-            ("sl", &source_lang),
-            ("tl", &target_lang),
-            ("dt", "t"),
-            ("q", &text),
-        ])
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to Google Translate: {}", e))?;
+    // 2. Google Translate Free MT with Multi-Endpoint Fallback (L6)
+    let endpoints = [
+        "https://translate.googleapis.com/translate_a/single",
+        "https://clients5.google.com/translate_a/t",
+        "https://translate.google.com/translate_a/single",
+    ];
 
-    if !resp.status().is_success() {
-        return Err(format!("Google Translate HTTP error {}", resp.status()));
-    }
+    let mut last_error = String::new();
 
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Google response: {}", e))?;
+    for endpoint in &endpoints {
+        let resp = client
+            .get(*endpoint)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .query(&[
+                ("client", "gtx"),
+                ("sl", &source_lang),
+                ("tl", &target_lang),
+                ("dt", "t"),
+                ("q", &text),
+            ])
+            .send()
+            .await;
 
-    if let Some(arr) = json.as_array() {
-        if let Some(first_arr) = arr.first().and_then(|v| v.as_array()) {
-            let mut result = String::new();
-            for seg in first_arr {
-                if let Some(seg_arr) = seg.as_array() {
-                    if let Some(txt) = seg_arr.first().and_then(|v| v.as_str()) {
-                        result.push_str(txt);
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                if let Ok(json) = r.json::<serde_json::Value>().await {
+                    if let Some(arr) = json.as_array() {
+                        if let Some(first_arr) = arr.first().and_then(|v| v.as_array()) {
+                            let mut result = String::new();
+                            for seg in first_arr {
+                                if let Some(seg_arr) = seg.as_array() {
+                                    if let Some(txt) = seg_arr.first().and_then(|v| v.as_str()) {
+                                        result.push_str(txt);
+                                    }
+                                }
+                            }
+                            if !result.is_empty() {
+                                return Ok(result.trim().to_string());
+                            }
+                        } else if let Some(first_str) = arr.first().and_then(|v| v.as_str()) {
+                            // Format from clients5: ["translated text"]
+                            return Ok(first_str.trim().to_string());
+                        }
                     }
                 }
             }
-            if !result.is_empty() {
-                return Ok(result.trim().to_string());
+            Ok(r) => {
+                last_error = format!("HTTP error {} from {}", r.status(), endpoint);
+            }
+            Err(e) => {
+                last_error = format!("Network error connecting to {}: {}", endpoint, e);
             }
         }
     }
 
-    Err("Invalid response structure from translation service".to_string())
+    Err(format!("Free translation failed across all endpoints: {}", last_error))
 }
 
 #[tauri::command]
@@ -539,11 +553,12 @@ async fn openrouter_chat_completion(
     let body_text = resp.text().await.map_err(|e| format!("Failed to read OpenRouter response text: {}", e))?;
 
     if !status.is_success() {
-        // If the model rejected json_object parameter specifically (HTTP 400), retry without response_format
-        let is_format_error = status.as_u16() == 400
+        // If the model rejected json_object parameter specifically (HTTP 400 or 422), retry without response_format
+        let is_format_error = (status.as_u16() == 400 || status.as_u16() == 422)
             && (body_text.contains("response_format")
                 || body_text.contains("json_object")
                 || body_text.contains("structured output")
+                || body_text.contains("unsupported parameter")
                 || body_text.contains("schema"));
 
         if is_format_error {
@@ -600,21 +615,33 @@ async fn openrouter_chat_completion(
 }
 
 #[tauri::command]
-fn resolve_safe_log_path(file_name: &str) -> std::path::PathBuf {
+fn resolve_safe_log_path(file_name: &str) -> Result<std::path::PathBuf, String> {
     let p = std::path::Path::new(file_name);
+
+    // Disallow path traversal components ('..')
+    for component in p.components() {
+        if component == std::path::Component::ParentDir {
+            return Err("Invalid file path: path traversal is not permitted".to_string());
+        }
+    }
+
     if p.is_absolute() {
-        p.to_path_buf()
+        let p_str = p.to_string_lossy().to_lowercase();
+        if p_str.contains("windows\\system32") || p_str.contains("windows\\syswow64") {
+            return Err("Access to system directories is prohibited".to_string());
+        }
+        Ok(p.to_path_buf())
     } else {
         // If relative path, write to workspace root (parent of src-tauri) to prevent triggering Tauri dev file watcher
         if let Ok(cwd) = std::env::current_dir() {
             if cwd.ends_with("src-tauri") {
                 if let Some(parent) = cwd.parent() {
-                    return parent.join(file_name);
+                    return Ok(parent.join(file_name));
                 }
             }
-            cwd.join(file_name)
+            Ok(cwd.join(file_name))
         } else {
-            std::env::temp_dir().join(file_name)
+            Ok(std::env::temp_dir().join(file_name))
         }
     }
 }
@@ -623,18 +650,8 @@ fn resolve_safe_log_path(file_name: &str) -> std::path::PathBuf {
 fn append_debug_log(file_name: String, content: String) -> Result<(), String> {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use std::path::Component;
 
-    let raw_path = std::path::Path::new(&file_name);
-
-    // Disallow path traversal components ('..')
-    for component in raw_path.components() {
-        if component == Component::ParentDir {
-            return Err("Invalid file path: path traversal is not permitted".to_string());
-        }
-    }
-
-    let final_path = resolve_safe_log_path(&file_name);
+    let final_path = resolve_safe_log_path(&file_name)?;
 
     if let Some(parent) = final_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -655,8 +672,8 @@ fn append_debug_log(file_name: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_file_in_default_app(path: String) -> Result<(), String> {
-    let final_path = resolve_safe_log_path(&path);
+fn open_file_in_default_app(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
+    let final_path = resolve_safe_log_path(&path)?;
 
     if !final_path.exists() {
         if let Some(parent) = final_path.parent() {
@@ -667,21 +684,12 @@ fn open_file_in_default_app(path: String) -> Result<(), String> {
         let _ = std::fs::write(&final_path, "[BATCH TRANSLATE DEBUG LOG INITIALIZED]\nNo errors recorded yet.\n");
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-        let win_path = final_path.to_string_lossy().to_string();
-        Command::new("cmd")
-            .args(&["/C", "start", "", &win_path])
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = open::that(&final_path);
-        Ok(())
-    }
+    use tauri_plugin_opener::OpenerExt;
+    let path_str = final_path.to_string_lossy().to_string();
+    app_handle
+        .opener()
+        .open_path(path_str, None::<&str>)
+        .map_err(|e| format!("Failed to open file: {}", e))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -724,6 +732,7 @@ pub fn run() {
             textractor::start_textractor,
             textractor::send_textractor_command,
             textractor::stop_textractor,
+            textractor::find_textractor_installation,
             detect_oneocr_path,
             capture_regions_preview,
             run_oneocr_scan,

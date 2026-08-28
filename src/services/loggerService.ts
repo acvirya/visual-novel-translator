@@ -14,7 +14,7 @@ export interface AppLogEntry {
 
 class LoggerService {
   private logs: AppLogEntry[] = [];
-  private listeners: ((logs: AppLogEntry[]) => void)[] = [];
+  private listeners: Set<(logs: AppLogEntry[]) => void> = new Set();
   private maxLogs = 500;
 
   constructor() {
@@ -22,10 +22,10 @@ class LoggerService {
   }
 
   public subscribe(callback: (logs: AppLogEntry[]) => void) {
-    this.listeners.push(callback);
+    this.listeners.add(callback);
     callback([...this.logs]);
     return () => {
-      this.listeners = this.listeners.filter((cb) => cb !== callback);
+      this.listeners.delete(callback);
     };
   }
 
@@ -35,8 +35,12 @@ class LoggerService {
   }
 
   public log(level: "INFO" | "WARN" | "ERROR", source: string, message: string, details?: any) {
+    const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? `log_${crypto.randomUUID()}`
+      : `log_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
     const entry: AppLogEntry = {
-      id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id,
       time: new Date().toLocaleTimeString("en-US", { hour12: false }),
       level,
       source,

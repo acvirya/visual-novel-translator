@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { extractSpeakerAndDialogue } from "../utils/textPreprocessor";
+import { parseScriptContentAsEntries } from "../utils/scriptFileParser";
 
 export function generateUniqueId(prefix = "entry"): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -9,7 +10,7 @@ export function generateUniqueId(prefix = "entry"): string {
 }
 
 /**
- * Fast Levenshtein distance for short strings (<= 3 chars)
+ * Computes exact Levenshtein edit distance between two strings
  */
 export function calcLevenshteinDistance(a: string, b: string): number {
   if (a === b) return 0;
@@ -66,7 +67,7 @@ class ScriptManagerService {
   private autoAppend = true;
   private matchThreshold = 0.85;
   private listeners: ((state: ScriptDatabaseState) => void)[] = [];
-  private saveDebounceTimer: any = null;
+  private saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private canonicalIndex: Map<string, ScriptEntry[]> = new Map();
   private messageOnlyIndex: Map<string, ScriptEntry[]> = new Map();
   private ngramIndex: Map<string, Set<ScriptEntry>> = new Map();
@@ -136,10 +137,11 @@ class ScriptManagerService {
       }
       msgList.push(item);
 
-      // Precompute Bag-of-Bigrams (frequency map) for multiset Dice calculation
+      // Precompute Bag-of-Bigrams (frequency map) for multiset Dice calculation (capped to max 80 bigrams to prevent RAM bloat on giant lines - H3)
       const bigramCounts = new Map<string, number>();
       if (normMsg.length >= 2) {
-        for (let i = 0; i < normMsg.length - 1; i++) {
+        const maxBg = Math.min(80, normMsg.length - 1);
+        for (let i = 0; i < maxBg; i++) {
           const bg = normMsg.slice(i, i + 2);
           bigramCounts.set(bg, (bigramCounts.get(bg) || 0) + 1);
           let set = this.ngramIndex.get(bg);
@@ -151,7 +153,7 @@ class ScriptManagerService {
         }
       }
       item._bigramCounts = bigramCounts;
-      item._numBigrams = Math.max(0, normMsg.length - 1);
+      item._numBigrams = Math.min(80, Math.max(0, normMsg.length - 1));
     }
   }
 
@@ -264,7 +266,7 @@ class ScriptManagerService {
     return {
       activeFilePath: this.activeFilePath,
       activeFileName: this.activeFileName,
-      entries: [...this.entries],
+      entries: this.entries,
       autoAppend: this.autoAppend,
       matchThreshold: this.matchThreshold,
     };
@@ -411,122 +413,10 @@ class ScriptManagerService {
   }
 
   /**
-   * Robust parser to extract ScriptEntry items from any raw string content (.json array, .jsonl, .txt)
+   * Robust parser to extract ScriptEntry items from any raw string content (.json array, .jsonl, .txt, .tsv)
    */
   public parseEntriesFromContent(rawContent: string): ScriptEntry[] {
-    const cleanContent = rawContent.trim();
-    if (!cleanContent) return [];
-
-    const results: ScriptEntry[] = [];
-
-    const extractFromObj = (obj: any, idx: number): ScriptEntry | null => {
-      if (!obj || typeof obj !== "object") return null;
-
-      // Extract message
-      const msg =
-        obj.message ??
-        obj.original ??
-        obj.original_message ??
-        obj.originalMessage ??
-        obj.text ??
-        obj.dialogue ??
-        obj.msg ??
-        obj.body ??
-        obj.content ??
-        obj.line;
-
-      if (!msg || (typeof msg !== "string" && typeof msg !== "number")) return null;
-
-      const transMsg =
-        obj.translated_message ??
-        obj.translatedMessage ??
-        obj.translated ??
-        obj.english ??
-        obj.translation ??
-        obj.target_message ??
-        obj.targetMessage ??
-        "";
-
-      const spk =
-        obj.speaker ??
-        obj.original_speaker ??
-        obj.originalSpeaker ??
-        obj.name ??
-        obj.character ??
-        undefined;
-
-      const transSpk =
-        obj.translated_speaker ??
-        obj.translatedSpeaker ??
-        obj.translated_name ??
-        obj.translatedName ??
-        undefined;
-
-      let extractedSpk = spk ? String(spk).trim() : undefined;
-      let finalMsg = String(msg).trim();
-
-      // Auto-extract embedded speaker if speaker key wasn't explicitly defined
-      if (!extractedSpk) {
-        const ext = extractSpeakerAndDialogue(finalMsg);
-        if (ext.speaker) {
-          extractedSpk = ext.speaker;
-          finalMsg = ext.message;
-        }
-      }
-
-      return {
-        id: obj.id || generateUniqueId(`entry_${idx}`),
-        speaker: extractedSpk || undefined,
-        translated_speaker: transSpk && transSpk !== "null" ? String(transSpk).trim() : undefined,
-        message: finalMsg,
-        translated_message: transMsg !== undefined && transMsg !== null && transMsg !== "null" ? String(transMsg).trim() : "",
-        matchedCount: obj.matchedCount || 0,
-        lastUsed: obj.lastUsed,
-      };
-    };
-
-    // 1. Try JSON Array
-    if (cleanContent.startsWith("[")) {
-      try {
-        const arr = JSON.parse(cleanContent);
-        if (Array.isArray(arr)) {
-          arr.forEach((item, idx) => {
-            const entry = extractFromObj(item, idx);
-            if (entry) results.push(entry);
-          });
-          if (results.length > 0) return results;
-        }
-      } catch {}
-    }
-
-    // 2. Try JSONL / line by line
-    const lines = cleanContent.split(/\r?\n/);
-    for (let idx = 0; idx < lines.length; idx++) {
-      const line = lines[idx].trim();
-      if (!line) continue;
-
-      if (line.startsWith("{") && line.endsWith("}")) {
-        try {
-          const obj = JSON.parse(line);
-          const entry = extractFromObj(obj, idx);
-          if (entry) results.push(entry);
-        } catch {}
-      } else {
-        // Plain text line
-        const ext = extractSpeakerAndDialogue(line);
-        if (ext.message) {
-          results.push({
-            id: generateUniqueId(`entry_${idx}`),
-            speaker: ext.speaker || undefined,
-            message: ext.message,
-            translated_message: "",
-            matchedCount: 0,
-          });
-        }
-      }
-    }
-
-    return results;
+    return parseScriptContentAsEntries(rawContent);
   }
 
   /**
@@ -620,20 +510,19 @@ class ScriptManagerService {
 
     const cleanSpk = item.speaker?.trim() || undefined;
 
-    // Check if duplicate already exists
-    const existing = this.entries.find(
-      (e) =>
-        e.message.trim() === cleanMsg &&
-        (e.speaker?.trim() || undefined) === cleanSpk
-    );
-
-    if (existing) {
-      existing.translated_message = item.translated_message.trim();
-      existing.translated_speaker = item.translated_speaker?.trim() || undefined;
-      existing.matchedCount = (existing.matchedCount || 0) + 1;
-      existing.lastUsed = new Date().toLocaleTimeString();
-      this.saveState(true);
-      return true;
+    // Check if normalized duplicate already exists via canonical index (BUG-04)
+    const canonicalKey = this.buildCanonicalKey(cleanSpk, cleanMsg);
+    if (canonicalKey) {
+      const existingList = this.canonicalIndex.get(canonicalKey);
+      if (existingList && existingList.length > 0) {
+        const existing = existingList[0];
+        existing.translated_message = item.translated_message.trim();
+        existing.translated_speaker = item.translated_speaker?.trim() || undefined;
+        existing.matchedCount = (existing.matchedCount || 0) + 1;
+        existing.lastUsed = new Date().toLocaleTimeString();
+        this.saveState(true);
+        return true;
+      }
     }
 
     const newEntry: ScriptEntry = {
@@ -653,7 +542,19 @@ class ScriptManagerService {
   }
 
   /**
-   * Look up matching translation in active script before calling external MT/LLM
+   * Explicitly record that a matched entry was used in the translation pipeline (BUG-03)
+   */
+  public recordMatch(entryId: string) {
+    const entry = this.entries.find((e) => e.id === entryId);
+    if (entry) {
+      entry.matchedCount = (entry.matchedCount || 0) + 1;
+      entry.lastUsed = new Date().toLocaleTimeString();
+      this.saveState(true);
+    }
+  }
+
+  /**
+   * Pure Read Query: Look up matching translation in active script before calling external MT/LLM
    */
   public findMatch(
     message: string,
@@ -724,8 +625,6 @@ class ScriptManagerService {
       const canonList = this.canonicalIndex.get(canonicalKey);
       if (canonList && canonList.length > 0) {
         const hit = canonList[0];
-        hit.matchedCount = (hit.matchedCount || 0) + 1;
-        hit.lastUsed = new Date().toLocaleTimeString();
         return { matched: true, entry: hit, similarityScore: 1.0 };
       }
     }
@@ -738,16 +637,12 @@ class ScriptManagerService {
       // 2a. Exact speaker match (Highest priority)
       const exactSpkHit = msgHits.find((e) => isExactSpeakerMatch(e.speaker));
       if (exactSpkHit) {
-        exactSpkHit.matchedCount = (exactSpkHit.matchedCount || 0) + 1;
-        exactSpkHit.lastUsed = new Date().toLocaleTimeString();
         return { matched: true, entry: exactSpkHit, similarityScore: 1.0 };
       }
 
       // 2b. Compatible speaker (one side is narration / speaker omitted in capture)
       const compatibleHit = msgHits.find((e) => isCompatibleSpeaker(e.speaker));
       if (compatibleHit && threshold <= 0.98) {
-        compatibleHit.matchedCount = (compatibleHit.matchedCount || 0) + 1;
-        compatibleHit.lastUsed = new Date().toLocaleTimeString();
         return { matched: true, entry: compatibleHit, similarityScore: 0.98 };
       }
 
@@ -756,8 +651,6 @@ class ScriptManagerService {
       const diffSpeakerScore = 0.92;
       if (diffSpeakerScore >= effectiveThreshold) {
         const fallbackHit = msgHits[0];
-        fallbackHit.matchedCount = (fallbackHit.matchedCount || 0) + 1;
-        fallbackHit.lastUsed = new Date().toLocaleTimeString();
         return { matched: true, entry: fallbackHit, similarityScore: diffSpeakerScore };
       }
     }
@@ -808,8 +701,6 @@ class ScriptManagerService {
       }
 
       if (bestSubstrItem && bestSubstrScore >= effectiveThreshold) {
-        bestSubstrItem.matchedCount = (bestSubstrItem.matchedCount || 0) + 1;
-        bestSubstrItem.lastUsed = new Date().toLocaleTimeString();
         return { matched: true, entry: bestSubstrItem, similarityScore: Math.min(0.95, parseFloat(bestSubstrScore.toFixed(3))) };
       }
     }
@@ -827,8 +718,20 @@ class ScriptManagerService {
       // 4a. Short text (1-2 chars): Exact normalized match already handled in Tier 1 & Tier 2.
       // Bypass fuzzy matching because distance 1 changes 50-100% of lexical meaning.
     } else if (normCleanMsg.length === 3) {
-      // 4b. 3-character text (e.g. "そうだ", "違うよ"): Normalized Levenshtein Distance
-      for (const item of this.entries) {
+      // 4b. 3-character text (e.g. "そうだ", "違うよ"): Inverted Bigram Candidate Index + Levenshtein (H2)
+      const bg1 = normCleanMsg.slice(0, 2);
+      const bg2 = normCleanMsg.slice(1, 3);
+      const candidates = new Set<ScriptEntry>();
+      const hits1 = this.ngramIndex.get(bg1);
+      if (hits1) {
+        for (const e of hits1) candidates.add(e);
+      }
+      const hits2 = this.ngramIndex.get(bg2);
+      if (hits2) {
+        for (const e of hits2) candidates.add(e);
+      }
+
+      for (const item of candidates) {
         const itemSpk = item._normSpeaker ?? this.normalizeSpeaker(item.speaker);
         const normItem = item._normMessage ?? this.normalizeMessage(item.message);
         if (normItem.length !== 3) continue;
@@ -905,8 +808,6 @@ class ScriptManagerService {
     }
 
     if (bestMatch && bestScore >= effectiveThreshold) {
-      bestMatch.matchedCount = (bestMatch.matchedCount || 0) + 1;
-      bestMatch.lastUsed = new Date().toLocaleTimeString();
       return {
         matched: true,
         entry: bestMatch,

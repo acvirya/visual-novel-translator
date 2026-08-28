@@ -58,8 +58,8 @@ impl Drop for GdiCaptureGuard {
 
 /// Capture a screen region via Win32 GDI BitBlt
 pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
-    if width <= 0 || height <= 0 {
-        return Err("Invalid capture rectangle dimensions".to_string());
+    if width <= 0 || height <= 0 || width > 16_384 || height > 16_384 {
+        return Err(format!("Invalid capture rectangle dimensions ({}x{})", width, height));
     }
 
     unsafe {
@@ -90,6 +90,9 @@ pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
         guard.h_bitmap = h_bitmap;
 
         let h_old_bitmap = SelectObject(h_dc_mem, h_bitmap);
+        if h_old_bitmap == 0 as _ {
+            return Err("Failed to select compatible bitmap into memory DC".to_string());
+        }
         guard.h_old_bitmap = h_old_bitmap as HBITMAP;
 
         // BitBlt screenshot from screen DC into memory DC

@@ -111,8 +111,8 @@ fn run_ocr_pipeline_on_image(
     idx: usize,
     region_name: &str,
 ) -> String {
-    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}.png", std::process::id(), idx));
-    if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Png) {
+    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}.bmp", std::process::id(), idx));
+    if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Bmp) {
         eprintln!("Warning: Failed to write temporary crop image: {}", e);
         return String::new();
     }
@@ -240,14 +240,7 @@ fn resolve_oneocr_files_in_dir(dir: &Path) -> Result<(PathBuf, PathBuf, PathBuf)
     }
 }
 
-pub fn scan_screen_regions(
-    regions: Vec<CaptureRegion>,
-    scale_percent: u32,
-    custom_path: Option<String>,
-    stability_config: Option<OcrStabilityConfig>,
-) -> Result<OcrScanResult, String> {
-    let start_instant = Instant::now();
-
+fn get_or_init_ocr_engine(custom_path: Option<String>) -> Result<(), String> {
     let mut engine_guard = OCR_ENGINE_INSTANCE.lock().unwrap_or_else(|e| e.into_inner());
     if engine_guard.is_none() {
         let (dll_path, _model_path, _) = find_oneocr_installation(custom_path)?;
@@ -265,8 +258,20 @@ pub fn scan_screen_regions(
 
         *engine_guard = Some(SendOcrEngine(engine));
     }
+    Ok(())
+}
 
-    let engine = &engine_guard.as_ref().unwrap().0;
+pub fn scan_screen_regions(
+    regions: Vec<CaptureRegion>,
+    scale_percent: u32,
+    custom_path: Option<String>,
+    stability_config: Option<OcrStabilityConfig>,
+) -> Result<OcrScanResult, String> {
+    let start_instant = Instant::now();
+
+    // 1. Ensure OCR engine is loaded without holding long lock during screen capture
+    get_or_init_ocr_engine(custom_path)?;
+
     let temp_dir = std::env::temp_dir();
 
     let mut speaker_text = String::new();
@@ -282,13 +287,18 @@ pub fn scan_screen_regions(
         ignore_blinking_prompt: true,
     });
 
-    let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
-    let state_map = state_guard.get_or_insert_with(HashMap::new);
+    // 1. Capture screen and prepare images for all regions without holding any lock
+    struct PreparedRegion {
+        idx: usize,
+        id: String,
+        name: String,
+        role: String,
+        prepared_img: image::DynamicImage,
+        edge_hash: u64,
+        pixel_hash: u64,
+    }
 
-    // Evict motion states for regions that no longer exist (prevent static memory leak)
-    let active_ids: std::collections::HashSet<&String> = regions.iter().map(|r| &r.id).collect();
-    state_map.retain(|id, _| active_ids.contains(id));
-
+    let mut prepared_list = Vec::new();
     for (idx, region) in regions.iter().enumerate() {
         let x = region.physical_x.unwrap_or(region.x);
         let y = region.physical_y.unwrap_or(region.y);
@@ -309,94 +319,156 @@ pub fn scan_screen_regions(
 
         let scaled_img = resize_image(&captured.dynamic_image, scale_percent);
         let prepared_img = prepare_image_for_oneocr(&scaled_img);
-        let now = Instant::now();
-
-        let joined_text = if stab.enable_motion_detection {
-            let edge_hash = compute_stroke_edge_hash(&prepared_img, stab.motion_sensitivity);
-
-            let motion = state_map.entry(region.id.clone()).or_insert_with(|| MotionState {
-                last_edge_hash: edge_hash,
-                last_change_time: now,
-                history_hashes: VecDeque::from([edge_hash]),
-                cached_text: String::new(),
-                is_settled: false,
-            });
-
-            let is_cyclic = stab.ignore_blinking_prompt && motion.history_hashes.contains(&edge_hash);
-            let edge_changed = !is_cyclic && edge_hash != motion.last_edge_hash;
-
-            if edge_changed {
-                motion.last_edge_hash = edge_hash;
-                motion.last_change_time = now;
-                motion.is_settled = false;
-                all_regions_settled = false;
-
-                if motion.history_hashes.len() >= 4 {
-                    motion.history_hashes.pop_front();
-                }
-                motion.history_hashes.push_back(edge_hash);
-
-                motion.cached_text.clone()
-            } else {
-                let duration_still_ms = now.duration_since(motion.last_change_time).as_millis() as u64;
-
-                if duration_still_ms >= stab.settle_time_ms {
-                    if !motion.is_settled {
-                        let text = run_ocr_pipeline_on_image(engine, &prepared_img, temp_dir.as_path(), idx, &region.name);
-                        motion.cached_text = text.clone();
-                        motion.is_settled = true;
-                        text
-                    } else {
-                        motion.cached_text.clone()
-                    }
-                } else {
-                    all_regions_settled = false;
-                    motion.cached_text.clone()
-                }
-            }
+        let edge_hash = if stab.enable_motion_detection {
+            compute_stroke_edge_hash(&prepared_img, stab.motion_sensitivity)
         } else {
-            let pixel_hash = compute_fast_pixel_hash(&prepared_img);
-            let motion = state_map.entry(region.id.clone()).or_insert_with(|| MotionState {
-                last_edge_hash: pixel_hash,
-                last_change_time: now,
-                history_hashes: VecDeque::new(),
-                cached_text: String::new(),
-                is_settled: true,
-            });
-
-            if motion.last_edge_hash != pixel_hash || motion.cached_text.is_empty() {
-                let text = run_ocr_pipeline_on_image(engine, &prepared_img, temp_dir.as_path(), idx, &region.name);
-                motion.last_edge_hash = pixel_hash;
-                motion.cached_text = text.clone();
-                motion.is_settled = true;
-                text
-            } else {
-                motion.cached_text.clone()
-            }
+            0
+        };
+        let pixel_hash = if !stab.enable_motion_detection {
+            compute_fast_pixel_hash(&prepared_img)
+        } else {
+            0
         };
 
-        if region.role == "speaker" {
+        prepared_list.push(PreparedRegion {
+            idx,
+            id: region.id.clone(),
+            name: region.name.clone(),
+            role: region.role.clone(),
+            prepared_img,
+            edge_hash,
+            pixel_hash,
+        });
+    }
+
+    let now = Instant::now();
+    enum ScanAction {
+        ReturnCached(String),
+        RunOcr,
+    }
+
+    // 2. Determine OCR actions with brief motion state lock
+    let mut actions: Vec<(PreparedRegion, ScanAction)> = Vec::new();
+    {
+        let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
+        let state_map = state_guard.get_or_insert_with(HashMap::new);
+
+        // Evict motion states for regions that no longer exist (prevent static memory leak)
+        let active_ids: std::collections::HashSet<&String> = regions.iter().map(|r| &r.id).collect();
+        state_map.retain(|id, _| active_ids.contains(id));
+
+        for prep in prepared_list {
+            if stab.enable_motion_detection {
+                let motion = state_map.entry(prep.id.clone()).or_insert_with(|| MotionState {
+                    last_edge_hash: prep.edge_hash,
+                    last_change_time: now,
+                    history_hashes: VecDeque::from([prep.edge_hash]),
+                    cached_text: String::new(),
+                    is_settled: false,
+                });
+
+                let is_cyclic = stab.ignore_blinking_prompt && motion.history_hashes.contains(&prep.edge_hash);
+                let edge_changed = !is_cyclic && prep.edge_hash != motion.last_edge_hash;
+
+                if edge_changed {
+                    motion.last_edge_hash = prep.edge_hash;
+                    motion.last_change_time = now;
+                    motion.is_settled = false;
+                    all_regions_settled = false;
+
+                    if motion.history_hashes.len() >= 4 {
+                        motion.history_hashes.pop_front();
+                    }
+                    motion.history_hashes.push_back(prep.edge_hash);
+
+                    actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                } else {
+                    let duration_still_ms = now.duration_since(motion.last_change_time).as_millis() as u64;
+                    if duration_still_ms >= stab.settle_time_ms {
+                        if !motion.is_settled {
+                            actions.push((prep, ScanAction::RunOcr));
+                        } else {
+                            actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                        }
+                    } else {
+                        all_regions_settled = false;
+                        actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                    }
+                }
+            } else {
+                let motion = state_map.entry(prep.id.clone()).or_insert_with(|| MotionState {
+                    last_edge_hash: prep.pixel_hash,
+                    last_change_time: now,
+                    history_hashes: VecDeque::new(),
+                    cached_text: String::new(),
+                    is_settled: true,
+                });
+
+                if motion.last_edge_hash != prep.pixel_hash || motion.cached_text.is_empty() {
+                    actions.push((prep, ScanAction::RunOcr));
+                } else {
+                    actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                }
+            }
+        }
+    }
+
+    // 3. Run OCR inference on required regions (without holding motion state lock)
+    let mut results_to_update: Vec<(String, u64, String, String)> = Vec::new();
+    for (prep, action) in actions {
+        match action {
+            ScanAction::ReturnCached(cached) => {
+                results_to_update.push((prep.id, prep.edge_hash, cached, prep.role));
+            }
+            ScanAction::RunOcr => {
+                let text = {
+                    let engine_guard = OCR_ENGINE_INSTANCE.lock().unwrap_or_else(|e| e.into_inner());
+                    let engine = &engine_guard.as_ref().unwrap().0;
+                    run_ocr_pipeline_on_image(engine, &prep.prepared_img, temp_dir.as_path(), prep.idx, &prep.name)
+                };
+                let hash = if stab.enable_motion_detection { prep.edge_hash } else { prep.pixel_hash };
+                results_to_update.push((prep.id, hash, text, prep.role));
+            }
+        }
+    }
+
+    // 4. Update motion state cache with new OCR results
+    {
+        let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref mut state_map) = *state_guard {
+            for (id, hash, text, _) in &results_to_update {
+                if let Some(motion) = state_map.get_mut(id) {
+                    motion.last_edge_hash = *hash;
+                    motion.cached_text = text.clone();
+                    motion.is_settled = true;
+                }
+            }
+        }
+    }
+
+    for (id, _, text, role) in results_to_update {
+        if role == "speaker" {
             if speaker_text.is_empty() {
-                speaker_text = joined_text.clone();
-            } else if !joined_text.is_empty() {
-                speaker_text = format!("{} {}", speaker_text, joined_text);
+                speaker_text = text.clone();
+            } else if !text.is_empty() {
+                speaker_text = format!("{} {}", speaker_text, text);
             }
         } else {
             if dialogue_text.is_empty() {
-                dialogue_text = joined_text.clone();
-            } else if !joined_text.is_empty() {
-                dialogue_text = format!("{} {}", dialogue_text, joined_text);
+                dialogue_text = text.clone();
+            } else if !text.is_empty() {
+                dialogue_text = format!("{} {}", dialogue_text, text);
             }
         }
 
-        if !joined_text.is_empty() {
-            raw_all_text.push(joined_text.clone());
+        if !text.is_empty() {
+            raw_all_text.push(text.clone());
         }
 
         regions_text.push(RegionRecognizedText {
-            region_id: region.id.clone(),
-            role: region.role.clone(),
-            text: joined_text,
+            region_id: id,
+            role,
+            text,
         });
     }
 
