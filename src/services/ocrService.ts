@@ -222,9 +222,9 @@ export class OcrService {
   /**
    * Close the region selector window
    */
-  public static async closeRegionSelector(): Promise<void> {
+  public static async closeRegionSelector(restoreMain: boolean = true): Promise<void> {
     try {
-      await invoke("close_region_selector_overlay");
+      await invoke("close_region_selector_overlay", { restoreMain });
     } catch (err) {
       console.warn("Failed to close region selector overlay:", err);
     }

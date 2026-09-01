@@ -230,11 +230,20 @@ export interface OcrStabilityConfig {
   ignoreBlinkingPrompt: boolean; // default true
 }
 
+export interface DetectedTextLine {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface OcrScanResult {
   speaker: string;
   message: string;
   rawText: string;
   regionsText: { regionId: string; role: OcrRegionRole; text: string }[];
+  detectedLines?: DetectedTextLine[];
   timestamp: string;
   latencyMs: number;
   isSettled?: boolean;

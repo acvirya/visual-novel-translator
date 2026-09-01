@@ -1,12 +1,60 @@
 import React, { useState, useEffect, useRef } from "react";
-import { OcrRegion, OcrRegionRole, MonitorInfo } from "../../types";
+import { OcrRegion, OcrRegionRole, MonitorInfo, DetectedTextLine } from "../../types";
 import { OcrService } from "../../services/ocrService";
+import { translationManager } from "../../services/translationManager";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, X, Trash2, MessageSquare, User, Crosshair } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import {
+  Check,
+  X,
+  Trash2,
+  MessageSquare,
+  User,
+  Crosshair,
+  Sparkles,
+  Loader2,
+} from "lucide-react";
+
+interface SnippingBox {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
+interface ActiveSnipRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface TranslatedItemBox {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rawText: string;
+  translatedText: string;
+  isProcessing: boolean;
+  error?: string | null;
+}
 
 export const RegionSelectionOverlay: React.FC = () => {
+  const [mode, setMode] = useState<"setup" | "snipping">(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("snipping") === "true" || params.get("mode") === "snipping") {
+        return "snipping";
+      }
+    }
+    return "setup";
+  });
+
   const [currentMonitor, setCurrentMonitor] = useState<MonitorInfo | null>(null);
 
+  // Setup Mode State: Predefined Regions
   const [regions, setRegions] = useState<OcrRegion[]>(() => {
     try {
       const saved = localStorage.getItem("vn_ocr_regions");
@@ -16,7 +64,6 @@ export const RegionSelectionOverlay: React.FC = () => {
     } catch (e) {
       console.warn("Failed to load saved OCR regions:", e);
     }
-    // Default: Region 1 (Dialogue) and Region 2 (Speaker)
     return [
       {
         id: "region_1",
@@ -43,6 +90,29 @@ export const RegionSelectionOverlay: React.FC = () => {
 
   const initialRegionsRef = useRef<OcrRegion[]>([]);
   const currentMonitorRef = useRef<MonitorInfo | null>(null);
+  const [selectedRegionId, setSelectedRegionId] = useState<string | null>("region_1");
+
+  // Dragging & Resizing State for Setup Mode
+  const [dragAction, setDragAction] = useState<{
+    type: "move" | "resize" | "draw";
+    regionId: string;
+    handle?: string; // 'nw', 'ne', 'sw', 'se'
+    startX: number;
+    startY: number;
+    initialX: number;
+    initialY: number;
+    initialW: number;
+    initialH: number;
+  } | null>(null);
+
+  // Snipping Mode State
+  const [isSnipDrawing, setIsSnipDrawing] = useState<boolean>(false);
+  const [snipBox, setSnipBox] = useState<SnippingBox | null>(null);
+  const [activeSnipRect, setActiveSnipRect] = useState<ActiveSnipRect | null>(null);
+  const [isSnipProcessing, setIsSnipProcessing] = useState<boolean>(false);
+  const [snipError, setSnipError] = useState<string | null>(null);
+  const [translatedBoxes, setTranslatedBoxes] = useState<TranslatedItemBox[]>([]);
+  const [copiedBoxId, setCopiedBoxId] = useState<string | null>(null);
 
   const loadWindowMonitor = async (): Promise<MonitorInfo> => {
     try {
@@ -87,7 +157,6 @@ export const RegionSelectionOverlay: React.FC = () => {
               const logicalY = Math.round((r.physicalY - monY) / scale);
               const logicalW = Math.round(r.physicalWidth / scale);
               const logicalH = Math.round(r.physicalHeight / scale);
-              // Only apply if logical coordinates are valid within the monitor viewport
               if (logicalX >= 0 && logicalY >= 0 && logicalW > 10 && logicalH > 10) {
                 return {
                   ...r,
@@ -124,31 +193,36 @@ export const RegionSelectionOverlay: React.FC = () => {
     const channel = new BroadcastChannel("vn_ocr_channel");
     channel.onmessage = (event) => {
       if (event.data?.type === "OPEN_SELECTOR") {
+        setMode(event.data?.mode === "snipping" ? "snipping" : "setup");
         reloadSavedRegions();
       }
     };
+
+    let unlistenTauriEvent: (() => void) | null = null;
+    listen<{ mode?: string }>("set-selector-mode", (event) => {
+      const targetMode = event.payload?.mode === "snipping" ? "snipping" : "setup";
+      setMode(targetMode);
+      if (targetMode === "snipping") {
+        setSnipBox(null);
+        setActiveSnipRect(null);
+        setIsSnipDrawing(false);
+        setIsSnipProcessing(false);
+        setTranslatedBoxes([]);
+        setSnipError(null);
+      } else {
+        reloadSavedRegions();
+      }
+    }).then((unlisten) => {
+      unlistenTauriEvent = unlisten;
+    });
 
     window.addEventListener("focus", handleFocus);
     return () => {
       window.removeEventListener("focus", handleFocus);
       channel.close();
+      if (unlistenTauriEvent) unlistenTauriEvent();
     };
   }, []);
-
-  const [selectedRegionId, setSelectedRegionId] = useState<string | null>("region_1");
-
-  // Dragging & Resizing State
-  const [dragAction, setDragAction] = useState<{
-    type: "move" | "resize" | "draw";
-    regionId: string;
-    handle?: string; // 'nw', 'ne', 'sw', 'se'
-    startX: number;
-    startY: number;
-    initialX: number;
-    initialY: number;
-    initialW: number;
-    initialH: number;
-  } | null>(null);
 
   const computeRegionsWithPhysical = (regs: OcrRegion[]): OcrRegion[] => {
     const activeMonitor = currentMonitorRef.current || currentMonitor || {
@@ -175,39 +249,47 @@ export const RegionSelectionOverlay: React.FC = () => {
     }));
   };
 
-  // Keyboard shortcut listener (Escape to cancel/exit)
+  // Keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        handleCancel();
-      } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        handleSaveAndClose();
+      if (mode === "snipping") {
+        if (e.key === "Escape" || e.key === "Enter") {
+          e.preventDefault();
+          handleCloseSnipping();
+        }
+      } else {
+        if (e.key === "Escape") {
+          handleCancel();
+        } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          handleSaveAndClose();
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [regions, currentMonitor]);
+  }, [mode, regions, currentMonitor, activeSnipRect, translatedBoxes]);
 
+  // ==========================================
+  // SETUP MODE HANDLERS
+  // ==========================================
   const handleSaveAndClose = async () => {
     try {
       const regionsWithPhysical = computeRegionsWithPhysical(regions);
       localStorage.setItem("vn_ocr_regions", JSON.stringify(regionsWithPhysical));
-      // Notify main window via BroadcastChannel
       const channel = new BroadcastChannel("vn_ocr_channel");
       channel.postMessage({ type: "REGIONS_UPDATED", regions: regionsWithPhysical });
       channel.close();
     } catch (e) {
       console.warn("Failed to broadcast updated regions:", e);
     }
-    await OcrService.closeRegionSelector();
+    await OcrService.closeRegionSelector(true);
   };
 
   const handleCancel = async () => {
-    // Revert regions in state back to the original snapshot
     if (initialRegionsRef.current.length > 0) {
       setRegions(JSON.parse(JSON.stringify(initialRegionsRef.current)));
     }
-    await OcrService.closeRegionSelector();
+    await OcrService.closeRegionSelector(true);
   };
 
   const handleResetDefaults = () => {
@@ -263,9 +345,29 @@ export const RegionSelectionOverlay: React.FC = () => {
     );
   };
 
-  // Canvas Mouse Down -> Start drawing a new region if empty space clicked and count < 2
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
-    if (e.target !== e.currentTarget) return; // Only if clicked directly on overlay background
+    if (mode === "snipping") {
+      // In snipping mode, if translations are already showing, clicking outside closes the overlay
+      if (activeSnipRect && (translatedBoxes.length > 0 || snipError)) {
+        handleCloseSnipping();
+        return;
+      }
+
+      setIsSnipDrawing(true);
+      setSnipBox({
+        startX: e.clientX,
+        startY: e.clientY,
+        currentX: e.clientX,
+        currentY: e.clientY,
+      });
+      setActiveSnipRect(null);
+      setTranslatedBoxes([]);
+      setSnipError(null);
+      return;
+    }
+
+    // Setup mode canvas click
+    if (e.target !== e.currentTarget) return;
     if (regions.length >= 2) return;
 
     const startX = e.clientX;
@@ -299,8 +401,8 @@ export const RegionSelectionOverlay: React.FC = () => {
     });
   };
 
-  // Box Mouse Down -> Move Box
   const handleBoxMouseDown = (r: OcrRegion, e: React.MouseEvent) => {
+    if (mode === "snipping") return;
     e.stopPropagation();
     setSelectedRegionId(r.id);
 
@@ -316,8 +418,8 @@ export const RegionSelectionOverlay: React.FC = () => {
     });
   };
 
-  // Handle Resize Mouse Down
   const handleResizeMouseDown = (r: OcrRegion, handle: string, e: React.MouseEvent) => {
+    if (mode === "snipping") return;
     e.stopPropagation();
     setSelectedRegionId(r.id);
 
@@ -334,8 +436,18 @@ export const RegionSelectionOverlay: React.FC = () => {
     });
   };
 
-  // Global Mouse Move
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (mode === "snipping") {
+      if (isSnipDrawing && snipBox) {
+        setSnipBox({
+          ...snipBox,
+          currentX: e.clientX,
+          currentY: e.clientY,
+        });
+      }
+      return;
+    }
+
     if (!dragAction) return;
 
     const dx = e.clientX - dragAction.startX;
@@ -354,40 +466,39 @@ export const RegionSelectionOverlay: React.FC = () => {
         }
 
         if (dragAction.type === "draw") {
-          const width = Math.abs(dx);
-          const height = Math.abs(dy);
-          const x = dx >= 0 ? dragAction.startX : dragAction.startX + dx;
-          const y = dy >= 0 ? dragAction.startY : dragAction.startY + dy;
+          const w = Math.max(10, e.clientX - dragAction.startX);
+          const h = Math.max(10, e.clientY - dragAction.startY);
           return {
             ...r,
-            x: Math.max(0, x),
-            y: Math.max(0, y),
-            width: Math.max(20, width),
-            height: Math.max(20, height),
+            width: w,
+            height: h,
           };
         }
 
         if (dragAction.type === "resize") {
-          let { initialX, initialY, initialW, initialH, handle } = dragAction;
-          let newX = initialX;
-          let newY = initialY;
-          let newW = initialW;
-          let newH = initialH;
+          let newX = dragAction.initialX;
+          let newY = dragAction.initialY;
+          let newW = dragAction.initialW;
+          let newH = dragAction.initialH;
 
-          if (handle?.includes("e")) newW = Math.max(30, initialW + dx);
-          if (handle?.includes("s")) newH = Math.max(20, initialH + dy);
-          if (handle?.includes("w")) {
-            const possibleW = initialW - dx;
-            if (possibleW >= 30) {
+          if (dragAction.handle?.includes("e")) {
+            newW = Math.max(20, dragAction.initialW + dx);
+          }
+          if (dragAction.handle?.includes("s")) {
+            newH = Math.max(20, dragAction.initialH + dy);
+          }
+          if (dragAction.handle?.includes("w")) {
+            const possibleW = dragAction.initialW - dx;
+            if (possibleW >= 20) {
+              newX = dragAction.initialX + dx;
               newW = possibleW;
-              newX = initialX + dx;
             }
           }
-          if (handle?.includes("n")) {
-            const possibleH = initialH - dy;
+          if (dragAction.handle?.includes("n")) {
+            const possibleH = dragAction.initialH - dy;
             if (possibleH >= 20) {
+              newY = dragAction.initialY + dy;
               newH = possibleH;
-              newY = initialY + dy;
             }
           }
 
@@ -406,69 +517,418 @@ export const RegionSelectionOverlay: React.FC = () => {
   };
 
   const handleMouseUp = () => {
+    if (mode === "snipping") {
+      if (isSnipDrawing && snipBox) {
+        setIsSnipDrawing(false);
+        const x = Math.min(snipBox.startX, snipBox.currentX);
+        const y = Math.min(snipBox.startY, snipBox.currentY);
+        const width = Math.abs(snipBox.currentX - snipBox.startX);
+        const height = Math.abs(snipBox.currentY - snipBox.startY);
+
+        if (width < 15 || height < 15) {
+          setSnipBox(null);
+          setActiveSnipRect(null);
+          return;
+        }
+
+        const rect = { x, y, width, height };
+        setActiveSnipRect(rect);
+        executeSnippingTranslate(rect);
+      }
+      return;
+    }
+
     setDragAction(null);
   };
 
+  // ==========================================
+  // SNIPPING TRANSLATE EXECUTION (MULTIPLE OCR BOUNDING BOXES)
+  // ==========================================
+  const executeSnippingTranslate = async (rect: ActiveSnipRect) => {
+    setIsSnipProcessing(true);
+    setSnipError(null);
+    setTranslatedBoxes([]);
+
+    try {
+      const mon = currentMonitorRef.current || (await loadWindowMonitor());
+      const scale = mon.scale_factor || window.devicePixelRatio || 1.0;
+      const physicalX = Math.round((mon.x || 0) + rect.x * scale);
+      const physicalY = Math.round((mon.y || 0) + rect.y * scale);
+      const physicalWidth = Math.round(rect.width * scale);
+      const physicalHeight = Math.round(rect.height * scale);
+
+      const ocrRegion: OcrRegion = {
+        id: `snip_${Date.now()}`,
+        name: "Snipped Region",
+        role: "dialogue",
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        physicalX,
+        physicalY,
+        physicalWidth,
+        physicalHeight,
+        targetMonitor: mon.name,
+      };
+
+      // 1. Run Instant OneOCR Scan with fresh snapshot (no motion caching)
+      const ocrRes = await OcrService.runOneOcrScan([ocrRegion], 100);
+      const detectedLines: DetectedTextLine[] = ocrRes.detectedLines || [];
+
+      let rawBoxes: TranslatedItemBox[] = [];
+
+      if (detectedLines.length > 0) {
+        // Build accurate bounding boxes directly from OCR detection results
+        rawBoxes = detectedLines.map((line, idx) => ({
+          id: `snip_item_${idx}`,
+          x: Math.round(rect.x + line.x / scale),
+          y: Math.round(rect.y + line.y / scale),
+          width: Math.max(60, Math.round(line.width / scale)),
+          height: Math.max(24, Math.round(line.height / scale)),
+          rawText: line.text,
+          translatedText: "",
+          isProcessing: true,
+          error: null,
+        }));
+      } else {
+        const fallbackText = (ocrRes.message || ocrRes.rawText || "").trim();
+        if (fallbackText) {
+          rawBoxes = [
+            {
+              id: "snip_item_0",
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              rawText: fallbackText,
+              translatedText: "",
+              isProcessing: true,
+              error: null,
+            },
+          ];
+        }
+      }
+
+      if (rawBoxes.length === 0) {
+        setSnipError("No Japanese text detected in selected area.");
+        setIsSnipProcessing(false);
+        return;
+      }
+
+      setTranslatedBoxes(rawBoxes);
+
+      // 2. Translate all detected boxes in parallel
+      await Promise.all(
+        rawBoxes.map(async (box) => {
+          try {
+            const transRes = await translationManager.translate({
+              message: box.rawText,
+              sourceType: "ocr",
+            });
+
+            const resultText = transRes.success && transRes.translatedMessage ? transRes.translatedMessage : box.rawText;
+
+            setTranslatedBoxes((prev) =>
+              prev.map((item) =>
+                item.id === box.id
+                  ? {
+                      ...item,
+                      isProcessing: false,
+                      translatedText: resultText,
+                    }
+                  : item
+              )
+            );
+          } catch (transErr: any) {
+            setTranslatedBoxes((prev) =>
+              prev.map((item) =>
+                item.id === box.id
+                  ? {
+                      ...item,
+                      isProcessing: false,
+                      error: transErr?.message || "Translation failed",
+                    }
+                  : item
+              )
+            );
+          }
+        })
+      );
+    } catch (err: any) {
+      setSnipError(err?.message || String(err));
+    } finally {
+      setIsSnipProcessing(false);
+    }
+  };
+
+  const handleCloseSnipping = async () => {
+    setSnipBox(null);
+    setActiveSnipRect(null);
+    setIsSnipDrawing(false);
+    setIsSnipProcessing(false);
+    setTranslatedBoxes([]);
+    setSnipError(null);
+    await OcrService.closeRegionSelector(false);
+  };
+
+  const handleCopyBox = (box: TranslatedItemBox) => {
+    const textToCopy = box.translatedText || box.rawText;
+    if (!textToCopy) return;
+    navigator.clipboard.writeText(textToCopy);
+    setCopiedBoxId(box.id);
+    setTimeout(() => setCopiedBoxId(null), 1500);
+  };
+
+  // ==========================================
+  // RENDER: SNIPPING MODE (IN-PLACE SUBTITLE-STYLE TRANSLATOR)
+  // ==========================================
+  if (mode === "snipping") {
+    const drawingRect =
+      isSnipDrawing && snipBox
+        ? {
+            x: Math.min(snipBox.startX, snipBox.currentX),
+            y: Math.min(snipBox.startY, snipBox.currentY),
+            width: Math.abs(snipBox.currentX - snipBox.startX),
+            height: Math.abs(snipBox.currentY - snipBox.startY),
+          }
+        : null;
+
+    return (
+      <div
+        onMouseDown={handleCanvasMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        style={{
+          width: "100vw",
+          height: "100vh",
+          position: "fixed",
+          top: 0,
+          left: 0,
+          backgroundColor: activeSnipRect ? "rgba(0, 0, 0, 0.35)" : "rgba(0, 0, 0, 0.3)",
+          cursor: activeSnipRect ? "default" : "crosshair",
+          userSelect: "none",
+          overflow: "hidden",
+          zIndex: 9999,
+        }}
+      >
+        {/* Floating Instruction Banner */}
+        <div
+          style={{
+            position: "absolute",
+            top: "20px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            backgroundColor: "rgba(15, 23, 42, 0.92)",
+            border: "1px solid rgba(56, 189, 248, 0.4)",
+            backdropFilter: "blur(12px)",
+            borderRadius: "30px",
+            padding: "6px 18px",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            boxShadow: "0 8px 28px rgba(0, 0, 0, 0.6)",
+            color: "#ffffff",
+            fontSize: "12px",
+            zIndex: 100,
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--accent-cyan, #38bdf8)", fontWeight: 700 }}>
+            <Sparkles size={14} />
+            <span>One-Shot Snipping Translator</span>
+          </div>
+          <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>|</span>
+          <span style={{ color: "#cbd5e1" }}>
+            {activeSnipRect ? "Press [Enter] or [Esc] to return to game" : "Click & drag over text to translate in-place"}
+          </span>
+        </div>
+
+        {/* Live Selection Rectangle while dragging */}
+        {drawingRect && (
+          <div
+            style={{
+              position: "absolute",
+              left: `${drawingRect.x}px`,
+              top: `${drawingRect.y}px`,
+              width: `${drawingRect.width}px`,
+              height: `${drawingRect.height}px`,
+              border: "2px solid #38bdf8",
+              backgroundColor: "rgba(56, 189, 248, 0.15)",
+              boxShadow: "0 0 15px rgba(56, 189, 248, 0.4)",
+              borderRadius: "4px",
+              pointerEvents: "none",
+            }}
+          />
+        )}
+
+        {/* Global Loading Spinner if OCR is running */}
+        {isSnipProcessing && translatedBoxes.length === 0 && activeSnipRect && (
+          <div
+            style={{
+              position: "absolute",
+              left: `${activeSnipRect.x + activeSnipRect.width / 2 - 75}px`,
+              top: `${activeSnipRect.y + activeSnipRect.height / 2 - 16}px`,
+              backgroundColor: "rgba(0, 0, 0, 0.88)",
+              color: "#38bdf8",
+              border: "1px solid rgba(56, 189, 248, 0.5)",
+              borderRadius: "4px",
+              padding: "6px 14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "12px",
+              fontWeight: 600,
+              boxShadow: "0 4px 16px rgba(0, 0, 0, 0.7)",
+              zIndex: 70,
+              pointerEvents: "none",
+            }}
+          >
+            <Loader2 size={14} className="animate-spin" />
+            <span>Scanning OCR...</span>
+          </div>
+        )}
+
+        {/* Error Toast */}
+        {snipError && activeSnipRect && (
+          <div
+            style={{
+              position: "absolute",
+              left: `${activeSnipRect.x}px`,
+              top: `${activeSnipRect.y}px`,
+              backgroundColor: "rgba(185, 28, 28, 0.92)",
+              color: "#ffffff",
+              borderRadius: "4px",
+              padding: "6px 12px",
+              fontSize: "12px",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+              zIndex: 70,
+            }}
+          >
+            <span>⚠️ {snipError}</span>
+            <span style={{ fontSize: "10px", opacity: 0.8, marginLeft: "6px" }}>[Enter/Esc to exit]</span>
+          </div>
+        )}
+
+        {/* YOUTUBE SUBTITLE-STYLE OVERLAY BOXES (One for each detected OCR line/choice) */}
+        {translatedBoxes.map((box) => {
+          const fontSize = Math.max(13, Math.min(22, Math.round(box.height * 0.72)));
+          const isCopied = copiedBoxId === box.id;
+
+          return (
+            <div
+              key={box.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCopyBox(box);
+              }}
+              style={{
+                position: "absolute",
+                left: `${box.x}px`,
+                top: `${box.y}px`,
+                minWidth: `${Math.max(box.width, 60)}px`,
+                minHeight: `${Math.max(box.height, 26)}px`,
+                backgroundColor: "rgba(0, 0, 0, 0.88)",
+                color: "#ffffff",
+                backdropFilter: "blur(4px)",
+                borderRadius: "4px",
+                padding: "3px 8px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                boxShadow: "0 2px 8px rgba(0, 0, 0, 0.75)",
+                border: "1px solid rgba(255, 255, 255, 0.18)",
+                fontSize: `${fontSize}px`,
+                fontWeight: 600,
+                lineHeight: 1.28,
+                userSelect: "none",
+                zIndex: 60,
+                boxSizing: "border-box",
+                wordBreak: "break-word",
+                cursor: "pointer",
+                transition: "transform 0.1s ease, border-color 0.15s ease",
+              }}
+              title="Click to copy translated text"
+            >
+              {box.isProcessing ? (
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#38bdf8" }}>
+                  <Loader2 size={12} className="animate-spin" />
+                  <span>Translating...</span>
+                </div>
+              ) : box.error ? (
+                <span style={{ color: "#f87171", fontSize: "11px" }}>⚠️ {box.error}</span>
+              ) : (
+                <span style={{ color: isCopied ? "#4ade80" : "#ffffff" }}>
+                  {isCopied ? "✓ Copied!" : box.translatedText || box.rawText}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ==========================================
+  // RENDER: SETUP MODE (REGION CONFIGURATOR)
+  // ==========================================
   return (
     <div
       onMouseDown={handleCanvasMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       style={{
+        width: "100vw",
+        height: "100vh",
         position: "fixed",
         top: 0,
         left: 0,
-        width: "100vw",
-        height: "100vh",
-        backgroundColor: "rgba(0, 0, 0, 0.45)",
-        zIndex: 999999,
-        cursor: regions.length < 2 ? "crosshair" : "default",
+        backgroundColor: "rgba(0, 0, 0, 0.4)",
+        cursor: dragAction ? "move" : regions.length < 2 ? "crosshair" : "default",
         userSelect: "none",
         overflow: "hidden",
       }}
     >
-      {/* Top Floating Control Bar */}
+      {/* Top Banner with Control Buttons */}
       <div
         style={{
-          position: "fixed",
-          top: "20px",
+          position: "absolute",
+          top: "16px",
           left: "50%",
           transform: "translateX(-50%)",
           backgroundColor: "#161b22",
           border: "1px solid #30363d",
           borderRadius: "8px",
-          padding: "10px 18px",
-          boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+          padding: "8px 16px",
           display: "flex",
           alignItems: "center",
           gap: "16px",
-          zIndex: 1000000,
-          color: "#f0f6fc",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+          color: "#ffffff",
+          fontSize: "13px",
+          zIndex: 100,
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <Crosshair size={18} color="#58a6ff" />
-          <div>
-            <div style={{ fontWeight: 600, fontSize: "13px" }}>
-              OCR Screen Region Selector ({regions.length}/2 Boxes)
-            </div>
-            <div style={{ fontSize: "11px", color: "#8b949e" }}>
-              {regions.length < 2
-                ? "Hold & drag on empty space to draw a new region. Drag corners to resize."
-                : "2 maximum regions reached. Drag to reposition or drag corners to resize."}
-            </div>
-          </div>
+          <span style={{ fontWeight: 600 }}>OCR Region Selector</span>
+          <span style={{ color: "#8b949e", fontSize: "12px" }}>
+            ({regions.length}/2 active regions)
+          </span>
         </div>
 
-        <div style={{ height: "24px", width: "1px", backgroundColor: "#30363d" }} />
+        <div style={{ height: "18px", width: "1px", backgroundColor: "#30363d" }} />
 
-        {/* Action Buttons */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ display: "flex", gap: "8px" }}>
           <button
             onClick={handleResetDefaults}
             style={{
-              padding: "5px 12px",
+              padding: "5px 10px",
               fontSize: "12px",
               backgroundColor: "#21262d",
               color: "#c9d1d9",
@@ -477,7 +937,7 @@ export const RegionSelectionOverlay: React.FC = () => {
               cursor: "pointer",
             }}
           >
-            Reset
+            Reset Defaults
           </button>
 
           <button
@@ -486,7 +946,7 @@ export const RegionSelectionOverlay: React.FC = () => {
               padding: "5px 12px",
               fontSize: "12px",
               backgroundColor: "#21262d",
-              color: "#c9d1d9",
+              color: "#f85149",
               border: "1px solid #30363d",
               borderRadius: "6px",
               cursor: "pointer",

@@ -21,7 +21,10 @@ export const GeneralSettingsView: React.FC = () => {
     return localStorage.getItem("vn_hotkey_pause") || "Ctrl+Shift+P";
   });
   const [hotkeyOcrScan, setHotkeyOcrScan] = useState<string>(() => {
-    return localStorage.getItem("vn_hotkey_ocr") || "F9";
+    return localStorage.getItem("vn_hotkey_ocr") || "Alt+O";
+  });
+  const [hotkeyOcrSnipping, setHotkeyOcrSnipping] = useState<string>(() => {
+    return localStorage.getItem("vn_hotkey_snipping") || "Alt+S";
   });
 
   // Reset Confirmation Modal State
@@ -35,6 +38,7 @@ export const GeneralSettingsView: React.FC = () => {
     localStorage.setItem("vn_hotkey_lock", hotkeyLockOverlay);
     localStorage.setItem("vn_hotkey_pause", hotkeyTogglePause);
     localStorage.setItem("vn_hotkey_ocr", hotkeyOcrScan);
+    localStorage.setItem("vn_hotkey_snipping", hotkeyOcrSnipping);
 
     settingsManager.updateGeneral({
       sourceLang,
@@ -42,6 +46,7 @@ export const GeneralSettingsView: React.FC = () => {
       hotkeyLockOverlay,
       hotkeyTogglePause,
       hotkeyOcrScan,
+      hotkeyOcrSnipping,
     });
   }, [
     sourceLang,
@@ -49,6 +54,7 @@ export const GeneralSettingsView: React.FC = () => {
     hotkeyLockOverlay,
     hotkeyTogglePause,
     hotkeyOcrScan,
+    hotkeyOcrSnipping,
   ]);
 
   const handleExecuteReset = () => {
@@ -222,7 +228,20 @@ export const GeneralSettingsView: React.FC = () => {
           <span className="card-subtitle">Global shortcuts accessible while game window is focused</span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "14px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+          <div>
+            <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
+              One-Shot OCR Snipping Translate (In-Place)
+            </label>
+            <input
+              type="text"
+              value={hotkeyOcrSnipping}
+              onChange={(e) => setHotkeyOcrSnipping(e.target.value)}
+              placeholder="e.g. Alt+S"
+              style={{ width: "100%", fontFamily: "var(--font-mono)" }}
+            />
+          </div>
+
           <div>
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
               Toggle Overlay Lock (Click-Through)
@@ -231,18 +250,20 @@ export const GeneralSettingsView: React.FC = () => {
               type="text"
               value={hotkeyLockOverlay}
               onChange={(e) => setHotkeyLockOverlay(e.target.value)}
+              placeholder="e.g. Alt+L"
               style={{ width: "100%", fontFamily: "var(--font-mono)" }}
             />
           </div>
 
           <div>
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
-              Trigger OCR Screen Scan
+              Trigger OCR Region Scan (Predefined Box)
             </label>
             <input
               type="text"
               value={hotkeyOcrScan}
               onChange={(e) => setHotkeyOcrScan(e.target.value)}
+              placeholder="e.g. Alt+O"
               style={{ width: "100%", fontFamily: "var(--font-mono)" }}
             />
           </div>
@@ -255,6 +276,7 @@ export const GeneralSettingsView: React.FC = () => {
               type="text"
               value={hotkeyTogglePause}
               onChange={(e) => setHotkeyTogglePause(e.target.value)}
+              placeholder="e.g. Alt+P"
               style={{ width: "100%", fontFamily: "var(--font-mono)" }}
             />
           </div>

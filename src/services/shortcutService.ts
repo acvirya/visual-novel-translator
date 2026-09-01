@@ -9,7 +9,7 @@ class ShortcutService {
   private isInitialized = false;
   private isOverlayClickThrough = true;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastRegisteredKeys = { lockKey: "", pauseKey: "", ocrKey: "" };
+  private lastRegisteredKeys = { lockKey: "", pauseKey: "", ocrKey: "", snippingKey: "" };
 
   public async init() {
     if (this.isInitialized) return;
@@ -30,13 +30,15 @@ class ShortcutService {
           lockKey: (general.hotkeyLockOverlay || "").trim(),
           pauseKey: (general.hotkeyTogglePause || "").trim(),
           ocrKey: (general.hotkeyOcrScan || "").trim(),
+          snippingKey: (general.hotkeyOcrSnipping || "").trim(),
         };
 
         // Only reload if actual shortcut key combinations changed
         if (
           currentKeys.lockKey !== this.lastRegisteredKeys.lockKey ||
           currentKeys.pauseKey !== this.lastRegisteredKeys.pauseKey ||
-          currentKeys.ocrKey !== this.lastRegisteredKeys.ocrKey
+          currentKeys.ocrKey !== this.lastRegisteredKeys.ocrKey ||
+          currentKeys.snippingKey !== this.lastRegisteredKeys.snippingKey
         ) {
           this.reloadShortcuts();
         }
@@ -63,8 +65,9 @@ class ShortcutService {
       const lockKey = general.hotkeyLockOverlay?.trim() || "";
       const pauseKey = general.hotkeyTogglePause?.trim() || "";
       const ocrKey = general.hotkeyOcrScan?.trim() || "";
+      const snippingKey = general.hotkeyOcrSnipping?.trim() || "";
 
-      this.lastRegisteredKeys = { lockKey, pauseKey, ocrKey };
+      this.lastRegisteredKeys = { lockKey, pauseKey, ocrKey, snippingKey };
 
       // 1. Lock/Unlock Overlay Click-Through
       if (lockKey) {
@@ -134,6 +137,25 @@ class ShortcutService {
           logger.info("Shortcuts", `Registered global shortcut for OCR Scan: ${ocrKey}`);
         } catch (e) {
           logger.warn("Shortcuts", `Could not register OCR shortcut '${ocrKey}': ${e}`);
+        }
+      }
+
+      // 4. One-Shot OCR Snipping Translator
+      if (snippingKey) {
+        try {
+          await register(snippingKey, async (event) => {
+            if (event.state === "Pressed") {
+              logger.info("Shortcuts", `Hotkey [${snippingKey}] pressed: Opening OCR Snipping Tool.`);
+              try {
+                await invoke("open_region_selector_overlay", { mode: "snipping" });
+              } catch (e) {
+                logger.error("Shortcuts", `Failed to open OCR Snipping overlay: ${e}`);
+              }
+            }
+          });
+          logger.info("Shortcuts", `Registered global shortcut for OCR Snipping: ${snippingKey}`);
+        } catch (e) {
+          logger.warn("Shortcuts", `Could not register Snipping shortcut '${snippingKey}': ${e}`);
         }
       }
     } catch (err) {

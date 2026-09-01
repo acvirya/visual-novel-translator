@@ -34,11 +34,22 @@ pub struct RegionRecognizedText {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DetectedTextLine {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OcrScanResult {
     pub speaker: String,
     pub message: String,
     pub raw_text: String,
     pub regions_text: Vec<RegionRecognizedText>,
+    pub detected_lines: Vec<DetectedTextLine>,
     pub timestamp: String,
     pub latency_ms: u64,
     pub is_settled: bool,
@@ -107,14 +118,16 @@ fn compute_fast_pixel_hash(img: &image::DynamicImage) -> u64 {
 fn run_ocr_pipeline_on_image(
     engine: &oneocr_rs::OcrEngine,
     img: &image::DynamicImage,
+    offset_x: f32,
+    offset_y: f32,
     temp_dir: &Path,
     idx: usize,
     region_name: &str,
-) -> String {
+) -> (String, Vec<DetectedTextLine>) {
     let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}.png", std::process::id(), idx));
     if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Png) {
         eprintln!("Warning: Failed to write temporary crop image {}: {}", temp_file.display(), e);
-        return String::new();
+        return (String::new(), Vec::new());
     }
 
     let ocr_res_opt = match engine.run(temp_file.as_path().into()) {
@@ -130,15 +143,30 @@ fn run_ocr_pipeline_on_image(
 
     if let Some(ocr_res) = ocr_res_opt {
         let mut lines = Vec::new();
+        let mut detected_lines = Vec::new();
         for line in &ocr_res.lines {
             let t = line.text.trim();
             if !t.is_empty() {
                 lines.push(t.to_string());
+                let min_x = (line.bounding_box.top_left.x.min(line.bounding_box.bottom_left.x) - offset_x).max(0.0);
+                let min_y = (line.bounding_box.top_left.y.min(line.bounding_box.top_right.y) - offset_y).max(0.0);
+                let max_x = (line.bounding_box.top_right.x.max(line.bounding_box.bottom_right.x) - offset_x).max(min_x + 1.0);
+                let max_y = (line.bounding_box.bottom_left.y.max(line.bounding_box.bottom_right.y) - offset_y).max(min_y + 1.0);
+                let w = max_x - min_x;
+                let h = max_y - min_y;
+
+                detected_lines.push(DetectedTextLine {
+                    text: t.to_string(),
+                    x: min_x,
+                    y: min_y,
+                    width: w,
+                    height: h,
+                });
             }
         }
-        lines.join("")
+        (lines.join(""), detected_lines)
     } else {
-        String::new()
+        (String::new(), Vec::new())
     }
 }
 
@@ -280,12 +308,7 @@ pub fn scan_screen_regions(
     let mut regions_text = Vec::new();
     let mut all_regions_settled = true;
 
-    let stab = stability_config.unwrap_or(OcrStabilityConfig {
-        enable_motion_detection: true,
-        settle_time_ms: 250,
-        motion_sensitivity: 3,
-        ignore_blinking_prompt: true,
-    });
+    let stab_opt = stability_config.as_ref();
 
     // 1. Capture screen and prepare images for all regions without holding any lock
     struct PreparedRegion {
@@ -294,6 +317,8 @@ pub fn scan_screen_regions(
         name: String,
         role: String,
         prepared_img: image::DynamicImage,
+        offset_x: f32,
+        offset_y: f32,
         edge_hash: u64,
         pixel_hash: u64,
     }
@@ -318,14 +343,22 @@ pub fn scan_screen_regions(
         };
 
         let scaled_img = resize_image(&captured.dynamic_image, scale_percent);
-        let prepared_img = prepare_image_for_oneocr(&scaled_img);
-        let edge_hash = if stab.enable_motion_detection {
-            compute_stroke_edge_hash(&prepared_img, stab.motion_sensitivity)
+        let (prepared_img, offset_x, offset_y) = prepare_image_for_oneocr(&scaled_img);
+        let edge_hash = if let Some(stab) = stab_opt {
+            if stab.enable_motion_detection {
+                compute_stroke_edge_hash(&prepared_img, stab.motion_sensitivity)
+            } else {
+                0
+            }
         } else {
             0
         };
-        let pixel_hash = if !stab.enable_motion_detection {
-            compute_fast_pixel_hash(&prepared_img)
+        let pixel_hash = if let Some(stab) = stab_opt {
+            if !stab.enable_motion_detection {
+                compute_fast_pixel_hash(&prepared_img)
+            } else {
+                0
+            }
         } else {
             0
         };
@@ -336,6 +369,8 @@ pub fn scan_screen_regions(
             name: region.name.clone(),
             role: region.role.clone(),
             prepared_img,
+            offset_x,
+            offset_y,
             edge_hash,
             pixel_hash,
         });
@@ -347,9 +382,9 @@ pub fn scan_screen_regions(
         RunOcr,
     }
 
-    // 2. Determine OCR actions with brief motion state lock
+    // 2. Determine OCR actions
     let mut actions: Vec<(PreparedRegion, ScanAction)> = Vec::new();
-    {
+    if let Some(stab) = stab_opt {
         let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
         let state_map = state_guard.get_or_insert_with(HashMap::new);
 
@@ -417,22 +452,33 @@ pub fn scan_screen_regions(
                 }
             }
         }
+    } else {
+        // One-shot standalone scan (e.g. Snipping tool or manual trigger): always run fresh OCR
+        for prep in prepared_list {
+            actions.push((prep, ScanAction::RunOcr));
+        }
     }
 
     // 3. Run OCR inference on required regions (without holding motion state lock)
     let mut results_to_update: Vec<(String, u64, String, String, bool)> = Vec::new();
+    let mut all_detected_lines: Vec<DetectedTextLine> = Vec::new();
     for (prep, action) in actions {
         match action {
             ScanAction::ReturnCached(cached) => {
                 results_to_update.push((prep.id, prep.edge_hash, cached, prep.role, false));
             }
             ScanAction::RunOcr => {
-                let text = {
+                let (text, mut lines) = {
                     let engine_guard = OCR_ENGINE_INSTANCE.lock().unwrap_or_else(|e| e.into_inner());
                     let engine = &engine_guard.as_ref().unwrap().0;
-                    run_ocr_pipeline_on_image(engine, &prep.prepared_img, temp_dir.as_path(), prep.idx, &prep.name)
+                    run_ocr_pipeline_on_image(engine, &prep.prepared_img, prep.offset_x, prep.offset_y, temp_dir.as_path(), prep.idx, &prep.name)
                 };
-                let hash = if stab.enable_motion_detection { prep.edge_hash } else { prep.pixel_hash };
+                all_detected_lines.append(&mut lines);
+                let hash = if let Some(stab) = stab_opt {
+                    if stab.enable_motion_detection { prep.edge_hash } else { prep.pixel_hash }
+                } else {
+                    0
+                };
                 results_to_update.push((prep.id, hash, text, prep.role, true));
             }
         }
@@ -488,6 +534,7 @@ pub fn scan_screen_regions(
         message: dialogue_text,
         raw_text: raw_all_text.join("\n"),
         regions_text,
+        detected_lines: all_detected_lines,
         timestamp,
         latency_ms,
         is_settled: all_regions_settled,
@@ -500,7 +547,7 @@ fn chrono_lite_timestamp() -> String {
     format!("{}.{:03}", dur.as_secs(), dur.subsec_millis())
 }
 
-fn prepare_image_for_oneocr(img: &image::DynamicImage) -> image::DynamicImage {
+fn prepare_image_for_oneocr(img: &image::DynamicImage) -> (image::DynamicImage, f32, f32) {
     let rgb_img = img.to_rgb8();
     let (w, h) = (rgb_img.width(), rgb_img.height());
 
@@ -510,12 +557,12 @@ fn prepare_image_for_oneocr(img: &image::DynamicImage) -> image::DynamicImage {
         let new_h = h.max(min_dim);
 
         let mut canvas = image::ImageBuffer::from_pixel(new_w, new_h, image::Rgb([0u8, 0u8, 0u8]));
-        let offset_x = (new_w - w) / 2;
-        let offset_y = (new_h - h) / 2;
+        let offset_x = ((new_w - w) / 2) as f32;
+        let offset_y = ((new_h - h) / 2) as f32;
 
         image::imageops::overlay(&mut canvas, &rgb_img, offset_x as i64, offset_y as i64);
-        image::DynamicImage::ImageRgb8(canvas)
+        (image::DynamicImage::ImageRgb8(canvas), offset_x, offset_y)
     } else {
-        image::DynamicImage::ImageRgb8(rgb_img)
+        (image::DynamicImage::ImageRgb8(rgb_img), 0.0, 0.0)
     }
 }

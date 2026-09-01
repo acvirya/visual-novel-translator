@@ -19,6 +19,7 @@ export interface GeneralSettings {
   hotkeyLockOverlay: string;
   hotkeyTogglePause: string;
   hotkeyOcrScan: string;
+  hotkeyOcrSnipping: string;
 }
 
 export interface TranslationProviderConfig {
@@ -121,7 +122,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     globalHotkeysEnabled: true,
     hotkeyLockOverlay: "Alt+L",
     hotkeyTogglePause: "Alt+P",
-    hotkeyOcrScan: "Alt+S",
+    hotkeyOcrScan: "Alt+O",
+    hotkeyOcrSnipping: "Alt+S",
   },
   translation: {
     activeProviderId: "mt:google-translate",

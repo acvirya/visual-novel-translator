@@ -7,7 +7,7 @@ use screen_capture::{capture_screen_rect, image_to_base64_data_url, CaptureRegio
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 use textractor::TextractorState;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -337,7 +337,11 @@ async fn run_oneocr_scan(
 }
 
 #[tauri::command]
-fn open_region_selector_overlay(app: AppHandle, monitor_name: Option<String>) -> Result<(), String> {
+fn open_region_selector_overlay(
+    app: AppHandle,
+    monitor_name: Option<String>,
+    mode: Option<String>,
+) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("region-selector") {
         if let Ok(monitors) = overlay_win.available_monitors() {
             let target_monitor = if let Some(ref m_name) = monitor_name {
@@ -354,15 +358,23 @@ fn open_region_selector_overlay(app: AppHandle, monitor_name: Option<String>) ->
             }
         }
 
-        // Hide main app window so only region selector overlay is visible over the game
-        if let Some(main) = app.get_webview_window("main") {
-            let _ = main.hide();
+        let is_snipping = mode.as_deref() == Some("snipping");
+
+        // In setup mode, hide main window. In snipping mode, leave main window as-is so user stays in game
+        if !is_snipping {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.hide();
+            }
         }
 
         let _ = overlay_win.set_always_on_top(true);
         let _ = overlay_win.set_ignore_cursor_events(false);
         overlay_win.show().map_err(|e| e.to_string())?;
         let _ = overlay_win.set_focus();
+
+        let target_mode = mode.unwrap_or_else(|| "setup".to_string());
+        let _ = overlay_win.emit("set-selector-mode", serde_json::json!({ "mode": target_mode }));
+
         Ok(())
     } else {
         Err("Region selector overlay window not found".to_string())
@@ -370,15 +382,17 @@ fn open_region_selector_overlay(app: AppHandle, monitor_name: Option<String>) ->
 }
 
 #[tauri::command]
-fn close_region_selector_overlay(app: AppHandle) -> Result<(), String> {
+fn close_region_selector_overlay(app: AppHandle, restore_main: Option<bool>) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("region-selector") {
         let _ = overlay_win.hide();
     }
 
-    // Restore and focus main app window
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.set_focus();
+    if restore_main.unwrap_or(true) {
+        // Restore and focus main app window
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
     }
 
     Ok(())
