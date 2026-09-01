@@ -369,11 +369,15 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           backgroundColor: "var(--bg-app)",
           border: isOpen ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
           borderRadius: "var(--radius-sm)",
-          padding: compact ? "3px 8px" : "5px 10px",
+          padding: compact ? "0 8px" : "0 10px",
+          height: compact ? "32px" : "36px",
+          boxSizing: "border-box",
           gap: "6px",
           cursor: "pointer",
           boxShadow: isOpen ? "0 0 0 2px rgba(78, 115, 223, 0.25)" : "none",
           transition: "border-color 0.15s ease, box-shadow 0.15s ease",
+          overflow: "hidden",
+          width: "100%",
         }}
       >
         {selectedModelId && !selectedModelId.startsWith("mt:") && (
@@ -388,6 +392,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               color: isSelectedStarred ? "var(--accent-gold)" : "var(--text-muted)",
               display: "flex",
               alignItems: "center",
+              flexShrink: 0,
             }}
             title={isSelectedStarred ? "Starred model (Favorite)" : "Click to star model"}
           >
@@ -414,6 +419,8 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           placeholder="Search models (e.g. claude, deepseek, gemini, gpt-4o)..."
           style={{
             flex: 1,
+            minWidth: 0,
+            width: "100%",
             backgroundColor: "transparent",
             border: "none",
             outline: "none",
@@ -421,8 +428,10 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
             fontFamily: "var(--font-mono)",
             fontSize: compact ? "12px" : "12.5px",
             color: "var(--text-primary)",
-            padding: "2px 0",
-            minWidth: "140px",
+            padding: 0,
+            textOverflow: "ellipsis",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
             cursor: isOpen ? "text" : "pointer",
           }}
         />
@@ -563,7 +572,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               </div>
               {filteredStarred.map((m) => {
                 const isSelected = m.id === selectedModelId;
-                const pricing = formatModelPricing(m.pricing);
                 const parsed = splitModelProviderAndName(m);
                 const capabilities = getModelReasoningCapabilities(m, models);
                 const preferredEffort = getModelPreferredReasoningEffort(m.id);
@@ -594,47 +602,37 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       handleRowMouseLeave();
                     }}
                   >
-                    <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-                        <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                          {parsed.modelName}
-                        </span>
-                        {capabilities.isSupported && (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "2px",
-                              fontSize: "9px",
-                              fontWeight: 700,
-                              color: "var(--accent-purple, #a855f7)",
-                              backgroundColor: "rgba(168, 85, 247, 0.12)",
-                              border: "1px solid rgba(168, 85, 247, 0.25)",
-                              padding: "1px 5px",
-                              borderRadius: "3px",
-                            }}
-                            title={`Will select: ${effortPreviewLabel}. Hover to change.`}
-                          >
-                            <Brain size={9} />
-                            <span>{effortPreviewLabel}</span>
-                            <ChevronRight size={9} />
-                          </span>
-                        )}
-                      </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden", minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
+                        {parsed.modelName}
+                      </span>
                       <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
                         {parsed.provider}
                       </span>
                     </div>
 
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
-                      <div style={{ display: "flex", gap: "4px", fontSize: "10px" }}>
-                        <span style={{ color: "var(--accent-cyan)", backgroundColor: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px" }}>
-                          ↑ {pricing.inputPerMillion}
+                      {capabilities.isSupported && (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "2px",
+                            fontSize: "9px",
+                            fontWeight: 700,
+                            color: "var(--accent-purple, #a855f7)",
+                            backgroundColor: "rgba(168, 85, 247, 0.12)",
+                            border: "1px solid rgba(168, 85, 247, 0.25)",
+                            padding: "1px 5px",
+                            borderRadius: "3px",
+                          }}
+                          title={`Will select: ${effortPreviewLabel}. Hover to change.`}
+                        >
+                          <Brain size={9} />
+                          <span>{effortPreviewLabel}</span>
+                          <ChevronRight size={9} />
                         </span>
-                        <span style={{ color: "var(--accent-gold)", backgroundColor: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px" }}>
-                          ↓ {pricing.outputPerMillion}
-                        </span>
-                      </div>
+                      )}
                       <button
                         type="button"
                         onClick={(e) => handleToggleStar(m.id, e)}
@@ -696,9 +694,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       Fast free stream fallback
                     </span>
                   </div>
-                  <span className="badge badge-success" style={{ fontSize: "9.5px", padding: "1px 5px" }}>
-                    Free ($0)
-                  </span>
                 </div>
               )}
 
@@ -728,9 +723,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       Natural Japanese nuance MT scraper
                     </span>
                   </div>
-                  <span className="badge badge-success" style={{ fontSize: "9.5px", padding: "1px 5px" }}>
-                    Free ($0)
-                  </span>
                 </div>
               )}
             </div>
@@ -759,7 +751,6 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
 
               {filteredCatalog.map((m) => {
                 const isSelected = m.id === selectedModelId;
-                const pricing = formatModelPricing(m.pricing);
                 const parsed = splitModelProviderAndName(m);
                 const capabilities = getModelReasoningCapabilities(m, models);
                 const preferredEffort = getModelPreferredReasoningEffort(m.id);
@@ -790,47 +781,37 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       handleRowMouseLeave();
                     }}
                   >
-                    <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-                        <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                          {parsed.modelName}
-                        </span>
-                        {capabilities.isSupported && (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "2px",
-                              fontSize: "9px",
-                              fontWeight: 700,
-                              color: "var(--accent-purple, #a855f7)",
-                              backgroundColor: "rgba(168, 85, 247, 0.12)",
-                              border: "1px solid rgba(168, 85, 247, 0.25)",
-                              padding: "1px 5px",
-                              borderRadius: "3px",
-                            }}
-                            title={`Will select: ${effortPreviewLabel}. Hover to change.`}
-                          >
-                            <Brain size={9} />
-                            <span>{effortPreviewLabel}</span>
-                            <ChevronRight size={9} />
-                          </span>
-                        )}
-                      </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden", minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
+                        {parsed.modelName}
+                      </span>
                       <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
                         {parsed.provider}
                       </span>
                     </div>
 
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
-                      <div style={{ display: "flex", gap: "4px", fontSize: "10px" }}>
-                        <span style={{ color: "var(--accent-cyan)", backgroundColor: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px" }}>
-                          ↑ {pricing.inputPerMillion}
+                      {capabilities.isSupported && (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "2px",
+                            fontSize: "9px",
+                            fontWeight: 700,
+                            color: "var(--accent-purple, #a855f7)",
+                            backgroundColor: "rgba(168, 85, 247, 0.12)",
+                            border: "1px solid rgba(168, 85, 247, 0.25)",
+                            padding: "1px 5px",
+                            borderRadius: "3px",
+                          }}
+                          title={`Will select: ${effortPreviewLabel}. Hover to change.`}
+                        >
+                          <Brain size={9} />
+                          <span>{effortPreviewLabel}</span>
+                          <ChevronRight size={9} />
                         </span>
-                        <span style={{ color: "var(--accent-gold)", backgroundColor: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px" }}>
-                          ↓ {pricing.outputPerMillion}
-                        </span>
-                      </div>
+                      )}
                       <button
                         type="button"
                         onClick={(e) => handleToggleStar(m.id, e)}

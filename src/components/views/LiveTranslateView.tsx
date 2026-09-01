@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
+import { ProviderSelectorMultiSelect } from "../common/ProviderSelectorMultiSelect";
 import {
   Play,
   Pause,
@@ -12,9 +13,18 @@ import {
   Bot,
   Clock,
   MessageSquare,
+  Coins,
+  Activity,
 } from "lucide-react";
 import { translationManager, LlmContextSettings } from "../../services/translationManager";
 import { useTranslationStore } from "../../stores/useTranslationStore";
+import {
+  fetchModelEndpoints,
+  getModelPricingSummary,
+  getSelectedModelProviders,
+  setSelectedModelProviders,
+  OpenRouterEndpoint,
+} from "../../services/openRouterService";
 
 export const LiveTranslateView: React.FC = () => {
   const {
@@ -25,15 +35,45 @@ export const LiveTranslateView: React.FC = () => {
     useScriptOnly,
     contextSettings,
     contextHistoryLength,
+    sessionStats,
     setSelectedProvider,
     setReasoningEffort,
     setUseScriptOnly,
     clearLiveLogs,
+    resetSessionStats,
   } = useTranslationStore();
 
   const [showContextModal, setShowContextModal] = useState<boolean>(false);
   const [maxContextInput, setMaxContextInput] = useState<string>(() => String(contextSettings.maxContextLines));
   const [retainContextInput, setRetainContextInput] = useState<string>(() => String(contextSettings.retainContextLines));
+  const [modelEndpoints, setModelEndpoints] = useState<OpenRouterEndpoint[]>([]);
+  const [selectedProviders, setSelectedProviders] = useState<string[]>(() => {
+    return getSelectedModelProviders(selectedProvider);
+  });
+
+  // Sync selected providers when model changes
+  useEffect(() => {
+    setSelectedProviders(getSelectedModelProviders(selectedProvider));
+  }, [selectedProvider]);
+
+  // Fetch model endpoints for accurate pricing calculation
+  useEffect(() => {
+    if (!selectedProvider || selectedProvider.startsWith("mt:")) {
+      setModelEndpoints([]);
+      return;
+    }
+    let cancelled = false;
+    fetchModelEndpoints(selectedProvider).then((eps) => {
+      if (!cancelled) setModelEndpoints(eps);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProvider]);
+
+  const pricingSummary = useMemo(() => {
+    return getModelPricingSummary(selectedProvider, selectedProviders, undefined, modelEndpoints);
+  }, [selectedProvider, selectedProviders, modelEndpoints]);
 
   // Synchronize local input fields when external context settings change
   useEffect(() => {
@@ -97,28 +137,29 @@ export const LiveTranslateView: React.FC = () => {
           backgroundColor: "var(--bg-surface)",
           border: "1px solid var(--border-subtle)",
           borderRadius: "var(--radius-md)",
-          padding: "10px 14px",
+          padding: "8px 14px",
           flexWrap: "wrap",
           gap: "10px",
           flexShrink: 0,
         }}
       >
         {/* Left Side: Auto Translate Action + Model Picker + Script Only Toggle */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
           {/* Auto Translate Toggle Button */}
           <button
             onClick={handleTogglePause}
             className={!isPaused ? "btn-primary" : "btn-secondary"}
             style={{
               backgroundColor: !isPaused ? "var(--accent-success)" : "var(--bg-surface-elevated)",
-              padding: "7px 14px",
+              padding: "6px 14px",
               fontWeight: 600,
               display: "flex",
               alignItems: "center",
               gap: "6px",
+              fontSize: "12px",
             }}
           >
-            {!isPaused ? <Pause size={14} /> : <Play size={14} />}
+            {!isPaused ? <Pause size={13} /> : <Play size={13} />}
             <span>{!isPaused ? "Auto-Translate: Active" : "Stream Paused"}</span>
           </button>
 
@@ -133,9 +174,21 @@ export const LiveTranslateView: React.FC = () => {
               }}
               onSelectReasoningEffort={(eff) => setReasoningEffort(eff)}
               disabled={useScriptOnly}
-              width="260px"
+              width="240px"
               compact={true}
             />
+            {isLlmProvider && !useScriptOnly && (
+              <ProviderSelectorMultiSelect
+                modelId={selectedProvider}
+                selectedProviders={selectedProviders}
+                onChangeProviders={(newProviders) => {
+                  setSelectedModelProviders(selectedProvider, newProviders);
+                  setSelectedProviders(newProviders);
+                }}
+                width="200px"
+                compact={true}
+              />
+            )}
           </div>
 
           {/* Use Script Only Toggle Button */}
@@ -163,9 +216,80 @@ export const LiveTranslateView: React.FC = () => {
           </button>
         </div>
 
-        {/* Right Side: LLM Context (hidden when Script Only is active) + Clear */}
+        {/* Right Side: Model Pricing & Session Tokens Badges + LLM Context + Clear */}
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-          {/* LLM Context Settings Button (Visible for LLM models when NOT in Script Only mode) */}
+          {/* Model Pricing Badge (Input / Output / Cache per 1M tokens) */}
+          {isLlmProvider && !useScriptOnly && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                backgroundColor: "var(--bg-app)",
+                padding: "4px 10px",
+                borderRadius: "20px",
+                border: "1px solid var(--border-subtle)",
+                fontSize: "11px",
+                flexWrap: "wrap",
+              }}
+              title="Model Pricing per 1 Million tokens (Input, Output, and Prompt Cache) based on selected endpoints"
+            >
+              <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
+                <Coins size={12} color="var(--accent-primary)" /> Pricing / 1M:
+              </span>
+              <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{pricingSummary.input}</strong></span>
+              <span style={{ color: "var(--border-subtle)" }}>•</span>
+              <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{pricingSummary.output}</strong></span>
+              <span style={{ color: "var(--border-subtle)" }}>•</span>
+              <span>Cache: <strong style={{ color: "var(--accent-success)" }}>{pricingSummary.cache}</strong></span>
+            </div>
+          )}
+
+          {/* Session Usage Badge */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              backgroundColor: "var(--bg-app)",
+              padding: "4px 10px",
+              borderRadius: "20px",
+              border: "1px solid var(--border-subtle)",
+              fontSize: "11px",
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
+              <Activity size={12} color="var(--accent-primary)" /> Session Tokens:
+            </span>
+            <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{sessionStats.promptTokens.toLocaleString()}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{sessionStats.completionTokens.toLocaleString()}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Cached: <strong style={{ color: "var(--accent-success)" }}>{sessionStats.cachedTokens.toLocaleString()}</strong></span>
+            <span style={{ color: "var(--border-subtle)" }}>•</span>
+            <span>Cost: <strong style={{ color: "#38ef7d" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong></span>
+            {sessionStats.totalCost > 0 && (
+              <button
+                type="button"
+                onClick={resetSessionStats}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "1px",
+                  color: "var(--text-muted)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                }}
+                title="Reset session tokens & cost"
+              >
+                <RotateCcw size={10} />
+              </button>
+            )}
+          </div>
+
+          {/* LLM Context Settings Button */}
           {!useScriptOnly && isLlmProvider && (
             <button
               type="button"

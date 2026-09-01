@@ -134,11 +134,13 @@ export const ProviderSelectorMultiSelect: React.FC<ProviderSelectorMultiSelectPr
         onClick={() => setIsOpen((prev) => !prev)}
         style={{
           width: "100%",
+          height: compact ? "32px" : "36px",
+          boxSizing: "border-box",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: "8px",
-          padding: compact ? "5px 8px" : "6px 10px",
+          padding: compact ? "0 8px" : "0 10px",
           borderRadius: "var(--radius-sm)",
           backgroundColor: isOpen ? "var(--bg-surface-elevated)" : "var(--bg-app)",
           border: isOpen
@@ -147,7 +149,7 @@ export const ProviderSelectorMultiSelect: React.FC<ProviderSelectorMultiSelectPr
             ? "1px solid rgba(56, 189, 248, 0.4)"
             : "1px solid var(--border-subtle)",
           color: "var(--text-primary)",
-          fontSize: compact ? "11px" : "12px",
+          fontSize: compact ? "11.5px" : "12px",
           cursor: disabled ? "not-allowed" : "pointer",
           opacity: disabled ? 0.6 : 1,
           textAlign: "left",

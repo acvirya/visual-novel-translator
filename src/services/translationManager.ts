@@ -501,7 +501,14 @@ class TranslationManager {
       isSuccess = res.success;
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
       translatedMessage = res.translatedMessage || cleanMsg;
-      if (!res.success) {
+      if (res.success) {
+        useTranslationStore.getState().incrementSessionUsage(
+          res.promptTokens || 0,
+          res.completionTokens || 0,
+          res.cachedTokens || 0,
+          res.cost || 0
+        );
+      } else {
         logger.error("TranslationManager", `OpenRouter translation returned error: ${res.error}`);
       }
     }

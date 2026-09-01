@@ -4,6 +4,13 @@ import { LlmContextSettings } from "../services/translationManager";
 import { scriptManagerService } from "../services/scriptManagerService";
 import { settingsManager } from "../services/settingsManager";
 
+export interface SessionUsageStats {
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+  totalCost: number;
+}
+
 export interface TranslationState {
   liveLogs: TranslationLogItem[];
   isPaused: boolean;
@@ -13,6 +20,7 @@ export interface TranslationState {
   scriptThreshold: number;
   contextSettings: LlmContextSettings;
   contextHistoryLength: number;
+  sessionStats: SessionUsageStats;
 
   // Actions
   addLiveLog: (item: TranslationLogItem) => void;
@@ -25,6 +33,8 @@ export interface TranslationState {
   setScriptThreshold: (threshold: number) => void;
   setContextSettings: (settings: LlmContextSettings) => void;
   setContextHistoryLength: (len: number) => void;
+  incrementSessionUsage: (promptTokens: number, completionTokens: number, cachedTokens: number, cost: number) => void;
+  resetSessionStats: () => void;
 }
 
 export const useTranslationStore = create<TranslationState>((set) => {
@@ -51,6 +61,12 @@ export const useTranslationStore = create<TranslationState>((set) => {
     scriptThreshold: savedThreshold,
     contextSettings: initialContext,
     contextHistoryLength: 0,
+    sessionStats: {
+      promptTokens: 0,
+      completionTokens: 0,
+      cachedTokens: 0,
+      totalCost: 0,
+    },
 
     addLiveLog: (item) =>
       set((state) => ({
@@ -83,5 +99,23 @@ export const useTranslationStore = create<TranslationState>((set) => {
       set({ contextSettings });
     },
     setContextHistoryLength: (contextHistoryLength) => set({ contextHistoryLength }),
+    incrementSessionUsage: (promptTokens, completionTokens, cachedTokens, cost) =>
+      set((state) => ({
+        sessionStats: {
+          promptTokens: state.sessionStats.promptTokens + promptTokens,
+          completionTokens: state.sessionStats.completionTokens + completionTokens,
+          cachedTokens: state.sessionStats.cachedTokens + cachedTokens,
+          totalCost: state.sessionStats.totalCost + cost,
+        },
+      })),
+    resetSessionStats: () =>
+      set({
+        sessionStats: {
+          promptTokens: 0,
+          completionTokens: 0,
+          cachedTokens: 0,
+          totalCost: 0,
+        },
+      }),
   };
 });
