@@ -15,6 +15,12 @@ import {
 } from "lucide-react";
 import { settingsManager } from "../../services/settingsManager";
 import { vndbService, VndbSearchResult, VndbCharacterResult } from "../../services/vndbService";
+import {
+  VndbTraitFilterOptions,
+  DEFAULT_VNDB_TRAIT_FILTERS,
+  filterPersonalityTraits,
+  formatCharacterNotes,
+} from "../../utils/vndbTraitFilter";
 import { useToast } from "../common/ToastProvider";
 
 export interface GlossaryCategory {
@@ -101,6 +107,13 @@ export const GlossaryManagerView: React.FC = () => {
   const [vndbCharacters, setVndbCharacters] = useState<VndbCharacterResult[]>([]);
   const [vndbError, setVndbError] = useState<string | null>(null);
   const [vndbSuccessMsg, setVndbSuccessMsg] = useState<string | null>(null);
+  const [traitFilters, setTraitFilters] = useState<VndbTraitFilterOptions>(() => {
+    try {
+      const saved = localStorage.getItem("vn_vndb_trait_filters");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return DEFAULT_VNDB_TRAIT_FILTERS;
+  });
 
   // Auto-Save Effect
   useEffect(() => {
@@ -244,13 +257,34 @@ export const GlossaryManagerView: React.FC = () => {
     }
   };
 
+  const handleUpdateTraitFilter = (key: keyof VndbTraitFilterOptions, val: boolean) => {
+    const next = { ...traitFilters, [key]: val };
+    setTraitFilters(next);
+    try {
+      localStorage.setItem("vn_vndb_trait_filters", JSON.stringify(next));
+    } catch {}
+
+    // Dynamically re-filter currently loaded characters in place
+    setVndbCharacters((prev) =>
+      prev.map((c) => {
+        const personality = filterPersonalityTraits(c.rawTraits || [], next);
+        const notes = formatCharacterNotes(c.role, c.gender, personality);
+        return {
+          ...c,
+          personality,
+          notes,
+        };
+      })
+    );
+  };
+
   const handleSelectVn = async (vn: VndbSearchResult) => {
     setSelectedVn(vn);
     setIsLoadingCharacters(true);
     setVndbError(null);
 
     try {
-      const chars = await vndbService.fetchCharacters(vn.id);
+      const chars = await vndbService.fetchCharacters(vn.id, traitFilters);
       setVndbCharacters(chars);
       if (chars.length === 0) {
         setVndbError(`No character entries found for "${vn.title}" on VNDB.`);
@@ -936,6 +970,60 @@ export const GlossaryManagerView: React.FC = () => {
                     </button>
                   </div>
 
+                  {/* Personality Trait Filter Options (Token Optimization) */}
+                  <div
+                    style={{
+                      backgroundColor: "var(--bg-app)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "var(--radius-sm)",
+                      padding: "8px 12px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "6px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px" }}>
+                      <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-secondary)", letterSpacing: "0.3px" }}>
+                        LLM Personality Token Optimization (Trait Filter):
+                      </span>
+                      <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
+                        Filters out obvious/redundant traits to save LLM tokens & prevent prompt pollution
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap", fontSize: "11px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "5px", cursor: "pointer", color: "var(--text-primary)" }}>
+                        <input
+                          type="checkbox"
+                          checked={traitFilters.filterTalkingPatterns}
+                          onChange={(e) => handleUpdateTraitFilter("filterTalkingPatterns", e.target.checked)}
+                          style={{ accentColor: "var(--accent-cyan)", cursor: "pointer" }}
+                        />
+                        <span>Filter Talking Patterns & Pronouns (Watashi, Boku, Third Person, Desu)</span>
+                      </label>
+
+                      <label style={{ display: "flex", alignItems: "center", gap: "5px", cursor: "pointer", color: "var(--text-primary)" }}>
+                        <input
+                          type="checkbox"
+                          checked={traitFilters.filterDialects}
+                          onChange={(e) => handleUpdateTraitFilter("filterDialects", e.target.checked)}
+                          style={{ accentColor: "var(--accent-cyan)", cursor: "pointer" }}
+                        />
+                        <span>Filter Dialects (Kansai-ben, Archaic, Gyaru)</span>
+                      </label>
+
+                      <label style={{ display: "flex", alignItems: "center", gap: "5px", cursor: "pointer", color: "var(--text-primary)" }}>
+                        <input
+                          type="checkbox"
+                          checked={traitFilters.filterReligiousBeliefs}
+                          onChange={(e) => handleUpdateTraitFilter("filterReligiousBeliefs", e.target.checked)}
+                          style={{ accentColor: "var(--accent-cyan)", cursor: "pointer" }}
+                        />
+                        <span>Filter Religious Beliefs (Atheist, Agnostic)</span>
+                      </label>
+                    </div>
+                  </div>
+
                   {/* Character Filters & Selection Actions */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
                     <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
@@ -987,9 +1075,9 @@ export const GlossaryManagerView: React.FC = () => {
                         <thead>
                           <tr style={{ backgroundColor: "var(--bg-surface-elevated)", borderBottom: "1px solid var(--border-subtle)", color: "var(--text-secondary)", textAlign: "left", position: "sticky", top: 0, zIndex: 2 }}>
                             <th style={{ padding: "6px 10px", width: "40px", textAlign: "center" }}>✓</th>
-                            <th style={{ padding: "6px 10px", width: "28%" }}>Japanese Name</th>
-                            <th style={{ padding: "6px 10px", width: "32%" }}>English Translation (Editable)</th>
-                            <th style={{ padding: "6px 10px" }}>Notes / Role & Gender (Editable)</th>
+                            <th style={{ padding: "6px 10px", width: "24%" }}>Japanese Name</th>
+                            <th style={{ padding: "6px 10px", width: "28%" }}>English Translation (Editable)</th>
+                            <th style={{ padding: "6px 10px" }}>Notes / Role, Gender & Personality (Editable)</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1026,7 +1114,7 @@ export const GlossaryManagerView: React.FC = () => {
                                   type="text"
                                   className="input-field"
                                   value={char.notes || ""}
-                                  placeholder="e.g. Role: Main, Female"
+                                  placeholder="e.g. Role: Main, Female | Personality: Cheerful, Mischievous"
                                   onChange={(e) => {
                                     const val = e.target.value;
                                     setVndbCharacters((prev) =>

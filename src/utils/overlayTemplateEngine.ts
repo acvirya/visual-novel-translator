@@ -37,11 +37,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     css: `.vn-box {
   width: 100%;
   min-height: 100%;
-  background: rgba(13, 16, 23, 0.88);
-  border: 2px solid #30363d;
+  background: rgba(13, 16, 23, 0.90);
+  border: 2px solid #384566;
   border-radius: 8px;
-  padding: 14px 18px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  padding: 12px 18px;
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 4px 12px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -52,11 +52,12 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: rgba(227, 179, 65, 0.15);
-  border: 1px solid rgba(227, 179, 65, 0.4);
+  background: rgba(227, 179, 65, 0.18);
+  border: 1px solid rgba(227, 179, 65, 0.45);
   padding: 2px 10px;
   border-radius: 4px;
   align-self: flex-start;
+  box-shadow: inset 0 0 8px rgba(227, 179, 65, 0.1);
 }
 
 .vn-speaker-jp {
@@ -103,7 +104,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   </div>
   {{/if}}
 
-  <div class="persona-frame">
+  <div class="persona-frame {{#if hasSpeaker}}has-speaker{{/if}}">
     <div class="persona-stripe"></div>
     <div class="persona-content">
       {{#if message}}
@@ -119,23 +120,23 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     css: `.persona-wrapper {
   position: relative;
   width: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
-  padding-top: 14px;
+  padding: 10px 10px 4px 10px;
   box-sizing: border-box;
   overflow: visible;
-  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.85));
 }
 
 .persona-nameplate {
   position: absolute;
   top: 0px;
-  left: 24px;
+  left: 20px;
   z-index: 10;
   background: #ff1053;
   transform: skewX(-14deg);
-  padding: 4px 18px;
-  box-shadow: -4px 4px 0px #000000;
+  padding: 3px 16px;
+  box-shadow: -3px 3px 0px #000000, inset 0 1px 0 rgba(255,255,255,0.3);
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -158,20 +159,26 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 
 .persona-frame {
   width: 100%;
-  background: rgba(12, 14, 18, 0.94);
-  clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 30px, 100% 100%, 26px 100%, 0 calc(100% - 26px));
-  border-left: 6px solid #ff1053;
+  min-height: 100%;
+  background: rgba(12, 14, 18, 0.95);
+  clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 20px 100%, 0 calc(100% - 20px));
+  border-left: 5px solid #ff1053;
   border-right: 3px solid #ff1053;
+  box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.7);
   position: relative;
-  padding: 16px 24px;
+  padding: 14px 20px;
   box-sizing: border-box;
   overflow: visible;
+}
+
+.persona-frame.has-speaker {
+  padding-top: 22px;
 }
 
 .persona-stripe {
   position: absolute;
   top: 0;
-  right: 40px;
+  right: 36px;
   width: 8px;
   height: 100%;
   background: rgba(255, 16, 83, 0.25);
@@ -199,194 +206,6 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 }`,
   },
   {
-    id: "gothic_fantasy",
-    name: "Genshin / Fantasy Ornate Filigree Frame",
-    description: "Curved asymmetrical corners with golden jewel accents, glowing filigrees, and celestial elegance",
-    html: `<div class="gothic-frame">
-  <div class="gothic-corner gothic-tl">✦</div>
-  <div class="gothic-corner gothic-tr">✦</div>
-  <div class="gothic-corner gothic-bl">✦</div>
-  <div class="gothic-corner gothic-br">✦</div>
-
-  {{#if hasSpeaker}}
-  <div class="gothic-gem-header">
-    <span class="gothic-gem">◆</span>
-    {{#if speaker}}
-    <span class="gothic-speaker">{{speaker}}</span>
-    {{/if}}
-    {{#if translatedSpeaker}}
-    <span class="gothic-speaker-en">· {{translatedSpeaker}}</span>
-    {{/if}}
-    <span class="gothic-gem">◆</span>
-  </div>
-  {{/if}}
-
-  {{#if message}}
-  <div class="gothic-jp">{{message}}</div>
-  {{/if}}
-
-  {{#if translatedMessage}}
-  <div class="gothic-trans">{{translatedMessage}}</div>
-  {{/if}}
-</div>`,
-    css: `.gothic-frame {
-  position: relative;
-  width: 100%;
-  min-height: 100%;
-  background: linear-gradient(135deg, rgba(20, 16, 32, 0.95) 0%, rgba(10, 8, 18, 0.97) 100%);
-  border: 2px solid #d4af37;
-  border-radius: 28px 0px 28px 0px;
-  padding: 16px 24px;
-  box-shadow: 0 0 15px rgba(212, 175, 55, 0.25), inset 0 0 20px rgba(212, 175, 55, 0.08), 0 10px 30px rgba(0, 0, 0, 0.9);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-sizing: border-box;
-}
-
-.gothic-corner {
-  position: absolute;
-  color: #f5d77f;
-  font-size: 14px;
-  text-shadow: 0 0 8px #f5d77f;
-}
-.gothic-tl { top: 4px; left: 8px; }
-.gothic-tr { top: 4px; right: 8px; }
-.gothic-bl { bottom: 4px; left: 8px; }
-.gothic-br { bottom: 4px; right: 8px; }
-
-.gothic-gem-header {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(212, 175, 55, 0.15);
-  border: 1px solid rgba(212, 175, 55, 0.5);
-  padding: 2px 14px;
-  border-radius: 16px;
-  align-self: flex-start;
-}
-
-.gothic-gem {
-  color: #38ef7d;
-  font-size: 11px;
-  text-shadow: 0 0 8px #38ef7d;
-}
-
-.gothic-speaker {
-  color: #fce38a;
-  font-weight: 700;
-  font-size: var(--speaker-font-size, 15px);
-  font-family: serif;
-}
-
-.gothic-speaker-en {
-  color: #ffffff;
-  font-size: calc(var(--speaker-font-size, 15px) * 0.92);
-  font-family: serif;
-}
-
-.gothic-jp {
-  font-size: calc(var(--message-font-size, 21px) * 0.7);
-  color: #b3a4c8;
-  line-height: 1.4;
-}
-
-.gothic-trans {
-  font-size: var(--message-font-size, 21px);
-  font-weight: 600;
-  color: #ffffff;
-  line-height: 1.4;
-  font-family: serif;
-  text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
-}`,
-  },
-  {
-    id: "glassmorphism",
-    name: "Modern Frosted Glass (Glassmorphism)",
-    description: "Sleek translucent glass design with backdrop-filter blur, cyan neon glow, and floating pill badge",
-    html: `<div class="glass-container">
-  {{#if hasSpeaker}}
-  <div class="glass-badge">
-    <div class="glass-glow-dot"></div>
-    {{#if speaker}}
-    <span class="glass-name">{{speaker}}</span>
-    {{/if}}
-    {{#if translatedSpeaker}}
-    <span class="glass-trans-name">({{translatedSpeaker}})</span>
-    {{/if}}
-  </div>
-  {{/if}}
-
-  {{#if message}}
-  <div class="glass-jp">{{message}}</div>
-  {{/if}}
-
-  {{#if translatedMessage}}
-  <div class="glass-text">{{translatedMessage}}</div>
-  {{/if}}
-</div>`,
-    css: `.glass-container {
-  width: 100%;
-  min-height: 100%;
-  background: rgba(18, 24, 38, 0.65);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(78, 115, 223, 0.35);
-  border-radius: 14px;
-  padding: 16px 20px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-sizing: border-box;
-}
-
-.glass-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(78, 115, 223, 0.2);
-  border: 1px solid rgba(78, 115, 223, 0.5);
-  padding: 3px 12px;
-  border-radius: 20px;
-  align-self: flex-start;
-}
-
-.glass-glow-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #36b9cc;
-  box-shadow: 0 0 8px #36b9cc;
-}
-
-.glass-name {
-  color: #36b9cc;
-  font-weight: 700;
-  font-size: var(--speaker-font-size, 15px);
-}
-
-.glass-trans-name {
-  color: #e6edf3;
-  font-size: calc(var(--speaker-font-size, 15px) * 0.9);
-}
-
-.glass-jp {
-  font-size: calc(var(--message-font-size, 21px) * 0.7);
-  color: #a0aec0;
-  line-height: 1.4;
-}
-
-.glass-text {
-  font-size: var(--message-font-size, 21px);
-  font-weight: 600;
-  color: #ffffff;
-  line-height: 1.4;
-  letter-spacing: 0.3px;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
-}`,
-  },
-  {
     id: "manga_bubble",
     name: "Manga Comic Speech Balloon",
     description: "Curved organic comic speech balloon with directional speech tail and vibrant manga styling",
@@ -402,7 +221,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   </div>
   {{/if}}
 
-  <div class="bubble-body">
+  <div class="bubble-body {{#if hasSpeaker}}has-speaker{{/if}}">
     {{#if message}}
     <div class="bubble-jp">{{message}}</div>
     {{/if}}
@@ -416,13 +235,12 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     css: `.bubble-wrapper {
   position: relative;
   width: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
-  padding-top: 10px;
-  padding-bottom: 16px;
+  padding: 10px 10px 14px 10px;
   box-sizing: border-box;
   overflow: visible;
-  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.75));
 }
 
 .bubble-speaker {
@@ -437,7 +255,7 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
   font-weight: 800;
   font-size: var(--speaker-font-size, 14px);
   z-index: 10;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
 }
 
 .bubble-speaker-sub {
@@ -448,15 +266,19 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 
 .bubble-body {
   position: relative;
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.95);
   border: 3px solid #000000;
-  border-radius: 20px;
-  padding: 18px 22px;
+  border-radius: 16px;
+  padding: 14px 20px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   box-sizing: border-box;
-  overflow: visible;
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.08), 0 3px 10px rgba(0, 0, 0, 0.4);
+}
+
+.bubble-body.has-speaker {
+  padding-top: 22px;
 }
 
 .bubble-jp {
@@ -475,296 +297,26 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
 
 .bubble-tail {
   position: absolute;
-  bottom: -16px;
-  left: 40px;
+  bottom: -12px;
+  left: 36px;
   width: 0;
   height: 0;
-  border-left: 14px solid transparent;
+  border-left: 12px solid transparent;
   border-right: 4px solid transparent;
-  border-top: 16px solid rgba(255, 255, 255, 0.94);
+  border-top: 12px solid rgba(255, 255, 255, 0.95);
 }
 .bubble-tail::after {
   content: '';
   position: absolute;
   bottom: 0px;
-  left: -14px;
+  left: -12px;
   width: 0;
   height: 0;
-  border-left: 14px solid transparent;
+  border-left: 12px solid transparent;
   border-right: 4px solid transparent;
-  border-top: 16px solid #000000;
+  border-top: 12px solid #000000;
   z-index: -1;
   transform: translateY(3px);
-}`,
-  },
-  {
-    id: "cyberpunk",
-    name: "Cyberpunk HUD / Sci-Fi",
-    description: "Futuristic angular tech frame with neon yellow nameplate and high-contrast glowing accents",
-    html: `<div class="cyber-hud">
-  <div class="cyber-corner cyber-corner-tl"></div>
-  <div class="cyber-corner cyber-corner-tr"></div>
-  
-  {{#if hasSpeaker}}
-  <div class="cyber-header">
-    {{#if speaker}}
-    <div class="cyber-tag">ID // {{speaker}}</div>
-    {{/if}}
-    {{#if translatedSpeaker}}
-    <div class="cyber-subtag">[{{translatedSpeaker}}]</div>
-    {{/if}}
-  </div>
-  {{/if}}
-
-  {{#if message}}
-  <div class="cyber-raw">{{message}}</div>
-  {{/if}}
-
-  {{#if translatedMessage}}
-  <div class="cyber-translated">{{translatedMessage}}</div>
-  {{/if}}
-</div>`,
-    css: `.cyber-hud {
-  position: relative;
-  width: 100%;
-  min-height: 100%;
-  background: rgba(10, 12, 16, 0.92);
-  border: 2px solid #00f0ff;
-  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
-  padding: 14px 20px;
-  filter: drop-shadow(0 0 16px rgba(0, 240, 255, 0.35));
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  box-sizing: border-box;
-  overflow: visible;
-}`,
-  },
-  {
-    id: "cyberpunk",
-    name: "Cyberpunk HUD / Sci-Fi",
-    description: "Futuristic angular tech frame with neon yellow nameplate and high-contrast glowing accents",
-    html: `<div class="cyber-hud">
-  <div class="cyber-corner cyber-corner-tl"></div>
-  <div class="cyber-corner cyber-corner-tr"></div>
-  
-  {{#if hasSpeaker}}
-  <div class="cyber-header">
-    {{#if speaker}}
-    <div class="cyber-tag">ID // {{speaker}}</div>
-    {{/if}}
-    {{#if translatedSpeaker}}
-    <div class="cyber-subtag">[{{translatedSpeaker}}]</div>
-    {{/if}}
-  </div>
-  {{/if}}
-
-  {{#if message}}
-  <div class="cyber-raw">{{message}}</div>
-  {{/if}}
-
-  {{#if translatedMessage}}
-  <div class="cyber-translated">{{translatedMessage}}</div>
-  {{/if}}
-</div>`,
-    css: `.cyber-hud {
-  position: relative;
-  width: 100%;
-  min-height: 100%;
-  background: rgba(10, 12, 16, 0.92);
-  border: 2px solid #00f0ff;
-  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
-  padding: 14px 20px;
-  box-shadow: 0 0 20px rgba(0, 240, 255, 0.25), inset 0 0 15px rgba(0, 240, 255, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  box-sizing: border-box;
-}
-
-.cyber-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.cyber-tag {
-  background: #fcee0a;
-  color: #000000;
-  font-family: monospace;
-  font-size: var(--speaker-font-size, 14px);
-  font-weight: 800;
-  padding: 2px 10px;
-  letter-spacing: 1px;
-}
-
-.cyber-subtag {
-  color: #00f0ff;
-  font-family: monospace;
-  font-size: calc(var(--speaker-font-size, 14px) * 0.9);
-  font-weight: 600;
-}
-
-.cyber-raw {
-  color: #7982a9;
-  font-size: calc(var(--message-font-size, 20px) * 0.7);
-  font-family: sans-serif;
-  line-height: 1.35;
-}
-
-.cyber-translated {
-  color: #ffffff;
-  font-size: var(--message-font-size, 20px);
-  font-weight: 700;
-  line-height: 1.4;
-  text-shadow: 0 0 6px rgba(0, 240, 255, 0.6);
-}`,
-  },
-  {
-    id: "cinematic",
-    name: "Minimalist Cinematic Subtitles",
-    description: "Frameless floating subtitles with elegant outline and a subtle floating speaker pill",
-    html: `<div class="cine-container">
-  {{#if hasSpeaker}}
-  <div class="cine-speaker">
-    {{#if speaker}}
-    <span>{{speaker}}</span>
-    {{/if}}
-    {{#if translatedSpeaker}}
-    <span class="cine-speaker-en">({{translatedSpeaker}})</span>
-    {{/if}}
-  </div>
-  {{/if}}
-
-  {{#if message}}
-  <div class="cine-source">{{message}}</div>
-  {{/if}}
-
-  {{#if translatedMessage}}
-  <div class="cine-text">{{translatedMessage}}</div>
-  {{/if}}
-</div>`,
-    css: `.cine-container {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 8px 16px;
-  gap: 6px;
-  box-sizing: border-box;
-}
-
-.cine-speaker {
-  background: rgba(0, 0, 0, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: #ffd700;
-  font-size: var(--speaker-font-size, 14px);
-  font-weight: 700;
-  padding: 2px 14px;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.8);
-}
-
-.cine-speaker-en {
-  color: #ffffff;
-  font-weight: 500;
-  margin-left: 4px;
-}
-
-.cine-source {
-  color: rgba(220, 220, 220, 0.85);
-  font-size: calc(var(--message-font-size, 22px) * 0.7);
-  line-height: 1.4;
-  text-shadow: 1px 1px 3px #000000, -1px -1px 3px #000000, 1px -1px 3px #000000, -1px 1px 3px #000000;
-}
-
-.cine-text {
-  color: #ffffff;
-  font-size: var(--message-font-size, 22px);
-  font-weight: 700;
-  line-height: 1.45;
-  text-shadow: 2px 2px 4px #000000, -2px -2px 4px #000000, 2px -2px 4px #000000, -2px 2px 4px #000000, 0 4px 12px rgba(0,0,0,0.9);
-}`,
-  },
-  {
-    id: "rpg",
-    name: "Fantasy RPG / Novel Box",
-    description: "Classic scroll style with parchment tones, ornate golden border, and ribbon nameplate",
-    html: `<div class="rpg-box">
-  {{#if hasSpeaker}}
-  <div class="rpg-ribbon">
-    {{#if speaker}}
-    <span class="rpg-speaker-text">{{speaker}}</span>
-    {{/if}}
-    {{#if translatedSpeaker}}
-    <span class="rpg-speaker-sub">◆ {{translatedSpeaker}}</span>
-    {{/if}}
-  </div>
-  {{/if}}
-
-  {{#if message}}
-  <div class="rpg-orig">{{message}}</div>
-  {{/if}}
-
-  {{#if translatedMessage}}
-  <div class="rpg-dialogue">{{translatedMessage}}</div>
-  {{/if}}
-</div>`,
-    css: `.rpg-box {
-  width: 100%;
-  min-height: 100%;
-  background: linear-gradient(180deg, rgba(26, 20, 16, 0.94) 0%, rgba(15, 12, 10, 0.96) 100%);
-  border: 2px solid #c59b27;
-  border-radius: 6px;
-  box-shadow: 0 0 0 2px #3a2b16, 0 10px 30px rgba(0, 0, 0, 0.85);
-  padding: 16px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-sizing: border-box;
-}
-
-.rpg-ribbon {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: #2b1f14;
-  border: 1px solid #c59b27;
-  padding: 3px 12px;
-  border-radius: 4px;
-  align-self: flex-start;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-}
-
-.rpg-speaker-text {
-  color: #f7d070;
-  font-weight: 700;
-  font-size: var(--speaker-font-size, 15px);
-  font-family: serif;
-}
-
-.rpg-speaker-sub {
-  color: #d1b894;
-  font-size: calc(var(--speaker-font-size, 15px) * 0.9);
-  font-family: serif;
-}
-
-.rpg-orig {
-  color: #a8947b;
-  font-size: calc(var(--message-font-size, 20px) * 0.7);
-  line-height: 1.4;
-  font-style: italic;
-}
-
-.rpg-dialogue {
-  color: #fbeef0;
-  font-size: var(--message-font-size, 20px);
-  font-weight: 600;
-  line-height: 1.45;
-  font-family: serif;
-  text-shadow: 1px 1px 2px #000;
 }`,
   },
   {
@@ -794,10 +346,11 @@ export const OVERLAY_PRESETS: TemplatePreset[] = [
     css: `.custom-overlay-box {
   width: 100%;
   min-height: 100%;
-  background: rgba(13, 16, 23, 0.9);
+  background: rgba(13, 16, 23, 0.92);
   border: 2px solid #4e73df;
-  border-radius: 10px;
-  padding: 14px 18px;
+  border-radius: 8px;
+  padding: 12px 18px;
+  box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.6), 0 3px 10px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
   gap: 8px;

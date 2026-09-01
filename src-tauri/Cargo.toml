@@ -25,7 +25,7 @@ tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
 oneocr-rs = "0.3"
 windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",

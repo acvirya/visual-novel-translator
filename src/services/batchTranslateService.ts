@@ -294,7 +294,7 @@ class BatchTranslateService {
 
     try {
       const apiKey = settingsManager.getOpenRouterApiKey() || localStorage.getItem("vn_openrouter_api_key") || "";
-      const concurrency = Math.max(1, Math.min(8, settings.concurrency || 2));
+      const concurrency = Math.max(1, Math.min(32, settings.concurrency || 2));
 
       logger.info(
         "BatchTranslate",
@@ -1102,9 +1102,6 @@ class BatchTranslateService {
     let exactCost = 0;
     let hasExactUsage = false;
 
-    // Dynamic token ceiling proportional to total lines in current batch chunk
-    const maxTokens = Math.min(16384, Math.max(800, items.length * 350));
-
     const activeProviders = settings.selectedProviders ?? getSelectedModelProviders(settings.modelId);
     const reasoningPayload = buildReasoningPayload({ effort: settings.reasoningEffort });
 
@@ -1114,7 +1111,7 @@ class BatchTranslateService {
         modelId: settings.modelId,
         messagesJson: JSON.stringify(messages),
         temperature: settings.temperature,
-        maxTokens,
+        maxTokens: undefined, // Omit maxTokens so OpenRouter uses the model's native context limit without truncating
         timeoutSeconds,
         providers: activeProviders.length > 0 ? activeProviders : undefined,
         reasoning: reasoningPayload,

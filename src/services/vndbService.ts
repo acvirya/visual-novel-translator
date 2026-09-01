@@ -1,4 +1,13 @@
 import { logger } from "./loggerService";
+import {
+  VndbTraitFilterOptions,
+  DEFAULT_VNDB_TRAIT_FILTERS,
+  filterPersonalityTraits,
+  formatCharacterNotes,
+} from "../utils/vndbTraitFilter";
+
+export type { VndbTraitFilterOptions };
+export { DEFAULT_VNDB_TRAIT_FILTERS };
 
 export interface VndbSearchResult {
   id: string; // e.g. "v17"
@@ -15,7 +24,9 @@ export interface VndbCharacterResult {
   aliases?: string[];
   role?: string; // "main" | "primary" | "side" | "appears"
   gender?: string; // "f" | "m" | "both"
-  notes?: string; // e.g. "Role: Main, Female"
+  personality?: string[]; // e.g. ["Brother Complex", "Cheerful", "Deredere"]
+  notes?: string; // e.g. "Role: Main | Female | Personality: Brother Complex, Cheerful"
+  rawTraits?: Array<{ id?: string | number; name: string; group_name?: string; group_id?: string }>;
   selected?: boolean;
 }
 
@@ -78,7 +89,10 @@ class VndbService {
   /**
    * Fetch all characters associated with a Visual Novel ID
    */
-  public async fetchCharacters(vnId: string): Promise<VndbCharacterResult[]> {
+  public async fetchCharacters(
+    vnId: string,
+    filterOptions: VndbTraitFilterOptions = DEFAULT_VNDB_TRAIT_FILTERS
+  ): Promise<VndbCharacterResult[]> {
     const cleanId = vnId.trim().toLowerCase().match(/v\d+/)?.[0] || vnId.trim().toLowerCase();
     logger.info("VNDB", `Fetching characters for Visual Novel ID: ${cleanId}`);
 
@@ -90,7 +104,7 @@ class VndbService {
         },
         body: JSON.stringify({
           filters: ["vn", "=", ["id", "=", cleanId]],
-          fields: "id, name, original, aliases, sex, vns.role, vns.id",
+          fields: "id, name, original, aliases, sex, vns.role, vns.id, traits.id, traits.name, traits.group_id, traits.group_name, traits.spoiler",
           results: 100,
         }),
       });
@@ -133,10 +147,12 @@ class VndbService {
           genderLabel = rawSex.trim();
         }
 
-        // Pack role & gender together into the character's Notes field
-        const roleLabel = vnRole ? `Role: ${vnRole.charAt(0).toUpperCase() + vnRole.slice(1)}` : "";
-        const notesArr = [roleLabel, genderLabel].filter(Boolean);
-        const notes = notesArr.join(", ");
+        // Extract filtered personality traits
+        const rawTraits = Array.isArray(c.traits) ? c.traits : [];
+        const personalityTraits = filterPersonalityTraits(rawTraits, filterOptions);
+
+        // Pack role, gender & filtered personality together into the character's Notes field
+        const notes = formatCharacterNotes(vnRole, genderLabel, personalityTraits);
 
         return {
           id: c.id,
@@ -145,7 +161,9 @@ class VndbService {
           aliases: c.aliases || [],
           role: vnRole || "side",
           gender: genderLabel || undefined,
+          personality: personalityTraits,
           notes,
+          rawTraits,
           selected: vnRole === "main" || vnRole === "primary", // Pre-select main and primary characters
         };
       });

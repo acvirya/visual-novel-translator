@@ -73,7 +73,45 @@ fn get_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
 }
 
 #[tauri::command]
-fn show_overlay(app: AppHandle, monitor_name: Option<String>) -> Result<(), String> {
+fn get_window_monitor(app: AppHandle, label: String) -> Result<MonitorInfo, String> {
+    if let Some(win) = app.get_webview_window(&label) {
+        let monitor = win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten());
+        if let Some(m) = monitor {
+            let primary = win.primary_monitor().ok().flatten();
+            let primary_name = primary.and_then(|p| p.name().cloned());
+            let name = m.name().cloned().unwrap_or_else(|| "Target Monitor".to_string());
+            let is_primary = primary_name.as_ref() == Some(&name);
+            let size = m.size();
+            let pos = m.position();
+            let scale = m.scale_factor();
+
+            Ok(MonitorInfo {
+                name,
+                width: size.width,
+                height: size.height,
+                x: pos.x,
+                y: pos.y,
+                scale_factor: scale,
+                is_primary,
+            })
+        } else {
+            Err("No monitor found for window".to_string())
+        }
+    } else {
+        Err(format!("Window {} not found", label))
+    }
+}
+
+#[tauri::command]
+fn show_overlay(
+    app: AppHandle,
+    monitor_name: Option<String>,
+    x: Option<i32>,
+    y: Option<i32>,
+    width: Option<u32>,
+    height: Option<u32>,
+    is_click_through: Option<bool>,
+) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("overlay") {
         // Find matching monitor
         if let Ok(monitors) = overlay_win.available_monitors() {
@@ -85,15 +123,62 @@ fn show_overlay(app: AppHandle, monitor_name: Option<String>) -> Result<(), Stri
 
             if let Some(m) = target_monitor {
                 let pos = m.position();
-                let size = m.size();
-                let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
-                let _ = overlay_win.set_size(PhysicalSize::new(size.width, size.height));
+                let mon_size = m.size();
+
+                if let (Some(bx), Some(by), Some(bw), Some(bh)) = (x, y, width, height) {
+                    let scale = m.scale_factor();
+                    let phys_x = pos.x + (bx as f64 * scale).round() as i32;
+                    let phys_y = pos.y + (by as f64 * scale).round() as i32;
+                    let phys_w = ((bw as f64 * scale).round() as u32).max(50);
+                    let phys_h = ((bh as f64 * scale).round() as u32).max(30);
+                    let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
+                    let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
+                } else {
+                    let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
+                    let _ = overlay_win.set_size(PhysicalSize::new(mon_size.width, mon_size.height));
+                }
             }
         }
 
         let _ = overlay_win.set_always_on_top(true);
-        let _ = overlay_win.set_ignore_cursor_events(true);
+        let click_through = is_click_through.unwrap_or(false);
+        let _ = overlay_win.set_ignore_cursor_events(click_through);
         overlay_win.show().map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("Overlay window not found".to_string())
+    }
+}
+
+#[tauri::command]
+fn update_overlay_bounds(
+    app: AppHandle,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    monitor_name: Option<String>,
+) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        if let Ok(monitors) = overlay_win.available_monitors() {
+            let target_monitor = if let Some(ref m_name) = monitor_name {
+                monitors.into_iter().find(|m| m.name() == Some(m_name))
+            } else {
+                overlay_win.primary_monitor().ok().flatten()
+            };
+
+            if let Some(m) = target_monitor {
+                let pos = m.position();
+                let scale = m.scale_factor();
+                let phys_x = pos.x + (x as f64 * scale).round() as i32;
+                let phys_y = pos.y + (y as f64 * scale).round() as i32;
+                let phys_w = ((width as f64 * scale).round() as u32).max(50);
+                let phys_h = ((height as f64 * scale).round() as u32).max(30);
+
+                let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
+                let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
+            }
+        }
         Ok(())
     } else {
         Err("Overlay window not found".to_string())
@@ -126,11 +211,49 @@ fn set_overlay_click_through(app: AppHandle, enable: bool) -> Result<(), String>
 }
 
 #[tauri::command]
-fn set_overlay_edit_mode(app: AppHandle, is_editing: bool) -> Result<(), String> {
+fn set_overlay_edit_mode(
+    app: AppHandle,
+    is_editing: bool,
+    monitor_name: Option<String>,
+    x: Option<i32>,
+    y: Option<i32>,
+    width: Option<u32>,
+    height: Option<u32>,
+    is_click_through: Option<bool>,
+) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("overlay") {
-        overlay_win
-            .set_ignore_cursor_events(!is_editing)
-            .map_err(|e| e.to_string())?;
+        if let Ok(monitors) = overlay_win.available_monitors() {
+            let target_monitor = if let Some(ref m_name) = monitor_name {
+                monitors.into_iter().find(|m| m.name() == Some(m_name))
+            } else {
+                overlay_win.primary_monitor().ok().flatten()
+            };
+
+            if let Some(m) = target_monitor {
+                let pos = m.position();
+                let mon_size = m.size();
+
+                if is_editing {
+                    // Expand to full monitor for free dragging/resizing across the entire screen
+                    let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
+                    let _ = overlay_win.set_size(PhysicalSize::new(mon_size.width, mon_size.height));
+                    let _ = overlay_win.set_ignore_cursor_events(false);
+                } else {
+                    // Shrink to dialogue box bounds with DPI scaling
+                    if let (Some(bx), Some(by), Some(bw), Some(bh)) = (x, y, width, height) {
+                        let scale = m.scale_factor();
+                        let phys_x = pos.x + (bx as f64 * scale).round() as i32;
+                        let phys_y = pos.y + (by as f64 * scale).round() as i32;
+                        let phys_w = ((bw as f64 * scale).round() as u32).max(50);
+                        let phys_h = ((bh as f64 * scale).round() as u32).max(30);
+                        let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
+                        let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
+                    }
+                    let click_through = is_click_through.unwrap_or(false);
+                    let _ = overlay_win.set_ignore_cursor_events(click_through);
+                }
+            }
+        }
 
         let main_win = app.get_webview_window("main");
 
@@ -737,8 +860,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_monitors,
+            get_window_monitor,
             show_overlay,
             hide_overlay,
+            update_overlay_bounds,
             set_overlay_click_through,
             set_overlay_edit_mode,
             textractor::list_target_processes,

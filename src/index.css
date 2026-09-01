@@ -79,6 +79,19 @@ body.overlay-window-mode #root {
   background-color: transparent !important;
 }
 
+body.overlay-window-mode ::-webkit-scrollbar,
+.overlay-no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+body.overlay-window-mode *,
+.overlay-no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;

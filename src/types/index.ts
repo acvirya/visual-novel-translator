@@ -176,7 +176,7 @@ export interface OverlayConfig {
 
   // Custom Component / HTML & CSS Template Mode
   useCustomTemplate?: boolean;
-  templatePreset?: string; // "classic" | "glassmorphism" | "cyberpunk" | "cinematic" | "rpg" | "custom"
+  templatePreset?: string; // "classic" | "persona_stylish" | "manga_bubble" | "custom"
   customTemplateHtml?: string;
   customTemplateCss?: string;
 

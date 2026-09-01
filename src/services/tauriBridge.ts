@@ -17,8 +17,24 @@ export const TauriBridge = {
   getMonitors: (): Promise<MonitorInfo[]> =>
     invoke<MonitorInfo[]>("get_monitors"),
 
-  showOverlay: (monitorName?: string | null): Promise<void> =>
-    invoke("show_overlay", { monitorName }),
+  showOverlay: (options?: {
+    monitorName?: string | null;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    isClickThrough?: boolean;
+  }): Promise<void> =>
+    invoke("show_overlay", options || {}),
+
+  updateOverlayBounds: (options: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    monitorName?: string | null;
+  }): Promise<void> =>
+    invoke("update_overlay_bounds", options),
 
   hideOverlay: (): Promise<void> =>
     invoke("hide_overlay"),
@@ -26,8 +42,16 @@ export const TauriBridge = {
   setOverlayClickThrough: (enable: boolean): Promise<void> =>
     invoke("set_overlay_click_through", { enable }),
 
-  setOverlayEditMode: (isEditing: boolean): Promise<void> =>
-    invoke("set_overlay_edit_mode", { isEditing }),
+  setOverlayEditMode: (options: {
+    isEditing: boolean;
+    monitorName?: string | null;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    isClickThrough?: boolean;
+  }): Promise<void> =>
+    invoke("set_overlay_edit_mode", options),
 
   openRegionSelectorOverlay: (monitorName?: string | null): Promise<void> =>
     invoke("open_region_selector_overlay", { monitorName }),

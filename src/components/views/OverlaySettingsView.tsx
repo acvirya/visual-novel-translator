@@ -275,7 +275,14 @@ export const OverlaySettingsView: React.FC = () => {
 
     try {
       if (nextState) {
-        await invoke("show_overlay", { monitorName: config.targetMonitor });
+        await invoke("show_overlay", {
+          monitorName: config.targetMonitor,
+          x: Math.round(config.x),
+          y: Math.round(config.y),
+          width: Math.round(config.width),
+          height: Math.round(config.height),
+          isClickThrough: config.isClickThrough,
+        });
       } else {
         await invoke("hide_overlay");
         setIsEditingPosition(false);
@@ -294,11 +301,32 @@ export const OverlaySettingsView: React.FC = () => {
     overlayChannel.send({ type: "SET_EDIT_MODE", isEditing: nextEditState });
 
     try {
-      await invoke("set_overlay_edit_mode", { isEditing: nextEditState });
+      await invoke("set_overlay_edit_mode", {
+        isEditing: nextEditState,
+        monitorName: config.targetMonitor,
+        x: Math.round(config.x),
+        y: Math.round(config.y),
+        width: Math.round(config.width),
+        height: Math.round(config.height),
+        isClickThrough: config.isClickThrough,
+      });
     } catch {
       // Non-Tauri fallback
     }
   };
+
+  // Dynamically update overlay window bounds when inputs change in settings
+  useEffect(() => {
+    if (config.isEnabled && !isEditingPosition) {
+      invoke("update_overlay_bounds", {
+        x: Math.round(config.x),
+        y: Math.round(config.y),
+        width: Math.round(config.width),
+        height: Math.round(config.height),
+        monitorName: config.targetMonitor,
+      }).catch(() => {});
+    }
+  }, [config.x, config.y, config.width, config.height, config.targetMonitor, config.isEnabled, isEditingPosition]);
 
   // Sample Dialogue Mock for Live Preview
   const sampleSpeakerJP = "坂上 智代";

@@ -111,6 +111,7 @@ export class OcrService {
   public static startAutoScan() {
     if (this.scanTimer) return;
     this.consecutiveErrorCount = 0;
+    this.lastSentText = { speaker: "", message: "" };
     useOcrStore.getState().setIsScanning(true);
     this.scheduleNextScan(10);
   }
@@ -125,6 +126,7 @@ export class OcrService {
     }
     this.consecutiveErrorCount = 0;
     this.isProcessing = false;
+    this.lastSentText = { speaker: "", message: "" };
     useOcrStore.getState().setIsScanning(false);
   }
 
@@ -175,7 +177,8 @@ export class OcrService {
 
       // Preprocess and forward to Translation pipeline if dialogue is settled and changed
       const cleanSpk = result.speaker ? cleanSpeakerName(executePreprocessingPipeline(result.speaker, "ocr")) : "";
-      const cleanMsg = result.message ? executePreprocessingPipeline(result.message, "ocr").trim() : "";
+      const rawMsg = result.message || result.rawText || "";
+      const cleanMsg = rawMsg ? executePreprocessingPipeline(rawMsg, "ocr").trim() : "";
 
       const hasText = cleanMsg.length > 0;
       const isSettled = result.isSettled;

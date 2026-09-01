@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { OcrRegion, OcrRegionRole, MonitorInfo } from "../../types";
 import { OcrService } from "../../services/ocrService";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, X, Trash2, MessageSquare, User, Crosshair } from "lucide-react";
 
 export const RegionSelectionOverlay: React.FC = () => {
-  const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
-  const targetMonitorName = localStorage.getItem("vn_ocr_target_monitor") || "monitor_1";
+  const [currentMonitor, setCurrentMonitor] = useState<MonitorInfo | null>(null);
 
   const [regions, setRegions] = useState<OcrRegion[]>(() => {
     try {
@@ -42,38 +41,80 @@ export const RegionSelectionOverlay: React.FC = () => {
     ];
   });
 
-  const initialRegionsRef = React.useRef<OcrRegion[]>([]);
+  const initialRegionsRef = useRef<OcrRegion[]>([]);
+  const currentMonitorRef = useRef<MonitorInfo | null>(null);
 
-  const reloadSavedRegions = () => {
+  const loadWindowMonitor = async (): Promise<MonitorInfo> => {
+    try {
+      const mon = await invoke<MonitorInfo>("get_window_monitor", { label: "region-selector" });
+      if (mon) {
+        setCurrentMonitor(mon);
+        currentMonitorRef.current = mon;
+        return mon;
+      }
+    } catch (e) {
+      console.warn("Failed to load window monitor for region selector:", e);
+    }
+    const fallback: MonitorInfo = {
+      name: "Primary Monitor",
+      x: 0,
+      y: 0,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scale_factor: window.devicePixelRatio || 1.0,
+      is_primary: true,
+    };
+    setCurrentMonitor(fallback);
+    currentMonitorRef.current = fallback;
+    return fallback;
+  };
+
+  const reloadSavedRegions = async () => {
+    const mon = await loadWindowMonitor();
     try {
       const saved = localStorage.getItem("vn_ocr_regions");
       if (saved) {
         const parsed: OcrRegion[] = JSON.parse(saved);
-        setRegions(parsed);
-        initialRegionsRef.current = JSON.parse(JSON.stringify(parsed));
-        if (parsed.length > 0) {
-          setSelectedRegionId(parsed[0].id);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const scale = mon.scale_factor || window.devicePixelRatio || 1.0;
+          const monX = mon.x || 0;
+          const monY = mon.y || 0;
+
+          // Align CSS logical coordinates with physical if physical exists
+          const aligned = parsed.map((r) => {
+            if (r.physicalX != null && r.physicalY != null && r.physicalWidth != null && r.physicalHeight != null) {
+              const logicalX = Math.round((r.physicalX - monX) / scale);
+              const logicalY = Math.round((r.physicalY - monY) / scale);
+              const logicalW = Math.round(r.physicalWidth / scale);
+              const logicalH = Math.round(r.physicalHeight / scale);
+              // Only apply if logical coordinates are valid within the monitor viewport
+              if (logicalX >= 0 && logicalY >= 0 && logicalW > 10 && logicalH > 10) {
+                return {
+                  ...r,
+                  x: logicalX,
+                  y: logicalY,
+                  width: logicalW,
+                  height: logicalH,
+                };
+              }
+            }
+            return r;
+          });
+
+          setRegions(aligned);
+          initialRegionsRef.current = JSON.parse(JSON.stringify(aligned));
+          if (aligned.length > 0) {
+            setSelectedRegionId(aligned[0].id);
+          }
+          return;
         }
-        return;
       }
     } catch (e) {
       console.warn("Failed to reload OCR regions:", e);
     }
   };
 
-  // Load monitors and sync on focus/broadcast
   useEffect(() => {
-    async function loadMonitors() {
-      try {
-        const list = await invoke<MonitorInfo[]>("get_monitors");
-        if (list && list.length > 0) {
-          setMonitors(list);
-        }
-      } catch (e) {
-        console.warn("Failed to load monitors:", e);
-      }
-    }
-    loadMonitors();
     reloadSavedRegions();
 
     const handleFocus = () => {
@@ -110,20 +151,15 @@ export const RegionSelectionOverlay: React.FC = () => {
   } | null>(null);
 
   const computeRegionsWithPhysical = (regs: OcrRegion[]): OcrRegion[] => {
-    const currentTarget = localStorage.getItem("vn_ocr_target_monitor");
-    const activeMonitor =
-      monitors.find((m) => m.name === currentTarget) ||
-      monitors.find((m) => m.name === targetMonitorName) ||
-      monitors.find((m) => m.is_primary) ||
-      monitors[0] || {
-        name: "Primary Monitor",
-        x: 0,
-        y: 0,
-        width: 1920,
-        height: 1080,
-        scale_factor: window.devicePixelRatio || 1.0,
-        is_primary: true,
-      };
+    const activeMonitor = currentMonitorRef.current || currentMonitor || {
+      name: "Primary Monitor",
+      x: 0,
+      y: 0,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scale_factor: window.devicePixelRatio || 1.0,
+      is_primary: true,
+    };
 
     const scale = activeMonitor.scale_factor || window.devicePixelRatio || 1.0;
     const monX = activeMonitor.x || 0;
@@ -135,7 +171,7 @@ export const RegionSelectionOverlay: React.FC = () => {
       physicalY: Math.round(monY + r.y * scale),
       physicalWidth: Math.round(r.width * scale),
       physicalHeight: Math.round(r.height * scale),
-      targetMonitor: activeMonitor.name || currentTarget || targetMonitorName,
+      targetMonitor: activeMonitor.name,
     }));
   };
 
@@ -150,7 +186,7 @@ export const RegionSelectionOverlay: React.FC = () => {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [regions, monitors, targetMonitorName]);
+  }, [regions, currentMonitor]);
 
   const handleSaveAndClose = async () => {
     try {

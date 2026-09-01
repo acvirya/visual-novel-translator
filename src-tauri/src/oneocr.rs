@@ -111,9 +111,9 @@ fn run_ocr_pipeline_on_image(
     idx: usize,
     region_name: &str,
 ) -> String {
-    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}.bmp", std::process::id(), idx));
-    if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Bmp) {
-        eprintln!("Warning: Failed to write temporary crop image: {}", e);
+    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}.png", std::process::id(), idx));
+    if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Png) {
+        eprintln!("Warning: Failed to write temporary crop image {}: {}", temp_file.display(), e);
         return String::new();
     }
 
@@ -359,6 +359,7 @@ pub fn scan_screen_regions(
 
         for prep in prepared_list {
             if stab.enable_motion_detection {
+                let is_new = !state_map.contains_key(&prep.id);
                 let motion = state_map.entry(prep.id.clone()).or_insert_with(|| MotionState {
                     last_edge_hash: prep.edge_hash,
                     last_change_time: now,
@@ -367,32 +368,37 @@ pub fn scan_screen_regions(
                     is_settled: false,
                 });
 
-                let is_cyclic = stab.ignore_blinking_prompt && motion.history_hashes.contains(&prep.edge_hash);
-                let edge_changed = !is_cyclic && prep.edge_hash != motion.last_edge_hash;
-
-                if edge_changed {
-                    motion.last_edge_hash = prep.edge_hash;
-                    motion.last_change_time = now;
-                    motion.is_settled = false;
-                    all_regions_settled = false;
-
-                    if motion.history_hashes.len() >= 4 {
-                        motion.history_hashes.pop_front();
-                    }
-                    motion.history_hashes.push_back(prep.edge_hash);
-
-                    actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                if is_new || motion.cached_text.is_empty() {
+                    // Initial scan: run OCR immediately so text appears right away
+                    actions.push((prep, ScanAction::RunOcr));
                 } else {
-                    let duration_still_ms = now.duration_since(motion.last_change_time).as_millis() as u64;
-                    if duration_still_ms >= stab.settle_time_ms {
-                        if !motion.is_settled {
-                            actions.push((prep, ScanAction::RunOcr));
+                    let is_cyclic = stab.ignore_blinking_prompt && motion.history_hashes.contains(&prep.edge_hash);
+                    let edge_changed = !is_cyclic && prep.edge_hash != motion.last_edge_hash;
+
+                    if edge_changed {
+                        motion.last_edge_hash = prep.edge_hash;
+                        motion.last_change_time = now;
+                        motion.is_settled = false;
+                        all_regions_settled = false;
+
+                        if motion.history_hashes.len() >= 4 {
+                            motion.history_hashes.pop_front();
+                        }
+                        motion.history_hashes.push_back(prep.edge_hash);
+
+                        actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                    } else {
+                        let duration_still_ms = now.duration_since(motion.last_change_time).as_millis() as u64;
+                        if duration_still_ms >= stab.settle_time_ms {
+                            if !motion.is_settled {
+                                actions.push((prep, ScanAction::RunOcr));
+                            } else {
+                                actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                            }
                         } else {
+                            all_regions_settled = false;
                             actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
                         }
-                    } else {
-                        all_regions_settled = false;
-                        actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
                     }
                 }
             } else {
@@ -414,11 +420,11 @@ pub fn scan_screen_regions(
     }
 
     // 3. Run OCR inference on required regions (without holding motion state lock)
-    let mut results_to_update: Vec<(String, u64, String, String)> = Vec::new();
+    let mut results_to_update: Vec<(String, u64, String, String, bool)> = Vec::new();
     for (prep, action) in actions {
         match action {
             ScanAction::ReturnCached(cached) => {
-                results_to_update.push((prep.id, prep.edge_hash, cached, prep.role));
+                results_to_update.push((prep.id, prep.edge_hash, cached, prep.role, false));
             }
             ScanAction::RunOcr => {
                 let text = {
@@ -427,26 +433,28 @@ pub fn scan_screen_regions(
                     run_ocr_pipeline_on_image(engine, &prep.prepared_img, temp_dir.as_path(), prep.idx, &prep.name)
                 };
                 let hash = if stab.enable_motion_detection { prep.edge_hash } else { prep.pixel_hash };
-                results_to_update.push((prep.id, hash, text, prep.role));
+                results_to_update.push((prep.id, hash, text, prep.role, true));
             }
         }
     }
 
-    // 4. Update motion state cache with new OCR results
+    // 4. Update motion state cache ONLY for regions where OCR inference actually executed
     {
         let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut state_map) = *state_guard {
-            for (id, hash, text, _) in &results_to_update {
-                if let Some(motion) = state_map.get_mut(id) {
-                    motion.last_edge_hash = *hash;
-                    motion.cached_text = text.clone();
-                    motion.is_settled = true;
+            for (id, hash, text, _, was_ocr_run) in &results_to_update {
+                if *was_ocr_run {
+                    if let Some(motion) = state_map.get_mut(id) {
+                        motion.last_edge_hash = *hash;
+                        motion.cached_text = text.clone();
+                        motion.is_settled = true;
+                    }
                 }
             }
         }
     }
 
-    for (id, _, text, role) in results_to_update {
+    for (id, _, text, role, _) in results_to_update {
         if role == "speaker" {
             if speaker_text.is_empty() {
                 speaker_text = text.clone();

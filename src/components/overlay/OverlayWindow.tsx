@@ -32,18 +32,11 @@ const DEFAULT_CONFIG: OverlayConfig = {
   showTranslatedMessage: true,
 };
 
-const EMPTY_DIALOGUE: OverlayDialogueMessage = {
-  speaker: "",
-  translatedSpeaker: "",
-  message: "",
-  translatedMessage: "",
-};
-
-const SAMPLE_EDIT_DIALOGUE: OverlayDialogueMessage = {
-  speaker: "Speaker Name",
-  translatedSpeaker: "",
-  message: "Original dialogue text will appear here...",
-  translatedMessage: "",
+const DEFAULT_PLACEHOLDER_DIALOGUE: OverlayDialogueMessage = {
+  speaker: "坂上 智代",
+  translatedSpeaker: "Tomoyo Sakagami",
+  message: "「早く教室に行きましょう。遅刻しちゃうわ。」",
+  translatedMessage: "\"Let's hurry to the classroom, or we'll be late.\"",
 };
 
 function hexToRgba(hex: string, opacity: number): string {
@@ -66,7 +59,7 @@ export const OverlayWindow: React.FC = () => {
     return overlayChannel.getSavedConfig() || DEFAULT_CONFIG;
   });
 
-  const [dialogue, setDialogue] = useState<OverlayDialogueMessage>(EMPTY_DIALOGUE);
+  const [dialogue, setDialogue] = useState<OverlayDialogueMessage>(DEFAULT_PLACEHOLDER_DIALOGUE);
   const [isEditing, setIsEditing] = useState<boolean>(false);
 
   // Box geometry in edit mode
@@ -168,9 +161,17 @@ export const OverlayWindow: React.FC = () => {
     });
     overlayChannel.send({ type: "CONFIG_UPDATE", config: updated });
 
-    // Tell Tauri to re-enable click-through
+    // Tell Tauri to shrink window back to box bounds and re-enable click-through settings
     try {
-      await invoke("set_overlay_edit_mode", { isEditing: false });
+      await invoke("set_overlay_edit_mode", {
+        isEditing: false,
+        monitorName: updated.targetMonitor,
+        x: updated.x,
+        y: updated.y,
+        width: updated.width,
+        height: updated.height,
+        isClickThrough: updated.isClickThrough,
+      });
     } catch {
       // Ignored if not running in Tauri
     }
@@ -188,7 +189,15 @@ export const OverlayWindow: React.FC = () => {
     overlayChannel.send({ type: "SET_EDIT_MODE", isEditing: false });
 
     try {
-      await invoke("set_overlay_edit_mode", { isEditing: false });
+      await invoke("set_overlay_edit_mode", {
+        isEditing: false,
+        monitorName: config.targetMonitor,
+        x: Math.round(config.x),
+        y: Math.round(config.y),
+        width: Math.round(config.width),
+        height: Math.round(config.height),
+        isClickThrough: config.isClickThrough,
+      });
     } catch {
       // Ignored if not running in Tauri
     }
@@ -302,13 +311,13 @@ export const OverlayWindow: React.FC = () => {
     }
   };
 
-  const [displayedDialogue, setDisplayedDialogue] = useState<OverlayDialogueMessage>(EMPTY_DIALOGUE);
+  const [displayedDialogue, setDisplayedDialogue] = useState<OverlayDialogueMessage>(DEFAULT_PLACEHOLDER_DIALOGUE);
   const [animTick, setAnimTick] = useState<number>(0);
 
   // Handle Text Animation Subsystem (Typewriter streaming & CSS keyframes)
   useEffect(() => {
     if (isEditing) {
-      setDisplayedDialogue(SAMPLE_EDIT_DIALOGUE);
+      setDisplayedDialogue(dialogue);
       return;
     }
 
@@ -357,18 +366,14 @@ export const OverlayWindow: React.FC = () => {
     }
   }, [dialogue, isEditing, config.textAnimation, config.animationSpeedMs]);
 
-  const currentX = isEditing ? boxRect.x : config.x;
-  const currentY = isEditing ? boxRect.y : config.y;
-  const currentW = isEditing ? boxRect.width : config.width;
-  const currentH = isEditing ? boxRect.height : config.height;
-
-  const activeDialogue = isEditing ? SAMPLE_EDIT_DIALOGUE : displayedDialogue;
-  const hasText = Boolean(
-    activeDialogue.speaker ||
-    activeDialogue.translatedSpeaker ||
-    activeDialogue.message ||
-    activeDialogue.translatedMessage
-  );
+  const currentDialogue = isEditing ? dialogue : displayedDialogue;
+  const activeDialogue =
+    currentDialogue.speaker ||
+    currentDialogue.translatedSpeaker ||
+    currentDialogue.message ||
+    currentDialogue.translatedMessage
+      ? currentDialogue
+      : DEFAULT_PLACEHOLDER_DIALOGUE;
 
   return (
     <div
@@ -376,18 +381,19 @@ export const OverlayWindow: React.FC = () => {
       onMouseUp={handleMouseUp}
       onMouseDown={isEditing ? handleBackdropMouseDown : undefined}
       style={{
-        position: "fixed",
+        position: isEditing ? "fixed" : "relative",
         top: 0,
         left: 0,
-        width: "100vw",
-        height: "100vh",
+        width: isEditing ? "100vw" : "100%",
+        height: isEditing ? "100vh" : "100%",
         backgroundColor: isEditing ? "rgba(0, 0, 0, 0.58)" : "transparent",
-        overflow: "hidden",
-        userSelect: "none",
+        overflow: isEditing ? "hidden" : "visible",
+        userSelect: isEditing ? "none" : "text",
         cursor: isEditing ? (interactionMode === "drawing" ? "crosshair" : "default") : "default",
         transition: "background-color 0.2s ease",
         zIndex: 999999,
-        pointerEvents: isEditing ? "auto" : "none",
+        pointerEvents: isEditing ? "auto" : config.isClickThrough ? "none" : "auto",
+        boxSizing: "border-box",
       }}
     >
       {/* Top Floating Bar in Edit Mode */}
@@ -459,48 +465,52 @@ export const OverlayWindow: React.FC = () => {
       )}
 
       {/* The Single Subtitle Dialogue Box */}
-      {(isEditing || hasText) && (
-        <div
+      <div
           onMouseDown={isEditing ? handleBoxMouseDown : undefined}
           style={{
-            position: "absolute",
-            left: `${currentX}px`,
-            top: `${currentY}px`,
-            width: `${currentW}px`,
-            minHeight: `${currentH}px`,
-            maxHeight: isEditing ? `${currentH}px` : `${currentH * config.maxExpandRatio}px`,
+            position: isEditing ? "absolute" : "relative",
+            left: isEditing ? `${boxRect.x}px` : 0,
+            top: isEditing ? `${boxRect.y}px` : 0,
+            width: isEditing ? `${boxRect.width}px` : "100%",
+            height: isEditing ? `${boxRect.height}px` : "100%",
+            minHeight: isEditing ? `${boxRect.height}px` : "100%",
+            maxHeight: isEditing ? `${boxRect.height}px` : "100%",
             backgroundColor: config.useCustomTemplate ? "transparent" : hexToRgba(config.backgroundColor, config.backgroundOpacity),
             borderRadius: `${config.borderRadius}px`,
             padding: config.useCustomTemplate ? "0" : "12px 18px",
             color: config.fontColor,
-            border: isEditing
-              ? "2px solid var(--accent-gold)"
-              : config.useCustomTemplate
+            border: config.useCustomTemplate
               ? "none"
               : `${config.outlineWidth}px solid ${config.outlineColor}`,
             boxShadow: isEditing
-              ? "0 0 0 4px rgba(227, 179, 65, 0.3), 0 12px 36px rgba(0,0,0,0.8)"
+              ? "inset 0 0 0 1px rgba(227, 179, 65, 0.5), inset 0 0 16px rgba(0,0,0,0.5)"
               : config.useCustomTemplate
               ? "none"
-              : "0 8px 24px rgba(0,0,0,0.6)",
+              : "inset 0 0 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.4)",
             display: "flex",
             flexDirection: "column",
             gap: "6px",
-            overflow: "visible",
+            overflowY: "auto",
+            overflowX: "hidden",
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
             cursor: isEditing ? "move" : "default",
             boxSizing: "border-box",
-            pointerEvents: isEditing ? "auto" : "none",
+            pointerEvents: isEditing ? "auto" : config.isClickThrough ? "none" : "auto",
           }}
         >
           {config.useCustomTemplate ? (
             /* Custom Component Template Engine Mode */
             <div
               id="vn-overlay-scope-root"
-              className="vn-overlay-scope-root"
+              className="vn-overlay-scope-root overlay-no-scrollbar"
               style={{
                 width: "100%",
                 height: "100%",
-                overflow: "visible",
+                overflowY: "auto",
+                overflowX: "hidden",
+                scrollbarWidth: "none",
+                msOverflowStyle: "none",
                 // @ts-ignore
                 "--speaker-font-size": `${config.speakerFontSize || 16}px`,
                 // @ts-ignore
@@ -519,6 +529,7 @@ export const OverlayWindow: React.FC = () => {
               <div
                 key={animTick}
                 className={config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : ""}
+                style={{ width: "100%", minHeight: "100%" }}
                 dangerouslySetInnerHTML={{
                   __html: compileOverlayTemplate(config.customTemplateHtml, activeDialogue, config),
                 }}
@@ -528,8 +539,18 @@ export const OverlayWindow: React.FC = () => {
             /* Standard Configurable Subtitle Box */
             <div
               key={animTick}
-              className={config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : ""}
-              style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%" }}
+              className={`overlay-no-scrollbar ${config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : ""}`}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px",
+                width: "100%",
+                height: "100%",
+                overflowY: "auto",
+                overflowX: "hidden",
+                scrollbarWidth: "none",
+                msOverflowStyle: "none",
+              }}
             >
               <style
                 dangerouslySetInnerHTML={{
@@ -605,47 +626,62 @@ export const OverlayWindow: React.FC = () => {
             </div>
           )}
 
+          {/* Top-layer Crisp Edit Border (Renders strictly on top of overlay content, background, and template borders) */}
+          {isEditing && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                border: "2px solid var(--accent-gold)",
+                borderRadius: `${config.borderRadius}px`,
+                pointerEvents: "none",
+                zIndex: 9999,
+                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.8), 0 0 0 1px rgba(0,0,0,0.8), 0 0 12px rgba(227, 179, 65, 0.6)",
+                boxSizing: "border-box",
+              }}
+            />
+          )}
+
           {/* 8-Way Resize Handles in Edit Mode */}
           {isEditing && (
-          <>
-            {/* Corners */}
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("nw", e)}
-              style={{ position: "absolute", top: -5, left: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", cursor: "nwse-resize" }}
-            />
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("ne", e)}
-              style={{ position: "absolute", top: -5, right: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", cursor: "nesw-resize" }}
-            />
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("sw", e)}
-              style={{ position: "absolute", bottom: -5, left: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", cursor: "nesw-resize" }}
-            />
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("se", e)}
-              style={{ position: "absolute", bottom: -5, right: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", cursor: "nwse-resize" }}
-            />
-            {/* Edges */}
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("n", e)}
-              style={{ position: "absolute", top: -4, left: "50%", transform: "translateX(-50%)", width: 24, height: 8, backgroundColor: "var(--accent-gold)", borderRadius: "2px", cursor: "ns-resize" }}
-            />
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("s", e)}
-              style={{ position: "absolute", bottom: -4, left: "50%", transform: "translateX(-50%)", width: 24, height: 8, backgroundColor: "var(--accent-gold)", borderRadius: "2px", cursor: "ns-resize" }}
-            />
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("w", e)}
-              style={{ position: "absolute", left: -4, top: "50%", transform: "translateY(-50%)", width: 8, height: 24, backgroundColor: "var(--accent-gold)", borderRadius: "2px", cursor: "ew-resize" }}
-            />
-            <div
-              onMouseDown={(e) => handleResizeHandleMouseDown("e", e)}
-              style={{ position: "absolute", right: -4, top: "50%", transform: "translateY(-50%)", width: 8, height: 24, backgroundColor: "var(--accent-gold)", borderRadius: "2px", cursor: "ew-resize" }}
-            />
-          </>
-        )}
+            <>
+              {/* Corners */}
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("nw", e)}
+                style={{ position: "absolute", top: -5, left: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", border: "1px solid #000", zIndex: 10000, cursor: "nwse-resize" }}
+              />
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("ne", e)}
+                style={{ position: "absolute", top: -5, right: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", border: "1px solid #000", zIndex: 10000, cursor: "nesw-resize" }}
+              />
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("sw", e)}
+                style={{ position: "absolute", bottom: -5, left: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", border: "1px solid #000", zIndex: 10000, cursor: "nesw-resize" }}
+              />
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("se", e)}
+                style={{ position: "absolute", bottom: -5, right: -5, width: 10, height: 10, backgroundColor: "var(--accent-gold)", border: "1px solid #000", zIndex: 10000, cursor: "nwse-resize" }}
+              />
+              {/* Edges */}
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("n", e)}
+                style={{ position: "absolute", top: -4, left: "50%", transform: "translateX(-50%)", width: 24, height: 8, backgroundColor: "var(--accent-gold)", border: "1px solid #000", borderRadius: "2px", zIndex: 10000, cursor: "ns-resize" }}
+              />
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("s", e)}
+                style={{ position: "absolute", bottom: -4, left: "50%", transform: "translateX(-50%)", width: 24, height: 8, backgroundColor: "var(--accent-gold)", border: "1px solid #000", borderRadius: "2px", zIndex: 10000, cursor: "ns-resize" }}
+              />
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("w", e)}
+                style={{ position: "absolute", left: -4, top: "50%", transform: "translateY(-50%)", width: 8, height: 24, backgroundColor: "var(--accent-gold)", border: "1px solid #000", borderRadius: "2px", zIndex: 10000, cursor: "ew-resize" }}
+              />
+              <div
+                onMouseDown={(e) => handleResizeHandleMouseDown("e", e)}
+                style={{ position: "absolute", right: -4, top: "50%", transform: "translateY(-50%)", width: 8, height: 24, backgroundColor: "var(--accent-gold)", border: "1px solid #000", borderRadius: "2px", zIndex: 10000, cursor: "ew-resize" }}
+              />
+            </>
+          )}
+        </div>
       </div>
-      )}
-    </div>
-  );
-};
+    );
+  };
