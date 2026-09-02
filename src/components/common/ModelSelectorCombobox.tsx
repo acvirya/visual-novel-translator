@@ -9,6 +9,7 @@ import {
   setModelPreferredReasoningEffort,
   ResolvedModelReasoning,
 } from "../../services/openRouterService";
+import { LlmProviderRegistry } from "../../services/providers/llmProviderRegistry";
 import {
   Star,
   Globe,
@@ -279,13 +280,54 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     }, 150);
   };
 
-  const currentModel = models.find((m) => m.id === selectedModelId);
+  const allMergedModels = useMemo(() => {
+    const list: OpenRouterModel[] = [];
+
+    // 1. Only include OpenRouter models if OpenRouter key is verified
+    if (LlmProviderRegistry.isProviderVerified("openrouter")) {
+      list.push(...models);
+    }
+
+    // 2. Include models from other verified providers
+    const providers = LlmProviderRegistry.getProviders();
+    for (const p of providers) {
+      if (p.id === "openrouter") continue;
+      if (!LlmProviderRegistry.isProviderVerified(p.id)) continue;
+
+      const pModels = LlmProviderRegistry.getModelsForProvider(p.id);
+      for (const m of pModels) {
+        const compositeId = `${p.id}:${m.id}`;
+        if (!list.some((existing) => existing.id === compositeId)) {
+          list.push({
+            id: compositeId,
+            name: `${p.name}: ${m.name}`,
+            context_length: m.context_length,
+            pricing: m.pricing,
+          });
+        }
+      }
+    }
+
+    // Fallback: If currently selected model is not in list yet (e.g. before initial fetch completes), preserve it
+    if (selectedModelId && !selectedModelId.startsWith("mt:") && !list.some((m) => m.id === selectedModelId)) {
+      list.push({
+        id: selectedModelId,
+        name: selectedModelId,
+        context_length: 128000,
+        pricing: { prompt: "0", completion: "0" },
+      });
+    }
+
+    return list;
+  }, [models, isOpen, selectedModelId]);
+
+  const currentModel = allMergedModels.find((m) => m.id === selectedModelId);
   const currentPricing = currentModel ? formatModelPricing(currentModel.pricing) : null;
   const isSelectedStarred = starredIds.includes(selectedModelId);
 
   const activeCapabilities = useMemo(
-    () => getModelReasoningCapabilities(selectedModelId, models),
-    [selectedModelId, models]
+    () => getModelReasoningCapabilities(selectedModelId, allMergedModels),
+    [selectedModelId, allMergedModels]
   );
 
   const getActiveEffortDisplayLabel = (): string | null => {
@@ -321,7 +363,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
 
   const q = searchFilter.toLowerCase().trim();
 
-  const filteredStarred = models.filter((m) => {
+  const filteredStarred = allMergedModels.filter((m) => {
     if (!starredIds.includes(m.id)) return false;
     if (!q) return true;
     const parsed = splitModelProviderAndName(m);
@@ -333,7 +375,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     );
   });
 
-  const filteredCatalog = models.filter((m) => {
+  const filteredCatalog = allMergedModels.filter((m) => {
     if (starredIds.includes(m.id)) return false;
     if (!q) return true;
     const parsed = splitModelProviderAndName(m);
@@ -746,13 +788,13 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                   zIndex: 2,
                 }}
               >
-                <Zap size={11} /> OPENROUTER CATALOG ({filteredCatalog.length})
+                <Zap size={11} /> AVAILABLE AI MODELS ({filteredCatalog.length})
               </div>
 
               {filteredCatalog.map((m) => {
                 const isSelected = m.id === selectedModelId;
                 const parsed = splitModelProviderAndName(m);
-                const capabilities = getModelReasoningCapabilities(m, models);
+                const capabilities = getModelReasoningCapabilities(m, allMergedModels);
                 const preferredEffort = getModelPreferredReasoningEffort(m.id);
                 const effortPreviewLabel = preferredEffort && preferredEffort !== "default"
                   ? formatReasoningEffortLabel(preferredEffort)
@@ -824,6 +866,24 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {filteredCatalog.length === 0 && filteredStarred.length === 0 && (
+            <div
+              style={{
+                padding: "16px 12px",
+                textAlign: "center",
+                color: "var(--text-muted)",
+                fontSize: "11px",
+                lineHeight: "1.5",
+              }}
+            >
+              <span>No verified AI models found.</span>
+              <br />
+              <span style={{ fontSize: "10px", opacity: 0.8 }}>
+                Verify an API key in Translation Providers to load its models, or select Free MT above.
+              </span>
             </div>
           )}
         </div>

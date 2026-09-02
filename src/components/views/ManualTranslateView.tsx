@@ -17,6 +17,7 @@ import {
 import { translateWithFreeMt } from "../../services/freeMtService";
 import { translateWithOpenRouter } from "../../services/openRouterService";
 import { scriptManagerService } from "../../services/scriptManagerService";
+import { LlmProviderRegistry } from "../../services/providers/llmProviderRegistry";
 
 export const ManualTranslateView: React.FC = () => {
   const [sourceText, setSourceText] = useState<string>("");
@@ -87,8 +88,11 @@ export const ManualTranslateView: React.FC = () => {
           finalTranslatedSpeaker = res.translatedSpeaker || cleanSpeaker;
           finalTranslatedMessage = res.translatedMessage || cleanMessage;
         } else {
-          providerLabel = `OpenRouter (${selectedModel.split("/").pop() || selectedModel})`;
-          const apiKey = localStorage.getItem("vn_openrouter_api_key") || "";
+          const { providerId, modelId } = LlmProviderRegistry.parseModelId(selectedModel);
+          const pDef = LlmProviderRegistry.getProvider(providerId);
+          const pCfg = LlmProviderRegistry.getProviderConfig(providerId);
+          providerLabel = `${pDef?.name || "AI"} (${modelId})`;
+          const apiKey = pCfg.apiKey || "";
           const systemPrompt = localStorage.getItem("vn_live_system_prompt") || undefined;
 
           const res = await translateWithOpenRouter({

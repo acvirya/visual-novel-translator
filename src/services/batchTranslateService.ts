@@ -15,6 +15,8 @@ import { logger } from "./loggerService";
 import { useBatchStore } from "../stores/useBatchStore";
 import { settingsManager } from "./settingsManager";
 import { ReasoningEffort } from "../types";
+import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
+import { LlmDispatcherService } from "./providers/llmDispatcherService";
 
 export interface BatchItem {
   id: number;
@@ -293,7 +295,7 @@ class BatchTranslateService {
     useBatchStore.getState().setIsPaused(false);
 
     try {
-      const apiKey = settingsManager.getOpenRouterApiKey() || localStorage.getItem("vn_openrouter_api_key") || "";
+      const apiKey = settingsManager.getOpenRouterApiKey();
       const concurrency = Math.max(1, Math.min(32, settings.concurrency || 2));
 
       logger.info(
@@ -1053,8 +1055,13 @@ class BatchTranslateService {
     onItemSuccess: (item: BatchItem) => void,
     allowedOverwriteIds?: Set<number>
   ): Promise<WholeTurnBatch> {
-    if (!apiKey.trim()) {
-      throw new Error("OpenRouter API Key is missing. Please configure and verify your API key in Translation Providers.");
+    const { providerId, modelId: targetModelId } = LlmProviderRegistry.parseModelId(settings.modelId);
+    const providerCfg = LlmProviderRegistry.getProviderConfig(providerId);
+    const resolvedKey = (apiKey || providerCfg.apiKey || "").trim();
+
+    if (!resolvedKey) {
+      const providerDef = LlmProviderRegistry.getProvider(providerId);
+      throw new Error(`${providerDef?.name || "LLM"} API Key is missing. Please configure and verify your API key in Translation Providers.`);
     }
 
     const systemPrompt = buildCompleteSystemPrompt({
@@ -1106,44 +1113,77 @@ class BatchTranslateService {
     const reasoningPayload = buildReasoningPayload({ effort: settings.reasoningEffort });
 
     try {
-      const invokePromise = invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
-        apiKey: apiKey.trim(),
-        modelId: settings.modelId,
-        messagesJson: JSON.stringify(messages),
-        temperature: settings.temperature,
-        maxTokens: undefined, // Omit maxTokens so OpenRouter uses the model's native context limit without truncating
-        timeoutSeconds,
-        providers: activeProviders.length > 0 ? activeProviders : undefined,
-        reasoning: reasoningPayload,
-      });
+      if (providerId !== "openrouter") {
+        const executePromise = LlmDispatcherService.executeChat({
+          modelId: settings.modelId,
+          messages,
+          temperature: settings.temperature,
+          reasoningEffort: settings.reasoningEffort,
+          timeoutSeconds,
+          overrideApiKey: resolvedKey,
+        });
 
-      const abortPromise = new Promise<never>((_, reject) => {
-        if (this.abortController?.signal.aborted) {
-          return reject(new Error("Translation cancelled by user."));
+        const abortPromise = new Promise<never>((_, reject) => {
+          if (this.abortController?.signal.aborted) {
+            return reject(new Error("Translation cancelled by user."));
+          }
+          this.abortController?.signal.addEventListener(
+            "abort",
+            () => reject(new Error("Translation cancelled by user.")),
+            { once: true }
+          );
+        });
+
+        const nativeRes = await Promise.race([executePromise, abortPromise]);
+
+        if (nativeRes && nativeRes.content) {
+          content = nativeRes.content.trim();
+          exactPromptTokens = nativeRes.promptTokens || 0;
+          exactCompletionTokens = nativeRes.completionTokens || 0;
+          exactCachedTokens = nativeRes.cachedTokens || 0;
+          exactCost = nativeRes.cost || 0;
+          hasExactUsage = true;
         }
-        this.abortController?.signal.addEventListener(
-          "abort",
-          () => reject(new Error("Translation cancelled by user.")),
-          { once: true }
-        );
-      });
+      } else {
+        const invokePromise = invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
+          apiKey: resolvedKey,
+          modelId: targetModelId,
+          messagesJson: JSON.stringify(messages),
+          temperature: settings.temperature,
+          maxTokens: undefined, // Omit maxTokens so OpenRouter uses the model's native context limit without truncating
+          timeoutSeconds,
+          providers: activeProviders.length > 0 ? activeProviders : undefined,
+          reasoning: reasoningPayload,
+        });
 
-      const nativeRes = await Promise.race([invokePromise, abortPromise]);
+        const abortPromise = new Promise<never>((_, reject) => {
+          if (this.abortController?.signal.aborted) {
+            return reject(new Error("Translation cancelled by user."));
+          }
+          this.abortController?.signal.addEventListener(
+            "abort",
+            () => reject(new Error("Translation cancelled by user.")),
+            { once: true }
+          );
+        });
 
-      if (nativeRes && nativeRes.content) {
-        content = nativeRes.content.trim();
-        exactPromptTokens = nativeRes.prompt_tokens || 0;
-        exactCompletionTokens = nativeRes.completion_tokens || 0;
-        exactCachedTokens = nativeRes.cached_tokens || 0;
-        exactCost = nativeRes.cost || 0;
-        hasExactUsage = true;
+        const nativeRes = await Promise.race([invokePromise, abortPromise]);
+
+        if (nativeRes && nativeRes.content) {
+          content = nativeRes.content.trim();
+          exactPromptTokens = nativeRes.prompt_tokens || 0;
+          exactCompletionTokens = nativeRes.completion_tokens || 0;
+          exactCachedTokens = nativeRes.cached_tokens || 0;
+          exactCost = nativeRes.cost || 0;
+          hasExactUsage = true;
+        }
       }
     } catch (e: any) {
       if (this.abortController?.signal.aborted) {
         throw new Error("Translation cancelled by user.");
       }
       lastErr = e?.message || String(e);
-      logger.error("BatchTranslate", `Native OpenRouter completion failed: ${lastErr}`);
+      logger.error("BatchTranslate", `Native completion failed: ${lastErr}`);
       throw new Error(lastErr);
     }
 

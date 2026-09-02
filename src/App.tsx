@@ -4,6 +4,7 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { Header } from "./components/layout/Header";
 import { shortcutService } from "./services/shortcutService";
 import { ToastProvider } from "./components/common/ToastProvider";
+import { LlmDispatcherService } from "./services/providers/llmDispatcherService";
 
 // Primary 4-Hub Views
 import { LiveGameHubView } from "./components/views/LiveGameHubView";
@@ -26,6 +27,9 @@ export function App() {
 
   useEffect(() => {
     shortcutService.init();
+
+    // Background refresh models for all verified providers on boot
+    LlmDispatcherService.refreshAllVerifiedProviders();
 
     const handleResize = () => {
       if (window.innerWidth < 860) {

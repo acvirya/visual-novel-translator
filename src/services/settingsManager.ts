@@ -406,8 +406,7 @@ class SettingsManager {
   public getOpenRouterApiKey(): string {
     return (
       this.cache.translation?.providers?.openrouter?.apiKey ||
-      this.cache.translation?.providers?.openai?.apiKey ||
-      localStorage.getItem("vn_openrouter_api_key") ||
+      localStorage.getItem("vn_provider_openrouter_key") ||
       ""
     );
   }

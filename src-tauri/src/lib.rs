@@ -612,15 +612,37 @@ fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> Resul
         } else {
             None
         }
+    } else if let Some(content_arr) = parsed["content"].as_array() {
+        // Anthropic messages format: content: [{ type: "text", text: "..." }]
+        let mut text = String::new();
+        for item in content_arr {
+            if let Some(t) = item["text"].as_str() {
+                text.push_str(t);
+            }
+        }
+        if !text.trim().is_empty() {
+            Some(text.trim().to_string())
+        } else {
+            None
+        }
     } else {
         None
     };
 
-    let content = content.ok_or_else(|| format!("Empty or unexpected OpenRouter response payload: {}", raw_body))?;
+    let content = content.ok_or_else(|| format!("Empty or unexpected response payload: {}", raw_body))?;
 
-    let prompt_tokens = parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-    let completion_tokens = parsed["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
-    let cached_tokens = parsed["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
+    let prompt_tokens = parsed["usage"]["prompt_tokens"]
+        .as_u64()
+        .or_else(|| parsed["usage"]["input_tokens"].as_u64())
+        .unwrap_or(0) as u32;
+    let completion_tokens = parsed["usage"]["completion_tokens"]
+        .as_u64()
+        .or_else(|| parsed["usage"]["output_tokens"].as_u64())
+        .unwrap_or(0) as u32;
+    let cached_tokens = parsed["usage"]["prompt_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .or_else(|| parsed["usage"]["cache_read_input_tokens"].as_u64())
+        .unwrap_or(0) as u32;
     let cost = parsed["usage"]["total_cost"]
         .as_f64()
         .or_else(|| parsed["usage"]["cost"].as_f64())
@@ -633,6 +655,66 @@ fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> Resul
         cached_tokens,
         cost,
     })
+}
+
+#[tauri::command]
+async fn llm_chat_completion(
+    url: String,
+    headers: std::collections::HashMap<String, String>,
+    payload_json: String,
+    timeout_seconds: Option<u64>,
+) -> Result<OpenRouterCompletionResponse, String> {
+    let client = get_http_client();
+    let timeout_duration = std::time::Duration::from_secs(timeout_seconds.unwrap_or(600));
+
+    let payload: serde_json::Value = serde_json::from_str(&payload_json)
+        .map_err(|e| format!("Invalid payload JSON: {}", e))?;
+
+    let mut req = client.post(&url).timeout(timeout_duration);
+    for (k, v) in headers {
+        req = req.header(&k, &v);
+    }
+    req = req.header("Accept-Encoding", "identity");
+
+    let resp = req
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to LLM API ({}): {}", url, e))?;
+
+    let status = resp.status();
+    let body_text = resp.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("LLM API error (HTTP {}): {}", status, body_text));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body_text)
+        .map_err(|e| format!("Failed to parse response JSON: {}", e))?;
+
+    parse_openrouter_payload(&parsed, &body_text)
+}
+
+#[tauri::command]
+async fn test_llm_connection(
+    url: String,
+    headers: std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    let client = get_http_client();
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(15));
+    for (k, v) in headers {
+        req = req.header(&k, &v);
+    }
+
+    let resp = req.send().await.map_err(|e| format!("Connection failed: {}", e))?;
+    let status = resp.status();
+    let body = resp.text().await.map_err(|e| format!("Failed to read body: {}", e))?;
+
+    if status.is_success() {
+        Ok(body)
+    } else {
+        Err(format!("HTTP {}: {}", status, body))
+    }
 }
 
 #[tauri::command]
@@ -898,6 +980,8 @@ pub fn run() {
             show_pick_files_dialog,
             show_pick_directory_dialog,
             openrouter_chat_completion,
+            llm_chat_completion,
+            test_llm_connection,
             append_debug_log,
             open_file_in_default_app
         ])

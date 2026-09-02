@@ -3,6 +3,8 @@ import { parseSpeakerMessageTranslation } from "./freeMtService";
 import { logger } from "./loggerService";
 import { settingsManager } from "./settingsManager";
 import { ReasoningEffort } from "../types";
+import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
+import { LlmDispatcherService } from "./providers/llmDispatcherService";
 
 export interface OpenRouterModelPricing {
   prompt: string;
@@ -1126,11 +1128,14 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
   // Dynamic token ceiling: protects against truncation on long monologues while preventing run-away hallucination
   const dynamicMaxTokens = maxTokens ?? Math.min(2048, Math.max(500, Math.ceil((message || "").length * 4)));
 
-  const cleanKey = apiKey.trim();
+  const { providerId, modelId: targetModelId } = LlmProviderRegistry.parseModelId(modelId);
+  const providerCfg = LlmProviderRegistry.getProviderConfig(providerId);
+  const cleanKey = (apiKey || providerCfg.apiKey || "").trim();
 
   if (!cleanKey) {
-    const err = "OpenRouter API Key is missing. Please set your API key in Translation Providers.";
-    logger.error("OpenRouter::API", err);
+    const providerDef = LlmProviderRegistry.getProvider(providerId);
+    const err = `${providerDef?.name || "LLM"} API Key is missing. Please set your API key in Translation Providers.`;
+    logger.error("LLM::API", err);
     return {
       success: false,
       translatedMessage: message,
@@ -1183,8 +1188,8 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
   });
 
   logger.info(
-    "OpenRouter::API",
-    `Sending structured request to model: ${modelId} (${messages.length} messages, ${contextHistory.length} history turns, maxTokens: ${dynamicMaxTokens}${reasoningPayload ? `, reasoning: ${JSON.stringify(reasoningPayload)}` : ""})`
+    "LLM::API",
+    `Sending structured request to model: ${modelId} (${messages.length} messages, ${contextHistory.length} history turns, maxTokens: ${dynamicMaxTokens})`
   );
 
   const startTime = Date.now();
@@ -1198,50 +1203,92 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
 
   const activeProviders = options.providers ?? getSelectedModelProviders(modelId);
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
-        apiKey: cleanKey,
-        modelId,
-        messagesJson: JSON.stringify(messages),
-        temperature,
-        maxTokens: dynamicMaxTokens,
-        providers: activeProviders.length > 0 ? activeProviders : undefined,
-        reasoning: reasoningPayload,
-      });
-
-      if (nativeRes && nativeRes.content) {
-        content = nativeRes.content.trim();
-        exactCost = nativeRes.cost || 0;
-        exactPromptTokens = nativeRes.prompt_tokens || 0;
-        exactCompletionTokens = nativeRes.completion_tokens || 0;
-        exactCachedTokens = nativeRes.cached_tokens || 0;
-        const elapsed = Date.now() - startTime;
-        logger.info(
-          "OpenRouter::API",
-          `Native structured response received in ${elapsed}ms (Cost: $${exactCost.toFixed(6)}): "${content.slice(0, 70)}..."`
-        );
+  // If using another provider directly (Anthropic, DeepSeek, Google, OpenAI, Groq, xAI, etc.)
+  if (providerId !== "openrouter") {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await LlmDispatcherService.executeChat({
+          modelId,
+          messages,
+          temperature,
+          maxTokens: dynamicMaxTokens,
+          reasoningEffort,
+          overrideApiKey: cleanKey,
+        });
+        if (res && res.content) {
+          content = res.content.trim();
+          exactCost = res.cost || 0;
+          exactPromptTokens = res.promptTokens || 0;
+          exactCompletionTokens = res.completionTokens || 0;
+          exactCachedTokens = res.cachedTokens || 0;
+          const elapsed = Date.now() - startTime;
+          logger.info(
+            "LLM::API",
+            `[${providerId}] Response received in ${elapsed}ms: "${content.slice(0, 70)}..."`
+          );
+          break;
+        }
+      } catch (err: any) {
+        const errStr = err?.message || String(err);
+        lastErr = errStr;
+        const isRateLimit = errStr.includes("429") || errStr.toLowerCase().includes("rate limit") || errStr.toLowerCase().includes("too many requests");
+        const isTransient = errStr.includes("502") || errStr.includes("503") || errStr.includes("504") || errStr.includes("timeout");
+        if ((isRateLimit || isTransient) && attempt < maxRetries) {
+          const backoffMs = isRateLimit ? 1500 * Math.pow(2, attempt - 1) + Math.random() * 500 : 1000 * attempt;
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+        logger.error("LLM::API", `Direct provider [${providerId}] error: ${errStr}`);
         break;
       }
-    } catch (nativeErr: any) {
-      const errStr = nativeErr?.message || String(nativeErr);
-      lastErr = errStr;
+    }
+  } else {
+    // OpenRouter flow
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
+          apiKey: cleanKey,
+          modelId: targetModelId,
+          messagesJson: JSON.stringify(messages),
+          temperature,
+          maxTokens: dynamicMaxTokens,
+          providers: activeProviders.length > 0 ? activeProviders : undefined,
+          reasoning: reasoningPayload,
+        });
 
-      const isRateLimit = errStr.includes("429") || errStr.toLowerCase().includes("rate limit") || errStr.toLowerCase().includes("too many requests");
-      const isTransient = errStr.includes("502") || errStr.includes("503") || errStr.includes("504") || errStr.includes("timeout");
+        if (nativeRes && nativeRes.content) {
+          content = nativeRes.content.trim();
+          exactCost = nativeRes.cost || 0;
+          exactPromptTokens = nativeRes.prompt_tokens || 0;
+          exactCompletionTokens = nativeRes.completion_tokens || 0;
+          exactCachedTokens = nativeRes.cached_tokens || 0;
+          const elapsed = Date.now() - startTime;
+          logger.info(
+            "OpenRouter::API",
+            `Native structured response received in ${elapsed}ms (Cost: $${exactCost.toFixed(6)}): "${content.slice(0, 70)}..."`
+          );
+          break;
+        }
+      } catch (nativeErr: any) {
+        const errStr = nativeErr?.message || String(nativeErr);
+        lastErr = errStr;
 
-      if ((isRateLimit || isTransient) && attempt < maxRetries) {
-        const backoffMs = isRateLimit ? 1500 * Math.pow(2, attempt - 1) + Math.random() * 500 : 1000 * attempt;
-        logger.warn(
-          "OpenRouter::API",
-          `Transient error (${errStr.slice(0, 60)}...). Retrying in ${(backoffMs / 1000).toFixed(1)}s (Attempt ${attempt}/${maxRetries})...`
-        );
-        await new Promise((r) => setTimeout(r, backoffMs));
-        continue;
+        const isRateLimit = errStr.includes("429") || errStr.toLowerCase().includes("rate limit") || errStr.toLowerCase().includes("too many requests");
+        const isTransient = errStr.includes("502") || errStr.includes("503") || errStr.includes("504") || errStr.includes("timeout");
+
+        if ((isRateLimit || isTransient) && attempt < maxRetries) {
+          const backoffMs = isRateLimit ? 1500 * Math.pow(2, attempt - 1) + Math.random() * 500 : 1000 * attempt;
+          logger.warn(
+            "OpenRouter::API",
+            `Transient error (${errStr.slice(0, 60)}...). Retrying in ${(backoffMs / 1000).toFixed(1)}s (Attempt ${attempt}/${maxRetries})...`
+          );
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+
+        logger.error("OpenRouter::API", `OpenRouter API error: ${errStr}`);
+        break;
       }
-
-      logger.error("OpenRouter::API", `OpenRouter API error: ${errStr}`);
-      break;
     }
   }
 

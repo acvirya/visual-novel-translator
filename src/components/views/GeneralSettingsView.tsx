@@ -4,6 +4,7 @@ import { settingsManager } from "../../services/settingsManager";
 import { useToast } from "../common/ToastProvider";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
+import { SUPPORTED_PROVIDERS } from "../../services/providers/llmProviderRegistry";
 
 export const GeneralSettingsView: React.FC = () => {
   const toast = useToast();
@@ -99,10 +100,13 @@ export const GeneralSettingsView: React.FC = () => {
         "vn_preprocessing_pipeline",
         "vn_logs_filter_level",
         "vn_selected_model",
-        "vn_openrouter_api_key",
-        "vn_openrouter_key_status",
-        "vn_openrouter_verified_key",
-        "vn_openrouter_key_info",
+        ...SUPPORTED_PROVIDERS.flatMap((p) => [
+          `vn_provider_${p.id}_key`,
+          `vn_provider_${p.id}_base_url`,
+          `vn_provider_${p.id}_verified`,
+          `vn_provider_${p.id}_custom_models`,
+        ]),
+        "vn_provider_openrouter_key_info",
         "vn_starred_models",
         "vn_live_system_prompt",
         "vn_batch_system_prompt",

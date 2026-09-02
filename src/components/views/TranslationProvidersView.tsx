@@ -23,7 +23,6 @@ import {
 } from "../../services/openRouterService";
 import { ProviderSelectorMultiSelect } from "../common/ProviderSelectorMultiSelect";
 import {
-  Zap,
   Sparkles,
   RefreshCw,
   CheckCircle2,
@@ -41,7 +40,16 @@ import {
   EyeOff,
   Check,
   Brain,
+  Server,
+  ExternalLink,
+  Cpu,
 } from "lucide-react";
+import {
+  LlmProviderRegistry,
+  SUPPORTED_PROVIDERS,
+  StoredProviderConfig,
+} from "../../services/providers/llmProviderRegistry";
+import { LlmDispatcherService } from "../../services/providers/llmDispatcherService";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
 import { useToast } from "../common/ToastProvider";
@@ -50,84 +58,52 @@ import { settingsManager } from "../../services/settingsManager";
 import { Modal } from "../common/Modal";
 import { ReasoningEffort } from "../../types";
 
-const FALLBACK_POPULAR_MODELS: OpenRouterModel[] = [
-  {
-    id: "anthropic/claude-3.5-sonnet",
-    name: "Anthropic: Claude 3.5 Sonnet",
-    context_length: 200000,
-    pricing: { prompt: "0.000003", completion: "0.000015" },
-  },
-  {
-    id: "deepseek/deepseek-chat",
-    name: "DeepSeek: DeepSeek V3",
-    context_length: 64000,
-    pricing: { prompt: "0.00000014", completion: "0.00000028" },
-  },
-  {
-    id: "google/gemini-2.5-flash",
-    name: "Google: Gemini 2.5 Flash",
-    context_length: 1048576,
-    pricing: { prompt: "0.00000015", completion: "0.0000006" },
-  },
-  {
-    id: "openai/gpt-4o-mini",
-    name: "OpenAI: GPT-4o Mini",
-    context_length: 128000,
-    pricing: { prompt: "0.00000015", completion: "0.0000006" },
-  },
-  {
-    id: "qwen/qwen-2.5-72b-instruct",
-    name: "Qwen: Qwen 2.5 72B Instruct",
-    context_length: 131072,
-    pricing: { prompt: "0.00000035", completion: "0.0000004" },
-  },
-];
-
 export const TranslationProvidersView: React.FC = () => {
   const toast = useToast();
 
-  // OpenRouter Auth State
-  const [apiKey, setApiKey] = useState<string>(() => {
-    return localStorage.getItem("vn_openrouter_api_key") || "";
-  });
-  const [keyStatus, setKeyStatus] = useState<"invalid" | "active">(() => {
-    const savedStatus = localStorage.getItem("vn_openrouter_key_status");
-    const savedKey = (localStorage.getItem("vn_openrouter_api_key") || "").trim();
-    const verifiedKey = (localStorage.getItem("vn_openrouter_verified_key") || "").trim();
-    if (savedStatus === "active" && savedKey && savedKey === verifiedKey) {
-      return "active";
-    }
-    return "invalid";
-  });
+  // OpenRouter Stats State
   const [keyInfo, setKeyInfo] = useState<OpenRouterKeyInfo | null>(() => {
     try {
-      const saved = localStorage.getItem("vn_openrouter_key_info");
+      const saved = localStorage.getItem("vn_provider_openrouter_key_info");
       return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
     }
   });
   const [isTesting, setIsTesting] = useState<boolean>(false);
-  const [testFeedback, setTestFeedback] = useState<{ isSuccess: boolean; message: string } | null>(() => {
-    const savedStatus = localStorage.getItem("vn_openrouter_key_status");
-    const savedKey = (localStorage.getItem("vn_openrouter_api_key") || "").trim();
-    const verifiedKey = (localStorage.getItem("vn_openrouter_verified_key") || "").trim();
-    if (savedStatus === "active" && savedKey && savedKey === verifiedKey) {
-      return { isSuccess: true, message: "Key verified!" };
-    }
-    return null;
-  });
+  const [testFeedback, setTestFeedback] = useState<{ isSuccess: boolean; message: string } | null>(null);
 
   // Models State
-  const [models, setModels] = useState<OpenRouterModel[]>(FALLBACK_POPULAR_MODELS);
+  const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(false);
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
-    return localStorage.getItem("vn_selected_model") || "anthropic/claude-3.5-sonnet";
+    return localStorage.getItem("vn_selected_model") || "mt:google-translate";
   });
   const [selectedProviders, setSelectedProviders] = useState<string[]>(() => {
-    const initModel = localStorage.getItem("vn_selected_model") || "anthropic/claude-3.5-sonnet";
+    const initModel = localStorage.getItem("vn_selected_model") || "mt:google-translate";
     return getSelectedModelProviders(initModel);
   });
+
+  // Multi-Provider Hub State
+  const [activeProviderTab, setActiveProviderTab] = useState<string>("openrouter");
+  const [showApiKey, setShowApiKey] = useState<boolean>(false);
+  const [providerConfigs, setProviderConfigs] = useState<Record<string, StoredProviderConfig>>(() => {
+    const map: Record<string, StoredProviderConfig> = {};
+    for (const p of SUPPORTED_PROVIDERS) {
+      map[p.id] = LlmProviderRegistry.getProviderConfig(p.id);
+    }
+    return map;
+  });
+  const [isFetchingProviderModels, setIsFetchingProviderModels] = useState<boolean>(false);
+
+  const updateProviderConfig = (providerId: string, updates: Partial<StoredProviderConfig>) => {
+    setProviderConfigs((prev) => {
+      const existing = prev[providerId] || { id: providerId, apiKey: "" };
+      const merged = { ...existing, ...updates };
+      LlmProviderRegistry.saveProviderConfig(merged);
+      return { ...prev, [providerId]: merged };
+    });
+  };
 
   // Hyperparameters
   const [temperature, setTemperature] = useState<number>(0.3);
@@ -167,8 +143,12 @@ export const TranslationProvidersView: React.FC = () => {
     return localStorage.getItem("vn_target_lang") || "en";
   });
 
-  // Auto-fetch OpenRouter models on load
+  // Auto-fetch OpenRouter models on load if verified
   const loadModels = async () => {
+    if (!LlmProviderRegistry.isProviderVerified("openrouter")) {
+      setModels([]);
+      return;
+    }
     setIsLoadingModels(true);
     const fetched = await fetchOpenRouterModels();
     if (fetched && fetched.length > 0) {
@@ -180,10 +160,6 @@ export const TranslationProvidersView: React.FC = () => {
   useEffect(() => {
     loadModels();
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem("vn_openrouter_api_key", apiKey);
-  }, [apiKey]);
 
   useEffect(() => {
     localStorage.setItem("vn_selected_model", selectedModelId);
@@ -214,32 +190,71 @@ export const TranslationProvidersView: React.FC = () => {
     });
   }, [reasoningEffort, reasoningMaxTokens, excludeReasoning]);
 
-  // Test Connection
-  const handleTestConnection = async () => {
+  // Test Provider Connection
+  const handleTestProvider = async (providerId: string) => {
+    const cfg = providerConfigs[providerId];
+    if (!cfg || !cfg.apiKey.trim()) {
+      toast.error("Please enter an API key first.", "Missing Key");
+      return;
+    }
+
     setIsTesting(true);
     setTestFeedback(null);
 
-    const result = await testOpenRouterKey(apiKey);
-    setIsTesting(false);
+    if (providerId === "openrouter") {
+      const result = await testOpenRouterKey(cfg.apiKey);
+      setIsTesting(false);
 
-    if (result.isValid) {
-      setKeyStatus("active");
-      setKeyInfo(result.keyInfo || null);
-      setTestFeedback({ isSuccess: true, message: result.message });
-      localStorage.setItem("vn_openrouter_key_status", "active");
-      localStorage.setItem("vn_openrouter_verified_key", apiKey.trim());
-      if (result.keyInfo) {
-        localStorage.setItem("vn_openrouter_key_info", JSON.stringify(result.keyInfo));
+      if (result.isValid) {
+        updateProviderConfig("openrouter", { isVerified: true });
+        setKeyInfo(result.keyInfo || null);
+        setTestFeedback({ isSuccess: true, message: result.message });
+        if (result.keyInfo) {
+          localStorage.setItem("vn_provider_openrouter_key_info", JSON.stringify(result.keyInfo));
+        }
+        toast.success("OpenRouter API Key verified successfully!", "Key Active");
+        // Automatically fetch latest models upon verification
+        loadModels();
+      } else {
+        updateProviderConfig("openrouter", { isVerified: false });
+        setKeyInfo(null);
+        setTestFeedback({ isSuccess: false, message: result.message });
+        localStorage.removeItem("vn_provider_openrouter_key_info");
+        toast.error(result.message || "Failed to verify API Key.", "Validation Error");
       }
-      toast.success("OpenRouter API Key verified successfully!", "Key Active");
+      return;
+    }
+
+    // Direct provider test via LlmDispatcherService
+    const res = await LlmDispatcherService.testProviderConnection(providerId, cfg.apiKey, cfg.baseUrl);
+    setIsTesting(false);
+    if (res.isValid) {
+      updateProviderConfig(providerId, { isVerified: true });
+      setTestFeedback({ isSuccess: true, message: res.message });
+      toast.success(res.message, "Connected");
+      // Automatically fetch latest models upon verification
+      handleFetchProviderModels(providerId);
     } else {
-      setKeyStatus("invalid");
-      setKeyInfo(null);
-      setTestFeedback({ isSuccess: false, message: result.message });
-      localStorage.setItem("vn_openrouter_key_status", "invalid");
-      localStorage.removeItem("vn_openrouter_verified_key");
-      localStorage.removeItem("vn_openrouter_key_info");
-      toast.error(result.message || "Failed to verify API Key.", "Validation Error");
+      updateProviderConfig(providerId, { isVerified: false });
+      setTestFeedback({ isSuccess: false, message: res.message });
+      toast.error(res.message, "Connection Failed");
+    }
+  };
+
+  const handleFetchProviderModels = async (providerId: string) => {
+    const cfg = providerConfigs[providerId];
+    if (!cfg || !cfg.apiKey.trim()) {
+      toast.error("Please enter an API key first.", "Missing Key");
+      return;
+    }
+    setIsFetchingProviderModels(true);
+    const fetched = await LlmDispatcherService.fetchProviderModels(providerId, cfg.apiKey, cfg.baseUrl);
+    setIsFetchingProviderModels(false);
+    if (fetched && fetched.length > 0) {
+      updateProviderConfig(providerId, { customModels: fetched });
+      toast.success(`Successfully fetched ${fetched.length} models!`, "Models Updated");
+    } else {
+      toast.error("Could not fetch models dynamically. Using built-in catalog.", "Fetch Notice");
     }
   };
 
@@ -363,147 +378,464 @@ export const TranslationProvidersView: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. OpenRouter API Key & Authentication */}
+      {/* 2. Multi-LLM Providers & Direct API Keys Hub */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Zap size={16} /> OpenRouter API Key & Authentication
+              <Cpu size={16} /> 2. LLM Providers & Direct API Keys
             </span>
             <span className="card-subtitle">
-              Universal multi-model gateway (Claude 3.5 Sonnet, GPT-4o, Gemini 2.5, DeepSeek V3, Qwen)
+              Configure direct API keys (Anthropic, DeepSeek, Google, OpenAI, Groq, NVIDIA, Copilot, etc.) or universal gateways
             </span>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            {keyStatus === "active" ? (
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "5px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  color: "#3fb950",
-                  backgroundColor: "rgba(63, 185, 80, 0.12)",
-                  border: "1px solid rgba(63, 185, 80, 0.3)",
-                  padding: "4px 10px",
-                  borderRadius: "20px",
-                }}
-              >
-                <CheckCircle2 size={14} /> Active & Verified
-              </span>
-            ) : (
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "5px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  color: "#f85149",
-                  backgroundColor: "rgba(248, 81, 73, 0.12)",
-                  border: "1px solid rgba(248, 81, 73, 0.3)",
-                  padding: "4px 10px",
-                  borderRadius: "20px",
-                }}
-              >
-                <AlertCircle size={14} /> Unverified
-              </span>
-            )}
+            {(() => {
+              const activeCount = SUPPORTED_PROVIDERS.filter((p) => {
+                const c = providerConfigs[p.id];
+                return c && c.apiKey && c.apiKey.trim().length > 0;
+              }).length;
+              return (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "5px",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    color: activeCount > 0 ? "var(--accent-green, #3fb950)" : "var(--text-muted)",
+                    backgroundColor: activeCount > 0 ? "rgba(63, 185, 80, 0.1)" : "rgba(255, 255, 255, 0.05)",
+                    border: `1px solid ${activeCount > 0 ? "rgba(63, 185, 80, 0.3)" : "var(--border-subtle)"}`,
+                    padding: "3px 10px",
+                    borderRadius: "20px",
+                  }}
+                >
+                  <Server size={12} /> {activeCount} {activeCount === 1 ? "Provider" : "Providers"} Configured
+                </span>
+              );
+            })()}
           </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <input
-              type="password"
-              placeholder="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                setKeyStatus("invalid");
-              }}
-              style={{ flex: 1, fontFamily: "monospace", fontSize: "13px" }}
-            />
+        {/* Provider Tabs Selector */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px",
+            paddingBottom: "12px",
+            borderBottom: "1px solid var(--border-subtle)",
+          }}
+        >
+          {SUPPORTED_PROVIDERS.map((p) => {
+            const isSelected = activeProviderTab === p.id;
+            const cfg = providerConfigs[p.id];
+            const hasKey = !!(cfg?.apiKey && cfg.apiKey.trim().length > 0);
+            const isVerified = !!cfg?.isVerified;
 
-            <button
-              onClick={handleTestConnection}
-              disabled={isTesting || !apiKey.trim()}
-              className="btn-primary"
-              style={{ minWidth: "140px" }}
-            >
-              {isTesting ? (
-                <>
-                  <RefreshCw size={14} className="spin" />
-                  <span>Testing...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 size={14} />
-                  <span>Verify Key</span>
-                </>
+            return (
+              <button
+                key={p.id}
+                onClick={() => {
+                  setActiveProviderTab(p.id);
+                  setTestFeedback(null);
+                }}
+                className={isSelected ? "btn-primary" : "btn-secondary"}
+                style={{
+                  fontSize: "12px",
+                  padding: "5px 10px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  borderRadius: "var(--radius-sm)",
+                  border: isSelected ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
+                  backgroundColor: isSelected ? "var(--accent-primary)" : "var(--bg-app)",
+                  color: isSelected ? "#fff" : "var(--text-main)",
+                  cursor: "pointer",
+                }}
+              >
+                <span
+                  style={{
+                    width: "7px",
+                    height: "7px",
+                    borderRadius: "50%",
+                    backgroundColor: isVerified
+                      ? "#3fb950"
+                      : hasKey
+                      ? "#e3b341"
+                      : "rgba(255, 255, 255, 0.2)",
+                    boxShadow: isVerified ? "0 0 6px rgba(63, 185, 80, 0.8)" : "none",
+                  }}
+                />
+                <span>{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Active Provider Details */}
+        {(() => {
+          const currentDef = LlmProviderRegistry.getProvider(activeProviderTab) || SUPPORTED_PROVIDERS[0];
+          const currentCfg = providerConfigs[activeProviderTab] || { id: activeProviderTab, apiKey: "" };
+          const hasKey = !!(currentCfg.apiKey && currentCfg.apiKey.trim().length > 0);
+          const isVerified = !!currentCfg.isVerified;
+          const modelsForProvider = LlmProviderRegistry.getModelsForProvider(activeProviderTab);
+
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "6px" }}>
+              {/* Provider Info Banner */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
+                    {currentDef.name}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                      backgroundColor: "rgba(255, 255, 255, 0.08)",
+                      color: "var(--text-muted)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {currentDef.protocol} protocol
+                  </span>
+                  {currentDef.apiKeyHelpUrl && (
+                    <a
+                      href={currentDef.apiKeyHelpUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "3px",
+                        fontSize: "11px",
+                        color: "var(--accent-primary)",
+                        textDecoration: "none",
+                        marginLeft: "4px",
+                      }}
+                    >
+                      <span>Get API Key</span>
+                      <ExternalLink size={10} />
+                    </a>
+                  )}
+                </div>
+
+                <div>
+                  {isVerified ? (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        color: "#3fb950",
+                        backgroundColor: "rgba(63, 185, 80, 0.12)",
+                        border: "1px solid rgba(63, 185, 80, 0.3)",
+                        padding: "3px 8px",
+                        borderRadius: "14px",
+                      }}
+                    >
+                      <CheckCircle2 size={12} /> Active & Verified
+                    </span>
+                  ) : hasKey ? (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        color: "#e3b341",
+                        backgroundColor: "rgba(227, 179, 65, 0.12)",
+                        border: "1px solid rgba(227, 179, 65, 0.3)",
+                        padding: "3px 8px",
+                        borderRadius: "14px",
+                      }}
+                    >
+                      <AlertCircle size={12} /> Configured (Unverified)
+                    </span>
+                  ) : (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        fontSize: "11px",
+                        fontWeight: 500,
+                        color: "var(--text-muted)",
+                        backgroundColor: "rgba(255, 255, 255, 0.05)",
+                        border: "1px solid var(--border-subtle)",
+                        padding: "3px 8px",
+                        borderRadius: "14px",
+                      }}
+                    >
+                      Not Configured
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* API Key Input */}
+              <div>
+                <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "4px" }}>
+                  API Key / Token:
+                </label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <div style={{ position: "relative", flex: 1 }}>
+                    <input
+                      type={showApiKey ? "text" : "password"}
+                      placeholder={currentDef.apiKeyPlaceholder}
+                      value={currentCfg.apiKey || ""}
+                      onChange={(e) => {
+                        updateProviderConfig(activeProviderTab, { apiKey: e.target.value, isVerified: false });
+                        setTestFeedback(null);
+                      }}
+                      style={{
+                        width: "100%",
+                        fontFamily: "monospace",
+                        fontSize: "12px",
+                        paddingRight: "36px",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      style={{
+                        position: "absolute",
+                        right: "8px",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                    >
+                      {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => handleTestProvider(activeProviderTab)}
+                    disabled={isTesting || !hasKey}
+                    className="btn-primary"
+                    style={{ minWidth: "120px", fontSize: "12px" }}
+                  >
+                    {isTesting ? (
+                      <>
+                        <RefreshCw size={13} className="spin" />
+                        <span>Testing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={13} />
+                        <span>Verify Key</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Base URL (Optional / Configurable for proxies / local ports) */}
+              <div>
+                <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "4px" }}>
+                  API Base URL (Default: <code style={{ fontSize: "10px" }}>{currentDef.defaultBaseUrl}</code>):
+                </label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="text"
+                    placeholder={currentDef.defaultBaseUrl}
+                    value={currentCfg.baseUrl || ""}
+                    onChange={(e) => {
+                      updateProviderConfig(activeProviderTab, { baseUrl: e.target.value });
+                    }}
+                    style={{
+                      flex: 1,
+                      fontFamily: "monospace",
+                      fontSize: "12px",
+                    }}
+                  />
+                  {currentCfg.baseUrl && currentCfg.baseUrl !== currentDef.defaultBaseUrl && (
+                    <button
+                      onClick={() => updateProviderConfig(activeProviderTab, { baseUrl: undefined })}
+                      className="btn-secondary"
+                      style={{ fontSize: "11px", padding: "4px 8px" }}
+                    >
+                      Reset Default
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Test Feedback */}
+              {testFeedback && (
+                <div
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "12px",
+                    backgroundColor: testFeedback.isSuccess ? "rgba(63, 185, 80, 0.1)" : "rgba(248, 81, 73, 0.1)",
+                    border: `1px solid ${testFeedback.isSuccess ? "rgba(63, 185, 80, 0.3)" : "rgba(248, 81, 73, 0.3)"}`,
+                    color: testFeedback.isSuccess ? "#3fb950" : "#f85149",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  {testFeedback.isSuccess ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                  <span>{testFeedback.message}</span>
+                </div>
               )}
-            </button>
-          </div>
 
-          {testFeedback && (
-            <div
-              style={{
-                padding: "8px 12px",
-                borderRadius: "var(--radius-sm)",
-                fontSize: "12px",
-                backgroundColor: testFeedback.isSuccess ? "rgba(63, 185, 80, 0.1)" : "rgba(248, 81, 73, 0.1)",
-                border: `1px solid ${testFeedback.isSuccess ? "rgba(63, 185, 80, 0.3)" : "rgba(248, 81, 73, 0.3)"}`,
-                color: testFeedback.isSuccess ? "#3fb950" : "#f85149",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-              }}
-            >
-              {testFeedback.isSuccess ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-              <span>{testFeedback.message}</span>
-            </div>
-          )}
+              {/* OpenRouter Key Info Stats */}
+              {activeProviderTab === "openrouter" && keyInfo && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                    gap: "10px",
+                    backgroundColor: "var(--bg-app)",
+                    padding: "10px 14px",
+                    borderRadius: "var(--radius-sm)",
+                    border: "1px solid var(--border-subtle)",
+                    fontSize: "12px",
+                  }}
+                >
+                  <div>
+                    <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Key Label</span>
+                    <span style={{ fontWeight: 600 }}>{keyInfo.label || "Default"}</span>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Credit Usage</span>
+                    <span style={{ fontWeight: 600, color: "var(--accent-primary)" }}>
+                      ${keyInfo.usage?.toFixed(4) || "0.0000"}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Credit Limit</span>
+                    <span style={{ fontWeight: 600 }}>
+                      {keyInfo.limit !== null ? `$${keyInfo.limit}` : "Unlimited"}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Tier Status</span>
+                    <span style={{ fontWeight: 600, color: keyInfo.is_free_tier ? "var(--accent-yellow)" : "var(--accent-green)" }}>
+                      {keyInfo.is_free_tier ? "Free Tier" : "Paid Pay-As-You-Go"}
+                    </span>
+                  </div>
+                </div>
+              )}
 
-          {keyInfo && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                gap: "10px",
-                backgroundColor: "var(--bg-app)",
-                padding: "10px 14px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--border-subtle)",
-                fontSize: "12px",
-              }}
-            >
-              <div>
-                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Key Label</span>
-                <span style={{ fontWeight: 600 }}>{keyInfo.label || "Default"}</span>
-              </div>
-              <div>
-                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Credit Usage</span>
-                <span style={{ fontWeight: 600, color: "var(--accent-primary)" }}>
-                  ${keyInfo.usage?.toFixed(4) || "0.0000"}
-                </span>
-              </div>
-              <div>
-                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Credit Limit</span>
-                <span style={{ fontWeight: 600 }}>
-                  {keyInfo.limit !== null ? `$${keyInfo.limit}` : "Unlimited"}
-                </span>
-              </div>
-              <div>
-                <span style={{ color: "var(--text-muted)", display: "block", fontSize: "11px" }}>Tier Status</span>
-                <span style={{ fontWeight: 600, color: keyInfo.is_free_tier ? "var(--accent-yellow)" : "var(--accent-green)" }}>
-                  {keyInfo.is_free_tier ? "Free Tier" : "Paid Pay-As-You-Go"}
-                </span>
+              {/* Available Models Preview Box */}
+              <div
+                style={{
+                  backgroundColor: "var(--bg-app)",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "10px 12px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-main)" }}>
+                    Available Models ({modelsForProvider.length})
+                  </span>
+                  <button
+                    onClick={() => handleFetchProviderModels(activeProviderTab)}
+                    disabled={isFetchingProviderModels || !hasKey}
+                    className="btn-secondary"
+                    style={{ fontSize: "11px", padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                  >
+                    <RefreshCw size={11} className={isFetchingProviderModels ? "spin" : ""} />
+                    <span>Fetch Available Models</span>
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "6px",
+                    maxHeight: "140px",
+                    overflowY: "auto",
+                  }}
+                >
+                  {modelsForProvider.map((m) => {
+                    const compositeId = activeProviderTab === "openrouter" ? m.id : `${activeProviderTab}:${m.id}`;
+                    const isCurrent = selectedModelId === compositeId;
+
+                    return (
+                      <div
+                        key={m.id}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          padding: "4px 8px",
+                          borderRadius: "4px",
+                          fontSize: "11px",
+                          backgroundColor: isCurrent ? "rgba(88, 166, 255, 0.15)" : "var(--bg-card)",
+                          border: isCurrent ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
+                        }}
+                      >
+                        <span style={{ fontWeight: isCurrent ? 700 : 500, color: isCurrent ? "var(--accent-primary)" : "var(--text-main)" }}>
+                          {m.name}
+                        </span>
+                        {m.reasoning && (
+                          <span
+                            style={{
+                              fontSize: "9px",
+                              padding: "1px 4px",
+                              borderRadius: "3px",
+                              backgroundColor: "rgba(163, 113, 247, 0.15)",
+                              color: "#a371f7",
+                              fontWeight: 600,
+                            }}
+                          >
+                            Reasoning
+                          </span>
+                        )}
+                        <button
+                          onClick={() => {
+                            setSelectedModelId(compositeId);
+                            toast.success(`Selected ${m.name} for translation`, "Model Activated");
+                          }}
+                          disabled={isCurrent}
+                          style={{
+                            background: isCurrent ? "none" : "rgba(255, 255, 255, 0.08)",
+                            border: "none",
+                            color: isCurrent ? "var(--accent-green, #3fb950)" : "var(--text-muted)",
+                            cursor: isCurrent ? "default" : "pointer",
+                            fontSize: "10px",
+                            padding: "2px 6px",
+                            borderRadius: "3px",
+                          }}
+                        >
+                          {isCurrent ? "✓ Active" : "Use"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          )}
-        </div>
+          );
+        })()}
       </div>
 
       {/* 3. Primary Translation Model Selection */}
