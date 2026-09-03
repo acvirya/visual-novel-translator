@@ -43,6 +43,7 @@ import {
   isProcessed,
 } from "../../services/batchTranslateService";
 import { useBatchStore } from "../../stores/useBatchStore";
+import { BatchStreamBanner } from "./BatchStreamBanner";
 import { ReasoningEffort } from "../../types";
 
 export interface BatchTranslateViewProps {
@@ -1354,6 +1355,9 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               )}
             </div>
           </div>
+
+          {/* Real-time Streaming Feedback Box (Scoped to Active File in Preview Tab) */}
+          <BatchStreamBanner fileId={activeFile?.id} />
 
           {/* Table Container */}
           <div

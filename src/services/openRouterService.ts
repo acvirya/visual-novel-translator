@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { jsonrepair } from "jsonrepair";
 import { parseSpeakerMessageTranslation } from "./freeMtService";
 import { logger } from "./loggerService";
 import { settingsManager } from "./settingsManager";
@@ -348,11 +349,13 @@ You MUST ALWAYS respond with a valid, clean JSON object matching this schema:
 You will receive input dialogue lines in JSON format:
 {
   "lines": [
-    { "id": 1, "speaker": "Speaker Name (or null)", "message": "Original text" }
+    { "id": 1, "speaker": "Speaker Name (or null)", "message": "Original text" },
+    { "id": 2, "speaker": null, "message": "Narration text" }
   ]
 }
 
-You MUST ALWAYS respond with a JSON object matching the "translations" schema containing every input line ID:
+You MUST ALWAYS respond with a JSON object containing the "translations" array.
+CRITICAL: Every item inside "translations" MUST include the matching numeric "id", along with "translated_speaker" and "translated_message":
 {
   "translations": [
     {
@@ -362,29 +365,43 @@ You MUST ALWAYS respond with a JSON object matching the "translations" schema co
     },
     {
       "id": 2,
-      "translated_speaker": "Markus",
-      "translated_message": "Wh-what is this...!?"
-    },
-    {
-      "id": 3,
       "translated_speaker": null,
       "translated_message": "A six-pronged bolt of lightning split apart the ground beneath our feet."
     }
   ]
 }
 
-### CRITICAL BATCH RULES (MANDATORY):
-1. **Translate EVERY Single Line**: You MUST include EVERY input line ID in "translations" (from id: 1 to id: N) in exact sequential order. NEVER skip, merge, reorder, or leave "translated_message" empty for any line ID!
-2. **1:1 Semantic Fidelity (No Summarization or Added Filler)**: Translate the exact dialogue and narrative content faithfully. Do NOT summarize descriptive text, and do NOT inject unprompted commentary, moral warnings, or fictional padding not present in the original line.
-3. **Proper Names & Transliteration**: Use standard Hepburn Romaji for Japanese character names and proper nouns unless defined otherwise in the Glossary. Never literally translate human names into English word meanings.
-4. **Dialogue Format & Quote Marks**:
+### CRITICAL BATCH RULES (MANDATORY & ENFORCED):
+1. **MANDATORY Numeric "id" on Every Item**:
+   - EVERY item in "translations" MUST have the exact integer "id" matching the input line ID (e.g. "id": 1, "id": 2, ...).
+   - NEVER omit the "id" field! An output without "id" will cause total batch validation rejection and re-execution.
+2. **Translate EVERY Single Line**:
+   - You MUST include EVERY input line ID in "translations" (from the first ID to the last ID) in exact 1:1 sequential order.
+   - NEVER skip lines, NEVER merge lines, NEVER reorder lines, and NEVER leave "translated_message" empty for any line ID!
+3. **Exact Key Names**:
+   - Use strictly: "id" (number), "translated_speaker" (string or null), and "translated_message" (string).
+   - Do NOT omit "id" or rename keys to just "speaker" or "message".
+4. **1:1 Semantic Fidelity (No Summarization or Added Filler)**:
+   - Translate the exact dialogue and narrative content faithfully.
+   - Do NOT summarize descriptive text, and do NOT inject unprompted commentary, moral warnings, or fictional padding not present in the original line.
+5. **Proper Names & Transliteration**:
+   - Use standard Hepburn Romaji for Japanese character names and proper nouns unless defined otherwise in the Glossary.
+   - Never literally translate human names into English word meanings.
+6. **Dialogue Format & Quote Marks**:
    - Strip Japanese quote brackets (「...」, 『...』).
    - Write dialogue directly into "translated_message" without wrapping the whole value in outer quotation marks like ""..."" or \\"...\\".
    - If dialogue contains quotes within speech, use inner curly quotes “...” or single quotes '...'.
-5. **Punctuation, Reactions & Silence Lines**: Even if a line consists only of ellipsis, groans, shouts, or reactions (e.g. 「......」, 「──!」, 「っ──!?」, 「うわあああ────!」, 「フッ…」), output the corresponding English punctuation/reaction in "translated_message" (e.g. "......", "──!", "Ghk──!?", "Uwaaaaah────!", "Heh..."). NEVER leave "translated_message" as an empty string ("")!
-6. **Speaker Formatting**: If the input has a speaker, translate the speaker name in "translated_speaker". If no speaker (narration), set "translated_speaker": null.
-7. **Adult & Explicit Content Handling**: If your safety guidelines restrict you from translating explicit adult/sexual lines, DO NOT abort or refuse the entire batch. Instead, preserve the line ID and output 'translated_message': '[EXPLICIT CONTENT]' while translating all other lines normally.
-8. **Strict Pure JSON Only**: Output only valid JSON without any reasoning, preamble, markdown code fences, or explanations.`;
+7. **Punctuation, Reactions & Silence Lines**:
+   - Even if a line consists only of ellipsis, groans, shouts, or reactions (e.g. 「......」, 「──!」, 「っ──!?」, 「うわあああ────!」, 「フッ…」), output the corresponding English punctuation/reaction in "translated_message" (e.g. "......", "──!", "Ghk──!?", "Uwaaaaah────!", "Heh...").
+   - NEVER leave "translated_message" as an empty string ("")!
+8. **Speaker Formatting**:
+   - If the input line has a speaker, translate the speaker name in "translated_speaker".
+   - If no speaker (narration), set "translated_speaker": null.
+9. **Adult & Explicit Content Handling**:
+   - If your safety guidelines restrict you from translating explicit adult/sexual lines, DO NOT abort or refuse the entire batch.
+   - Instead, preserve the line ID and output 'translated_message': '[EXPLICIT CONTENT]' while translating all other lines normally.
+10. **Strict Pure JSON Only**:
+   - Output only valid JSON without any reasoning, preamble, markdown code fences, or explanations.`;
   }
 
   return `${part1}${part2}${part3}${part4}`;
@@ -758,11 +775,19 @@ export function parseStructuredDialogueOutput(
     const cleanJson = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
     parsed = JSON.parse(cleanJson);
   } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        parsed = JSON.parse(match[0]);
-      } catch {}
+    try {
+      parsed = JSON.parse(jsonrepair(text));
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          parsed = JSON.parse(match[0]);
+        } catch {
+          try {
+            parsed = JSON.parse(jsonrepair(match[0]));
+          } catch {}
+        }
+      }
     }
   }
 
@@ -970,20 +995,33 @@ export function getModelReasoningCapabilities(
     };
   }
 
-  // Fallback heuristics for common reasoning model IDs (when offline / metadata pending)
-  if (modelId.includes("claude-3-7-sonnet")) {
+  // Fallback heuristics for all supported providers beyond OpenRouter
+  const { providerId: _providerId, modelId: parsedSubModel } = LlmProviderRegistry.parseModelId(modelId);
+  const targetId = (parsedSubModel || modelId).toLowerCase();
+
+  // 1. Anthropic Extended Thinking (Claude 3.7 Sonnet / Claude 4)
+  if (targetId.includes("claude-3-7") || targetId.includes("claude-4")) {
     return {
       isSupported: true,
       isMandatory: false,
-      supportsEffort: false,
-      supportedEfforts: [],
+      supportsEffort: true,
+      supportedEfforts: ["none", "low", "medium", "high", "max"],
+      defaultEffort: "medium",
       supportsMaxTokens: true,
       defaultEnabled: true,
-      mode: "toggle_only",
+      mode: "efforts_list",
     };
   }
 
-  if (modelId.includes("/o1") || modelId.includes("/o3") || modelId.includes("o1-") || modelId.includes("o3-")) {
+  // 2. OpenAI o1 / o3 Reasoning Models
+  if (
+    targetId.startsWith("o1") ||
+    targetId.startsWith("o3") ||
+    targetId.includes("/o1") ||
+    targetId.includes("/o3") ||
+    targetId.includes("o1-") ||
+    targetId.includes("o3-")
+  ) {
     return {
       isSupported: true,
       isMandatory: true,
@@ -996,20 +1034,58 @@ export function getModelReasoningCapabilities(
     };
   }
 
-  if (
-    modelId.includes("r1") ||
-    modelId.includes("qwq") ||
-    modelId.includes("thinking") ||
-    modelId.includes("reasoning")
-  ) {
+  // 3. DeepSeek R1 / Reasoner (Always-on native reasoning)
+  if (targetId.includes("deepseek-reasoner") || targetId === "r1" || targetId.endsWith("-r1")) {
     return {
       isSupported: true,
-      isMandatory: false,
+      isMandatory: true,
       supportsEffort: false,
       supportedEfforts: [],
       supportsMaxTokens: false,
       defaultEnabled: true,
       mode: "toggle_only",
+    };
+  }
+
+  // 4. Google Gemini Thinking Models
+  if (targetId.includes("thinking") || targetId.includes("gemini-2.5") || targetId.includes("gemini-3")) {
+    return {
+      isSupported: true,
+      isMandatory: false,
+      supportsEffort: true,
+      supportedEfforts: ["none", "low", "medium", "high"],
+      defaultEffort: "medium",
+      supportsMaxTokens: true,
+      defaultEnabled: true,
+      mode: "efforts_list",
+    };
+  }
+
+  // 5. Groq / Open-Weights Reasoning (Qwen QwQ, DeepSeek R1 Distill, etc.)
+  if (targetId.includes("r1") || targetId.includes("qwq") || targetId.includes("reasoning")) {
+    return {
+      isSupported: true,
+      isMandatory: false,
+      supportsEffort: true,
+      supportedEfforts: ["none", "low", "medium", "high"],
+      defaultEffort: "medium",
+      supportsMaxTokens: false,
+      defaultEnabled: true,
+      mode: "efforts_list",
+    };
+  }
+
+  // 6. xAI Grok Thinking
+  if (targetId.includes("grok-3") || targetId.includes("grok-thinking")) {
+    return {
+      isSupported: true,
+      isMandatory: false,
+      supportsEffort: true,
+      supportedEfforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+      supportsMaxTokens: false,
+      defaultEnabled: true,
+      mode: "efforts_list",
     };
   }
 
@@ -1062,8 +1138,8 @@ export function buildReasoningPayload(options?: {
     payload.max_tokens = maxTokens;
   }
 
-  if (exclude !== undefined) {
-    payload.exclude = exclude;
+  if (exclude === true) {
+    payload.exclude = true;
   }
 
   return Object.keys(payload).length > 0 ? payload : undefined;
@@ -1213,6 +1289,8 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
           temperature,
           maxTokens: dynamicMaxTokens,
           reasoningEffort,
+          reasoningMaxTokens,
+          excludeReasoning,
           overrideApiKey: cleanKey,
         });
         if (res && res.content) {

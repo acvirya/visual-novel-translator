@@ -8,6 +8,20 @@ export interface SessionUsageStats {
   totalCost: number;
 }
 
+export interface FileStreamingState {
+  fileId: string;
+  fileName: string;
+  batchIndex: number;
+  totalBatches: number;
+  phase: "connecting" | "thinking" | "translating" | "validating" | "idle";
+  reasoningText: string;
+  accumulatedText: string;
+  tokenCount: number;
+  tokensPerSec: number;
+  startedAt: number;
+  lastChunkTime: number;
+}
+
 export interface BatchState {
   queuedFiles: BatchFileEntry[];
   selectedFileId: string | null;
@@ -18,6 +32,7 @@ export interface BatchState {
   progressData: BatchProgressUpdate | null;
   settings: BatchSettings;
   sessionStats: SessionUsageStats;
+  streamingFileStates: Record<string, FileStreamingState>;
 
   // Actions
   setQueuedFiles: (files: BatchFileEntry[] | ((prev: BatchFileEntry[]) => BatchFileEntry[])) => void;
@@ -30,6 +45,8 @@ export interface BatchState {
   setProgressData: (progress: BatchProgressUpdate | null) => void;
   setSettings: (settings: Partial<BatchSettings>) => void;
   addSessionTokens: (promptTokens: number, completionTokens: number, cachedTokens: number, cost: number) => void;
+  setFileStreamingState: (fileId: string, state: FileStreamingState | null | ((prev?: FileStreamingState) => FileStreamingState | null)) => void;
+  clearAllStreamingStates: () => void;
 }
 
 export const useBatchStore = create<BatchState>((set) => {
@@ -85,6 +102,7 @@ export const useBatchStore = create<BatchState>((set) => {
       cachedTokens: 0,
       totalCost: 0,
     },
+    streamingFileStates: {},
 
     setQueuedFiles: (filesOrFn) =>
       set((state) => ({
@@ -130,6 +148,23 @@ export const useBatchStore = create<BatchState>((set) => {
           totalCost: state.sessionStats.totalCost + cost,
         },
       })),
+    setFileStreamingState: (fileId, stateOrFn) =>
+      set((state) => {
+        const prev = state.streamingFileStates[fileId];
+        const next = typeof stateOrFn === "function" ? stateOrFn(prev) : stateOrFn;
+        if (!next) {
+          const copy = { ...state.streamingFileStates };
+          delete copy[fileId];
+          return { streamingFileStates: copy };
+        }
+        return {
+          streamingFileStates: {
+            ...state.streamingFileStates,
+            [fileId]: next,
+          },
+        };
+      }),
+    clearAllStreamingStates: () => set({ streamingFileStates: {} }),
   };
 });
 

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { translateWithFreeMt } from "./freeMtService";
 import {
   buildCompleteSystemPrompt,
@@ -12,11 +12,11 @@ import { cleanSpeakerName, executePreprocessingPipeline } from "../utils/textPre
 import { parseLlmBatchResponse } from "../utils/batchJsonParser";
 import { parseScriptContentAsBatchItems } from "../utils/scriptFileParser";
 import { logger } from "./loggerService";
-import { useBatchStore } from "../stores/useBatchStore";
+import { useBatchStore, FileStreamingState } from "../stores/useBatchStore";
 import { settingsManager } from "./settingsManager";
 import { ReasoningEffort } from "../types";
 import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
-import { LlmDispatcherService } from "./providers/llmDispatcherService";
+import { LlmDispatcherService, StreamEvent } from "./providers/llmDispatcherService";
 
 export interface BatchItem {
   id: number;
@@ -612,7 +612,13 @@ class BatchTranslateService {
                 () => {
                   onLineTranslated();
                 },
-                originallyExplicitIds
+                originallyExplicitIds,
+                {
+                  fileId: file.id,
+                  fileName: file.name,
+                  batchIndex: explicitBatchNum,
+                  totalBatches: Math.max(explicitBatchNum, Math.ceil(explicitCount / batchSize)),
+                }
               );
 
               contextHistory.push(resultTurn);
@@ -725,6 +731,9 @@ class BatchTranslateService {
         }
 
         if (settings.delayMs > 0 && isLlm) {
+          useBatchStore.getState().setFileStreamingState(file.id, (prev) =>
+            prev ? { ...prev, phase: "cooldown" as any } : null
+          );
           await cancellableSleep(settings.delayMs, this.abortController?.signal);
         }
       }
@@ -739,6 +748,7 @@ class BatchTranslateService {
         file.error = `Paused: ${remainingExplicit} explicit-tagged lines remaining`;
       }
       await this.saveTranslatedFile(file, settings);
+      useBatchStore.getState().setFileStreamingState(file.id, null);
       onFileUpdated({ ...file });
       return;
     }
@@ -843,6 +853,13 @@ class BatchTranslateService {
               activeContext,
               () => {
                 onLineTranslated();
+              },
+              undefined,
+              {
+                fileId: file.id,
+                fileName: file.name,
+                batchIndex: bIdx + 1,
+                totalBatches: batchChunks.length,
               }
             );
 
@@ -979,6 +996,9 @@ class BatchTranslateService {
       }
 
       if (settings.delayMs > 0 && isLlm) {
+        useBatchStore.getState().setFileStreamingState(file.id, (prev) =>
+          prev ? { ...prev, phase: "cooldown" as any } : null
+        );
         await cancellableSleep(settings.delayMs, this.abortController?.signal);
       }
     }
@@ -996,10 +1016,11 @@ class BatchTranslateService {
     }
 
     await this.saveTranslatedFile(file, settings);
+    useBatchStore.getState().setFileStreamingState(file.id, null);
     onFileUpdated({ ...file, items: [...file.items] });
   }
 
-  public async writeBatchDebugLog(params: {
+  private async writeBatchDebugLog(params: {
     outputDir?: string;
     modelId: string;
     error?: string;
@@ -1009,33 +1030,24 @@ class BatchTranslateService {
     items: BatchItem[];
     extraInfo?: string;
   }): Promise<void> {
-    const timestamp = new Date().toLocaleString();
-    const sep = "=".repeat(80);
-    const subSep = "-".repeat(60);
+    const logObj = {
+      timestamp: new Date().toISOString(),
+      modelId: params.modelId,
+      error: params.error || null,
+      extraInfo: params.extraInfo || null,
+      batchLineIds: params.items.map((i) => i.id),
+      totalLinesInBatch: params.items.length,
+      messages: params.messages,
+      rawResponse: params.rawResponse || null,
+      parsedArray: params.parsedArray || [],
+    };
 
-    let formattedChat = "";
-    params.messages.forEach((m, idx) => {
-      formattedChat += `\n[Message #${idx + 1} | Role: ${m.role.toUpperCase()}]\n${m.content}\n${subSep}`;
-    });
+    const logEntry = JSON.stringify(logObj) + "\n";
 
-    const logEntry = `\n${sep}\n` +
-      `[BATCH TRANSLATE DEBUG LOG - ${timestamp}]\n` +
-      `Model: ${params.modelId}\n` +
-      `Items In Batch: IDs [${params.items.map((i) => i.id).join(", ")}] (Total: ${params.items.length} lines)\n` +
-      (params.error ? `Error Message: ${params.error}\n` : "") +
-      (params.extraInfo ? `Diagnostic Notes: ${params.extraInfo}\n` : "") +
-      `\n--- 1. FULL CHAT PAYLOAD SENT TO LLM ---\n` +
-      `${formattedChat}\n` +
-      `\n--- 2. RAW LLM RESPONSE (UNMODIFIED) ---\n` +
-      `${params.rawResponse || "[NO RESPONSE RECEIVED / EMPTY]"}\n` +
-      `\n--- 3. EXTRACTED PARSED OBJECTS ---\n` +
-      `${JSON.stringify(params.parsedArray || [], null, 2)}\n` +
-      `${sep}\n`;
-
-    const logTargets = ["batch_debug_log.txt"];
+    const logTargets = ["batch_debug_log.jsonl"];
     if (params.outputDir && params.outputDir.trim()) {
       const dir = params.outputDir.replace(/\\/g, "/").replace(/\/$/, "");
-      logTargets.push(`${dir}/batch_debug_log.txt`);
+      logTargets.push(`${dir}/batch_debug_log.jsonl`);
     }
 
     for (const target of logTargets) {
@@ -1053,7 +1065,8 @@ class BatchTranslateService {
     settings: BatchSettings,
     contextHistory: WholeTurnBatch[],
     onItemSuccess: (item: BatchItem) => void,
-    allowedOverwriteIds?: Set<number>
+    allowedOverwriteIds?: Set<number>,
+    fileContext?: { fileId: string; fileName: string; batchIndex: number; totalBatches: number }
   ): Promise<WholeTurnBatch> {
     const { providerId, modelId: targetModelId } = LlmProviderRegistry.parseModelId(settings.modelId);
     const providerCfg = LlmProviderRegistry.getProviderConfig(providerId);
@@ -1112,15 +1125,137 @@ class BatchTranslateService {
     const activeProviders = settings.selectedProviders ?? getSelectedModelProviders(settings.modelId);
     const reasoningPayload = buildReasoningPayload({ effort: settings.reasoningEffort });
 
+    // Initialize per-file real-time streaming state in store
+    if (fileContext) {
+      useBatchStore.getState().setFileStreamingState(fileContext.fileId, {
+        fileId: fileContext.fileId,
+        fileName: fileContext.fileName,
+        batchIndex: fileContext.batchIndex,
+        totalBatches: fileContext.totalBatches,
+        phase: "connecting",
+        reasoningText: "",
+        accumulatedText: "",
+        tokenCount: 0,
+        tokensPerSec: 0,
+        startedAt: Date.now(),
+        lastChunkTime: Date.now(),
+      });
+    }
+
+    let pendingReasoning = "";
+    let pendingContent = "";
+    let pendingTokens = 0;
+    let pendingPhase: FileStreamingState["phase"] | null = null;
+    let lastFlushTime = 0;
+    let flushTimer: any = null;
+
+    const flushStreamState = (immediatePhase?: FileStreamingState["phase"]) => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (!fileContext) return;
+      const fileId = fileContext.fileId;
+      const rText = pendingReasoning;
+      const cText = pendingContent;
+      const addTokens = pendingTokens;
+      const newPhase = immediatePhase || pendingPhase;
+
+      pendingReasoning = "";
+      pendingContent = "";
+      pendingTokens = 0;
+      pendingPhase = null;
+      lastFlushTime = Date.now();
+
+      useBatchStore.getState().setFileStreamingState(fileId, (prev) => {
+        const now = Date.now();
+        const base: FileStreamingState = prev || {
+          fileId,
+          fileName: fileContext.fileName,
+          batchIndex: fileContext.batchIndex,
+          totalBatches: fileContext.totalBatches,
+          phase: "connecting",
+          reasoningText: "",
+          accumulatedText: "",
+          tokenCount: 0,
+          tokensPerSec: 0,
+          startedAt: now,
+          lastChunkTime: now,
+        };
+
+        const finalReasoning = rText ? base.reasoningText + rText : base.reasoningText;
+        const finalContent = cText ? base.accumulatedText + cText : base.accumulatedText;
+        const totalTokens = base.tokenCount + addTokens;
+        const elapsedSec = Math.max(0.1, (now - base.startedAt) / 1000);
+
+        return {
+          ...base,
+          phase: newPhase || base.phase,
+          reasoningText: finalReasoning,
+          accumulatedText: finalContent,
+          tokenCount: totalTokens,
+          tokensPerSec: Math.round(totalTokens / elapsedSec),
+          lastChunkTime: now,
+        };
+      });
+    };
+
+    const handleStreamEvent = (event: StreamEvent) => {
+      if (this.abortController?.signal.aborted) return;
+      if (!fileContext) return;
+
+      if (event.type === "Status") {
+        flushStreamState(event.data as any);
+        return;
+      }
+
+      if (event.type === "Usage") {
+        const u = event.data as any;
+        if (u && typeof u === "object") {
+          if (u.prompt_tokens) exactPromptTokens = Number(u.prompt_tokens);
+          if (u.completion_tokens) exactCompletionTokens = Number(u.completion_tokens);
+          if (u.cached_tokens) exactCachedTokens = Number(u.cached_tokens);
+          if (u.cost) exactCost = Number(u.cost);
+          if (exactPromptTokens > 0) hasExactUsage = true;
+        }
+        return;
+      }
+
+      if (event.type === "Reasoning") {
+        const chunkStr = String(event.data || "");
+        pendingReasoning += chunkStr;
+        pendingTokens += Math.max(1, Math.round(chunkStr.length / 4));
+        pendingPhase = "thinking";
+      } else if (event.type === "Chunk") {
+        const chunkStr = String(event.data || "");
+        pendingContent += chunkStr;
+        pendingTokens += Math.max(1, Math.round(chunkStr.length / 4));
+        pendingPhase = "translating";
+      }
+
+      const now = Date.now();
+      if (now - lastFlushTime >= 50) {
+        flushStreamState();
+      } else if (!flushTimer) {
+        flushTimer = setTimeout(() => {
+          flushStreamState();
+        }, 50);
+      }
+    };
+
     try {
       if (providerId !== "openrouter") {
+        const reasoningCfg = settingsManager.getReasoningSettings();
         const executePromise = LlmDispatcherService.executeChat({
           modelId: settings.modelId,
           messages,
           temperature: settings.temperature,
-          reasoningEffort: settings.reasoningEffort,
+          reasoningEffort: settings.reasoningEffort || reasoningCfg.effort,
+          reasoningMaxTokens: reasoningCfg.maxTokens,
+          excludeReasoning: false,
           timeoutSeconds,
           overrideApiKey: resolvedKey,
+          onEvent: handleStreamEvent,
         });
 
         const abortPromise = new Promise<never>((_, reject) => {
@@ -1142,10 +1277,13 @@ class BatchTranslateService {
           exactCompletionTokens = nativeRes.completionTokens || 0;
           exactCachedTokens = nativeRes.cachedTokens || 0;
           exactCost = nativeRes.cost || 0;
-          hasExactUsage = true;
+          hasExactUsage = exactPromptTokens > 0;
         }
       } else {
-        const invokePromise = invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
+        const channel = new Channel<StreamEvent>();
+        channel.onmessage = handleStreamEvent;
+
+        const invokePromise = invoke<OpenRouterCompletionResponse>("openrouter_stream_chat_completion", {
           apiKey: resolvedKey,
           modelId: targetModelId,
           messagesJson: JSON.stringify(messages),
@@ -1154,6 +1292,7 @@ class BatchTranslateService {
           timeoutSeconds,
           providers: activeProviders.length > 0 ? activeProviders : undefined,
           reasoning: reasoningPayload,
+          onEvent: channel,
         });
 
         const abortPromise = new Promise<never>((_, reject) => {
@@ -1167,24 +1306,45 @@ class BatchTranslateService {
           );
         });
 
-        const nativeRes = await Promise.race([invokePromise, abortPromise]);
+        let timeoutTimer: any = null;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(() => {
+            reject(new Error(`LLM stream response timed out after ${timeoutSeconds}s.`));
+          }, (timeoutSeconds + 10) * 1000);
+        });
 
-        if (nativeRes && nativeRes.content) {
-          content = nativeRes.content.trim();
-          exactPromptTokens = nativeRes.prompt_tokens || 0;
-          exactCompletionTokens = nativeRes.completion_tokens || 0;
-          exactCachedTokens = nativeRes.cached_tokens || 0;
-          exactCost = nativeRes.cost || 0;
-          hasExactUsage = true;
+        try {
+          const nativeRes = await Promise.race([invokePromise, abortPromise, timeoutPromise]);
+          flushStreamState("validating");
+
+          if (nativeRes && nativeRes.content) {
+            content = nativeRes.content.trim();
+            exactPromptTokens = nativeRes.prompt_tokens || 0;
+            exactCompletionTokens = nativeRes.completion_tokens || 0;
+            exactCachedTokens = nativeRes.cached_tokens || 0;
+            exactCost = nativeRes.cost || 0;
+            hasExactUsage = exactPromptTokens > 0;
+          }
+        } finally {
+          if (timeoutTimer) clearTimeout(timeoutTimer);
         }
       }
     } catch (e: any) {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
       if (this.abortController?.signal.aborted) {
         throw new Error("Translation cancelled by user.");
       }
       lastErr = e?.message || String(e);
       logger.error("BatchTranslate", `Native completion failed: ${lastErr}`);
       throw new Error(lastErr);
+    } finally {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
     }
 
     if (!content) {
@@ -1220,6 +1380,22 @@ class BatchTranslateService {
     // If any line is skipped by the LLM, fail the batch immediately to trigger a clean retry without holes ("bolong-bolong").
     const missingIds: number[] = [];
     const validatedItems: { item: BatchItem; spk?: string; msg: string }[] = [];
+
+    // Positional ID recovery: if the LLM returned items in exact sequential order but omitted the 'id' key
+    const validObjects = parsedArray.filter((p) => p && typeof p === "object");
+    const itemsWithoutId = validObjects.filter((p) => p.id === undefined);
+    if (itemsWithoutId.length > 0 && validObjects.length === items.length) {
+      logger.warn(
+        "BatchTranslate",
+        `LLM omitted 'id' keys on ${itemsWithoutId.length}/${items.length} items. Recovering IDs positionally from 1:1 array order.`
+      );
+      validObjects.forEach((p, idx) => {
+        if (p.id === undefined && items[idx]) {
+          p.id = items[idx].id;
+        }
+      });
+    }
+
     const parsedMap = new Map<number, any>(
       parsedArray
         .filter((p) => p && typeof p === "object" && p.id !== undefined)
@@ -1279,6 +1455,12 @@ class BatchTranslateService {
       }
     }
 
+    if (fileContext) {
+      useBatchStore.getState().setFileStreamingState(fileContext.fileId, (prev) =>
+        prev ? { ...prev, phase: "completed" as any } : null
+      );
+    }
+
     // Record session usage statistics (using exact values from OpenRouter API if available)
     try {
       let promptTokens = exactPromptTokens;
@@ -1286,11 +1468,14 @@ class BatchTranslateService {
       let cachedTokens = exactCachedTokens;
       let cost = exactCost;
 
-      if (!hasExactUsage) {
+      if (!hasExactUsage || promptTokens === 0) {
         const promptChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
         promptTokens = Math.max(1, Math.round(promptChars / 2.6));
-        cachedTokens = 0; // Do not guess phantom cached tokens on fallback; leave 0 unless reported by OpenRouter
-        completionTokens = Math.max(1, Math.round(content.length / 3.0));
+        cachedTokens = cachedTokens || 0;
+        completionTokens = completionTokens > 0 ? completionTokens : Math.max(1, Math.round(content.length / 3.0));
+        cost = cost > 0 ? cost : calculateUsageCost(settings.modelId, promptTokens, completionTokens, cachedTokens);
+      } else if (cost === 0 && (promptTokens > 0 || completionTokens > 0)) {
+        // Some providers report prompt & completion tokens but do not report financial cost (cost = 0)
         cost = calculateUsageCost(settings.modelId, promptTokens, completionTokens, cachedTokens);
       }
 
@@ -1351,6 +1536,8 @@ class BatchTranslateService {
     if (this.abortController) {
       this.abortController.abort();
     }
+    invoke("cancel_all_llm_streams").catch(() => {});
+    useBatchStore.getState().clearAllStreamingStates();
     logger.info("BatchTranslate", "Batch translation cancellation requested.");
   }
 }

@@ -1,3 +1,4 @@
+import { jsonrepair } from "jsonrepair";
 import { BatchItem } from "../services/batchTranslateService";
 import { logger } from "../services/loggerService";
 
@@ -91,7 +92,21 @@ export function parseLlmBatchResponse(raw: string, items: BatchItem[]): ParsedBa
     return s;
   };
 
-  // 1. Try parsing extracted markdown code fence ```json ... ```
+  // 1. Direct JSON.parse & jsonrepair on raw/sanitized content
+  const sanitized = sanitizeCandidate(raw);
+  try {
+    const direct = JSON.parse(sanitized);
+    const unwrapped = unwrapCandidate(direct);
+    if (unwrapped && unwrapped.length > 0) return unwrapped;
+  } catch {
+    try {
+      const repaired = JSON.parse(jsonrepair(sanitized));
+      const unwrapped = unwrapCandidate(repaired);
+      if (unwrapped && unwrapped.length > 0) return unwrapped;
+    } catch {}
+  }
+
+  // 2. Try parsing extracted markdown code fence ```json ... ```
   const codeFenceMatches = raw.match(/```(?:json)?\s*([\s\S]*?)```/gi);
   if (codeFenceMatches) {
     for (const fence of codeFenceMatches) {
@@ -102,44 +117,21 @@ export function parseLlmBatchResponse(raw: string, items: BatchItem[]): ParsedBa
         if (unwrapped && unwrapped.length > 0) return unwrapped;
       } catch {
         try {
-          const repaired = JSON.parse(repairJsonQuotes(inner));
+          const repaired = JSON.parse(jsonrepair(inner));
           const unwrapped = unwrapCandidate(repaired);
           if (unwrapped && unwrapped.length > 0) return unwrapped;
-        } catch {}
+        } catch {
+          try {
+            const regexRepaired = JSON.parse(repairJsonQuotes(inner));
+            const unwrapped = unwrapCandidate(regexRepaired);
+            if (unwrapped && unwrapped.length > 0) return unwrapped;
+          } catch {}
+        }
       }
     }
   }
 
-  // 2. Direct JSON.parse on sanitized string (with and without quote repairs)
-  const sanitized = sanitizeCandidate(raw);
-  try {
-    const direct = JSON.parse(sanitized);
-    const unwrapped = unwrapCandidate(direct);
-    if (unwrapped && unwrapped.length > 0) return unwrapped;
-  } catch {
-    try {
-      const repaired = JSON.parse(repairJsonQuotes(sanitized));
-      const unwrapped = unwrapCandidate(repaired);
-      if (unwrapped && unwrapped.length > 0) return unwrapped;
-    } catch {}
-  }
-
-  // 3. Extract bracketed array [...] or brace object {...}
-  const braceMatch = sanitized.match(/\{[\s\S]*\}/);
-  if (braceMatch) {
-    try {
-      const parsed = JSON.parse(braceMatch[0]);
-      const unwrapped = unwrapCandidate(parsed);
-      if (unwrapped && unwrapped.length > 0) return unwrapped;
-    } catch {
-      try {
-        const repaired = JSON.parse(repairJsonQuotes(braceMatch[0]));
-        const unwrapped = unwrapCandidate(repaired);
-        if (unwrapped && unwrapped.length > 0) return unwrapped;
-      } catch {}
-    }
-  }
-
+  // 3. Extract bracketed array [...] or brace object {...} with jsonrepair
   const arrayMatch = sanitized.match(/\[[\s\S]*\]/);
   if (arrayMatch) {
     try {
@@ -148,7 +140,22 @@ export function parseLlmBatchResponse(raw: string, items: BatchItem[]): ParsedBa
       if (unwrapped && unwrapped.length > 0) return unwrapped;
     } catch {
       try {
-        const repaired = JSON.parse(repairJsonQuotes(arrayMatch[0]));
+        const repaired = JSON.parse(jsonrepair(arrayMatch[0]));
+        const unwrapped = unwrapCandidate(repaired);
+        if (unwrapped && unwrapped.length > 0) return unwrapped;
+      } catch {}
+    }
+  }
+
+  const braceMatch = sanitized.match(/\{[\s\S]*\}/);
+  if (braceMatch) {
+    try {
+      const parsed = JSON.parse(braceMatch[0]);
+      const unwrapped = unwrapCandidate(parsed);
+      if (unwrapped && unwrapped.length > 0) return unwrapped;
+    } catch {
+      try {
+        const repaired = JSON.parse(jsonrepair(braceMatch[0]));
         const unwrapped = unwrapCandidate(repaired);
         if (unwrapped && unwrapped.length > 0) return unwrapped;
       } catch {}

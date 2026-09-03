@@ -7,7 +7,9 @@ use screen_capture::{capture_screen_rect, image_to_base64_data_url, CaptureRegio
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::error::Error as StdError;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
+use tauri::ipc::Channel;
 use textractor::TextractorState;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -15,14 +17,30 @@ static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 fn get_http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
+            .http1_only() // Enforce HTTP/1.1 to prevent HTTP/2 RST_STREAM / multiplexing timeouts on long LLM generations
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             .timeout(std::time::Duration::from_secs(1800)) // 30 min ceiling timeout
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
-            .pool_idle_timeout(std::time::Duration::from_secs(180))
-            .pool_max_idle_per_host(10)
+            .connect_timeout(std::time::Duration::from_secs(45))
+            .tcp_nodelay(true)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .pool_max_idle_per_host(5)
             .build()
             .expect("Failed to initialize shared HTTP client")
     })
+}
+
+fn format_reqwest_error(context: &str, err: &reqwest::Error) -> String {
+    let mut details = format!("{}: {}", context, err);
+    let mut curr_source = StdError::source(err);
+    let mut chain = Vec::new();
+    while let Some(src) = curr_source {
+        chain.push(src.to_string());
+        curr_source = src.source();
+    }
+    if !chain.is_empty() {
+        details.push_str(&format!(" [Cause: {}]", chain.join(" -> ")));
+    }
+    details
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -599,7 +617,31 @@ pub struct OpenRouterCompletionResponse {
     pub cost: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum StreamEvent {
+    Chunk(String),
+    Reasoning(String),
+    Status(String),
+    Usage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        cached_tokens: u32,
+        cost: f64,
+    },
+}
+
 fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> Result<OpenRouterCompletionResponse, String> {
+    if let Some(err_obj) = parsed.get("error") {
+        let msg = err_obj["message"].as_str().unwrap_or("Unknown upstream API error");
+        let code = err_obj["code"].as_i64().or_else(|| err_obj["code"].as_str().and_then(|s| s.parse().ok())).unwrap_or(0);
+        if code > 0 {
+            return Err(format!("Upstream Provider Error ({}): {}", code, msg));
+        } else {
+            return Err(format!("Upstream Provider Error: {}", msg));
+        }
+    }
+
     let content = if let Some(content) = parsed["choices"][0]["message"]["content"].as_str() {
         if !content.trim().is_empty() {
             Some(content.trim().to_string())
@@ -609,6 +651,18 @@ fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> Resul
     } else if let Some(reasoning) = parsed["choices"][0]["message"]["reasoning"].as_str() {
         if !reasoning.trim().is_empty() {
             Some(reasoning.trim().to_string())
+        } else {
+            None
+        }
+    } else if let Some(reasoning_content) = parsed["choices"][0]["message"]["reasoning_content"].as_str() {
+        if !reasoning_content.trim().is_empty() {
+            Some(reasoning_content.trim().to_string())
+        } else {
+            None
+        }
+    } else if let Some(text_content) = parsed["choices"][0]["text"].as_str() {
+        if !text_content.trim().is_empty() {
+            Some(text_content.trim().to_string())
         } else {
             None
         }
@@ -670,29 +724,72 @@ async fn llm_chat_completion(
     let payload: serde_json::Value = serde_json::from_str(&payload_json)
         .map_err(|e| format!("Invalid payload JSON: {}", e))?;
 
-    let mut req = client.post(&url).timeout(timeout_duration);
-    for (k, v) in headers {
-        req = req.header(&k, &v);
+    let max_attempts = 3;
+    let mut last_error = String::new();
+
+    for attempt in 1..=max_attempts {
+        let mut req = client.post(&url).timeout(timeout_duration);
+        for (k, v) in &headers {
+            req = req.header(k, v);
+        }
+
+        let send_res = req.json(&payload).send().await;
+        let resp = match send_res {
+            Ok(r) => r,
+            Err(e) => {
+                last_error = format_reqwest_error(&format!("Failed to connect to LLM API ({})", url), &e);
+                if attempt < max_attempts {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = resp.status();
+        let bytes = match resp.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                last_error = format_reqwest_error("Failed to read response body", &e);
+                if attempt < max_attempts {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let body_text = String::from_utf8_lossy(&bytes).to_string();
+
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504;
+            if is_transient && attempt < max_attempts {
+                last_error = format!("LLM API error (HTTP {}): {}", status, body_text);
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            }
+            return Err(format!("LLM API error (HTTP {}): {}", status, body_text));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&body_text)
+            .map_err(|e| format!("Failed to parse response JSON: {} (raw body: {})", e, body_text))?;
+
+        match parse_openrouter_payload(&parsed, &body_text) {
+            Ok(res) => return Ok(res),
+            Err(e) => {
+                let is_transient = e.contains("502") || e.contains("503") || e.contains("429") || e.contains("queue-time") || e.contains("rate limit");
+                if is_transient && attempt < max_attempts {
+                    last_error = e;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                return Err(e);
+            }
+        }
     }
-    req = req.header("Accept-Encoding", "identity");
 
-    let resp = req
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to LLM API ({}): {}", url, e))?;
-
-    let status = resp.status();
-    let body_text = resp.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    if !status.is_success() {
-        return Err(format!("LLM API error (HTTP {}): {}", status, body_text));
-    }
-
-    let parsed: serde_json::Value = serde_json::from_str(&body_text)
-        .map_err(|e| format!("Failed to parse response JSON: {}", e))?;
-
-    parse_openrouter_payload(&parsed, &body_text)
+    Err(last_error)
 }
 
 #[tauri::command]
@@ -706,15 +803,23 @@ async fn test_llm_connection(
         req = req.header(&k, &v);
     }
 
-    let resp = req.send().await.map_err(|e| format!("Connection failed: {}", e))?;
+    let resp = req.send().await.map_err(|e| format_reqwest_error("Connection failed", &e))?;
     let status = resp.status();
-    let body = resp.text().await.map_err(|e| format!("Failed to read body: {}", e))?;
+    let bytes = resp.bytes().await.map_err(|e| format_reqwest_error("Failed to read body", &e))?;
+    let body = String::from_utf8_lossy(&bytes).to_string();
 
     if status.is_success() {
         Ok(body)
     } else {
         Err(format!("HTTP {}: {}", status, body))
     }
+}
+
+static ABORT_STREAM_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[tauri::command]
+fn cancel_all_llm_streams() {
+    ABORT_STREAM_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -739,6 +844,7 @@ async fn openrouter_chat_completion(
         "messages": messages,
         "temperature": temperature,
         "response_format": { "type": "json_object" },
+        "include_reasoning": true,
     });
 
     if let Some(ref r) = reasoning {
@@ -747,14 +853,15 @@ async fn openrouter_chat_completion(
         }
     }
 
+    let mut provider_obj = serde_json::json!({
+        "allow_fallbacks": false,
+    });
     if let Some(ref list) = providers {
         if !list.is_empty() {
-            payload["provider"] = serde_json::json!({
-                "allow_fallbacks": true,
-                "only": list,
-            });
+            provider_obj["only"] = serde_json::json!(list);
         }
     }
+    payload["provider"] = provider_obj;
 
     if let Some(mt) = max_tokens {
         if mt > 0 {
@@ -762,88 +869,853 @@ async fn openrouter_chat_completion(
         }
     }
 
-    let resp = client
-        .post("https://openrouter.ai/api/v1/chat/completions")
-        .timeout(timeout_duration)
-        .header("Authorization", format!("Bearer {}", api_key.trim()))
-        .header("Content-Type", "application/json")
-        .header("Accept-Encoding", "identity")
-        .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
-        .header("X-Title", "VN Translator Desktop")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to OpenRouter API: {}", e))?;
+    let max_attempts = 3;
+    let mut last_error = String::new();
 
-    let status = resp.status();
-    let body_text = resp.text().await.map_err(|e| format!("Failed to read OpenRouter response text: {}", e))?;
-
-    if !status.is_success() {
-        // If the model rejected json_object parameter specifically (HTTP 400 or 422), retry without response_format
-        let is_format_error = (status.as_u16() == 400 || status.as_u16() == 422)
-            && (body_text.contains("response_format")
-                || body_text.contains("json_object")
-                || body_text.contains("structured output")
-                || body_text.contains("unsupported parameter")
-                || body_text.contains("schema"));
-
-        if is_format_error {
-            let mut fallback_payload = serde_json::json!({
-                "model": model_id,
-                "messages": messages,
-                "temperature": temperature,
-            });
-
-            if let Some(ref r) = reasoning {
-                if r.is_object() && !r.as_object().unwrap().is_empty() {
-                    fallback_payload["reasoning"] = r.clone();
+    for attempt in 1..=max_attempts {
+        let resp = match client
+            .post("https://openrouter.ai/api/v1/chat/completions")
+            .timeout(timeout_duration)
+            .header("Authorization", format!("Bearer {}", api_key.trim()))
+            .header("Content-Type", "application/json")
+            .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
+            .header("X-Title", "VN Translator Desktop")
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_error = format_reqwest_error("Failed to connect to OpenRouter API", &e);
+                if attempt < max_attempts {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    continue;
                 }
+                return Err(last_error);
             }
+        };
 
-            if let Some(ref list) = providers {
-                if !list.is_empty() {
-                    fallback_payload["provider"] = serde_json::json!({
-                        "allow_fallbacks": true,
-                        "only": list,
-                    });
+        let status = resp.status();
+        let bytes = match resp.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                last_error = format_reqwest_error("Failed to read OpenRouter response bytes", &e);
+                if attempt < max_attempts {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    continue;
                 }
+                return Err(last_error);
             }
+        };
+        let body_text = String::from_utf8_lossy(&bytes).to_string();
 
-            if let Some(mt) = max_tokens {
-                if mt > 0 {
-                    fallback_payload["max_tokens"] = serde_json::json!(mt);
+        if !status.is_success() {
+            // If the model rejected json_object parameter specifically (HTTP 400 or 422), retry without response_format
+            let is_format_error = (status.as_u16() == 400 || status.as_u16() == 422)
+                && (body_text.contains("response_format")
+                    || body_text.contains("json_object")
+                    || body_text.contains("structured output")
+                    || body_text.contains("unsupported parameter")
+                    || body_text.contains("schema"));
+
+            if is_format_error {
+                let mut fallback_payload = serde_json::json!({
+                    "model": model_id,
+                    "messages": messages,
+                    "temperature": temperature,
+                });
+
+                if let Some(ref r) = reasoning {
+                    if r.is_object() && !r.as_object().unwrap().is_empty() {
+                        fallback_payload["reasoning"] = r.clone();
+                    }
                 }
-            }
 
-            let retry_resp = client
-                .post("https://openrouter.ai/api/v1/chat/completions")
-                .timeout(timeout_duration)
-                .header("Authorization", format!("Bearer {}", api_key.trim()))
-                .header("Content-Type", "application/json")
-                .header("Accept-Encoding", "identity")
-                .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
-                .header("X-Title", "VN Translator Desktop")
-                .json(&fallback_payload)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to connect to OpenRouter API (retry): {}", e))?;
+                let mut fallback_provider_obj = serde_json::json!({
+                    "allow_fallbacks": false,
+                });
+                if let Some(ref list) = providers {
+                    if !list.is_empty() {
+                        fallback_provider_obj["only"] = serde_json::json!(list);
+                    }
+                }
+                fallback_payload["provider"] = fallback_provider_obj;
 
-            let retry_status = retry_resp.status();
-            let retry_body = retry_resp.text().await.map_err(|e| format!("Failed to read retry response text: {}", e))?;
-            if !retry_status.is_success() {
-                return Err(format!("OpenRouter API error (HTTP {}): {}", retry_status, retry_body));
+                if let Some(mt) = max_tokens {
+                    if mt > 0 {
+                        fallback_payload["max_tokens"] = serde_json::json!(mt);
+                    }
+                }
+
+                let retry_resp = client
+                    .post("https://openrouter.ai/api/v1/chat/completions")
+                    .timeout(timeout_duration)
+                    .header("Authorization", format!("Bearer {}", api_key.trim()))
+                    .header("Content-Type", "application/json")
+                    .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
+                    .header("X-Title", "VN Translator Desktop")
+                    .json(&fallback_payload)
+                    .send()
+                    .await
+                    .map_err(|e| format_reqwest_error("Failed to connect to OpenRouter API (format fallback retry)", &e))?;
+
+                let retry_status = retry_resp.status();
+                let retry_bytes = retry_resp.bytes().await.map_err(|e| format_reqwest_error("Failed to read format fallback retry response bytes", &e))?;
+                let retry_body = String::from_utf8_lossy(&retry_bytes).to_string();
+                if !retry_status.is_success() {
+                    return Err(format!("OpenRouter API error (HTTP {}): {}", retry_status, retry_body));
+                }
+                let parsed: serde_json::Value = serde_json::from_str(&retry_body)
+                    .map_err(|e| format!("Failed to parse OpenRouter response: {} (raw body: {})", e, retry_body))?;
+                return parse_openrouter_payload(&parsed, &retry_body);
             }
-            let parsed: serde_json::Value = serde_json::from_str(&retry_body)
-                .map_err(|e| format!("Failed to parse OpenRouter response: {}", e))?;
-            return parse_openrouter_payload(&parsed, &retry_body);
+            let status_code = status.as_u16();
+            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504 || body_text.contains("unreachable") || body_text.contains("temporarily unavailable") || body_text.contains("high demand");
+            if is_transient && attempt < max_attempts {
+                last_error = format!("OpenRouter API error (HTTP {}): {}", status, body_text);
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            }
+            return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
         }
-        return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
+
+        let parsed: serde_json::Value = serde_json::from_str(&body_text)
+            .map_err(|e| format!("Failed to parse OpenRouter response: {} (raw body: {})", e, body_text))?;
+
+        match parse_openrouter_payload(&parsed, &body_text) {
+            Ok(res) => return Ok(res),
+            Err(e) => {
+                let is_transient = e.contains("502") || e.contains("503") || e.contains("429") || e.contains("queue-time") || e.contains("rate limit") || e.contains("unreachable") || e.contains("temporarily unavailable");
+                if is_transient && attempt < max_attempts {
+                    last_error = e;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                return Err(e);
+            }
+        }
     }
 
-    let parsed: serde_json::Value = serde_json::from_str(&body_text)
-        .map_err(|e| format!("Failed to parse OpenRouter response: {}", e))?;
+    Err(last_error)
+}
 
-    parse_openrouter_payload(&parsed, &body_text)
+fn is_json_completed(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // Direct JSON object or array
+    if (t.ends_with('}') || t.ends_with(']')) && serde_json::from_str::<serde_json::Value>(t).is_ok() {
+        return true;
+    }
+    // Markdown fenced JSON e.g. ```json ... ```
+    if t.ends_with("```") {
+        if let Some(start) = t.find('{') {
+            if let Some(end) = t.rfind('}') {
+                if end > start && serde_json::from_str::<serde_json::Value>(&t[start..=end]).is_ok() {
+                    return true;
+                }
+            }
+        }
+        if let Some(start) = t.find('[') {
+            if let Some(end) = t.rfind(']') {
+                if end > start && serde_json::from_str::<serde_json::Value>(&t[start..=end]).is_ok() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[tauri::command]
+async fn openrouter_stream_chat_completion(
+    api_key: String,
+    model_id: String,
+    messages_json: String,
+    temperature: f64,
+    max_tokens: Option<u32>,
+    timeout_seconds: Option<u64>,
+    providers: Option<Vec<String>>,
+    reasoning: Option<serde_json::Value>,
+    on_event: Channel<StreamEvent>,
+) -> Result<OpenRouterCompletionResponse, String> {
+    let client = get_http_client();
+    let timeout_duration = std::time::Duration::from_secs(timeout_seconds.unwrap_or(600));
+
+    let messages: serde_json::Value = serde_json::from_str(&messages_json)
+        .map_err(|e| format!("Invalid messages JSON: {}", e))?;
+
+    let mut payload = serde_json::json!({
+        "model": model_id,
+        "messages": messages,
+        "temperature": temperature,
+        "response_format": { "type": "json_object" },
+        "stream": true,
+        "stream_options": { "include_usage": true },
+        "include_reasoning": true,
+    });
+
+    if let Some(ref r) = reasoning {
+        if r.is_object() && !r.as_object().unwrap().is_empty() {
+            payload["reasoning"] = r.clone();
+        }
+    }
+
+    let mut provider_obj = serde_json::json!({
+        "allow_fallbacks": false,
+    });
+    if let Some(ref list) = providers {
+        if !list.is_empty() {
+            provider_obj["only"] = serde_json::json!(list);
+        }
+    }
+    payload["provider"] = provider_obj;
+
+    if let Some(mt) = max_tokens {
+        if mt > 0 {
+            payload["max_tokens"] = serde_json::json!(mt);
+        }
+    }
+
+    let start_cancel_count = ABORT_STREAM_COUNTER.load(std::sync::atomic::Ordering::SeqCst);
+    let max_attempts = 3;
+    let mut last_error = String::new();
+
+    for attempt in 1..=max_attempts {
+        if ABORT_STREAM_COUNTER.load(std::sync::atomic::Ordering::SeqCst) != start_cancel_count {
+            return Err("Stream aborted by user.".to_string());
+        }
+
+        let _ = on_event.send(StreamEvent::Status("connecting".to_string()));
+
+        let req = client
+            .post("https://openrouter.ai/api/v1/chat/completions")
+            .timeout(timeout_duration)
+            .header("Authorization", format!("Bearer {}", api_key.trim()))
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("HTTP-Referer", "https://github.com/visual-novel-translator")
+            .header("X-Title", "Visual Novel Translator")
+            .json(&payload);
+
+        let mut resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_error = format_reqwest_error("Failed to connect to OpenRouter streaming API", &e);
+                if attempt < max_attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            let bytes = resp.bytes().await.unwrap_or_default();
+            let body_text = String::from_utf8_lossy(&bytes).to_string();
+
+            let is_format_error = (status.as_u16() == 400 || status.as_u16() == 422)
+                && (body_text.contains("response_format")
+                    || body_text.contains("json_object")
+                    || body_text.contains("structured output")
+                    || body_text.contains("unsupported parameter")
+                    || body_text.contains("stream_options")
+                    || body_text.contains("schema"));
+
+            if is_format_error {
+                let mut fallback_payload = payload.clone();
+                if let Some(map) = fallback_payload.as_object_mut() {
+                    map.remove("response_format");
+                    map.remove("stream_options");
+                }
+                payload = fallback_payload;
+                continue;
+            }
+
+            let status_code = status.as_u16();
+            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504 || body_text.contains("unreachable") || body_text.contains("temporarily unavailable") || body_text.contains("high demand");
+            if is_transient && attempt < max_attempts {
+                last_error = format!("OpenRouter API error (HTTP {}): {}", status, body_text);
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            }
+            return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
+        }
+
+        let mut accumulated_content = String::new();
+        let mut accumulated_reasoning = String::new();
+        let mut prompt_tokens: u32 = 0;
+        let mut completion_tokens: u32 = 0;
+        let mut cached_tokens: u32 = 0;
+        let mut cost: f64 = 0.0;
+        let mut buffer = String::new();
+        let mut in_reasoning_phase = false;
+        let mut in_content_phase = false;
+        let mut in_think_tag = false;
+        let mut stream_failed = false;
+        let mut content_finished = false;
+        let mut has_usage = false;
+
+        'chunk_loop: loop {
+            if ABORT_STREAM_COUNTER.load(std::sync::atomic::Ordering::SeqCst) != start_cancel_count {
+                return Err("Stream aborted by user.".to_string());
+            }
+
+            let is_json_done = is_json_completed(&accumulated_content);
+            let next_chunk_timeout = if is_json_done || content_finished {
+                // If content is done or JSON is complete, wait at most 1500ms for final usage / [DONE]
+                std::time::Duration::from_millis(1500)
+            } else {
+                timeout_duration
+            };
+
+            let chunk_opt = match tokio::time::timeout(next_chunk_timeout, resp.chunk()).await {
+                Ok(Ok(Some(c))) => Some(c),
+                Ok(Ok(None)) => None,
+                Ok(Err(e)) => {
+                    last_error = format_reqwest_error("Error reading stream chunk", &e);
+                    stream_failed = true;
+                    break 'chunk_loop;
+                }
+                Err(_) => {
+                    // Timeout elapsed
+                    if is_json_done || content_finished {
+                        // Content was finished; break cleanly with accumulated content
+                        let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                        break 'chunk_loop;
+                    } else {
+                        last_error = "Stream connection timed out while waiting for next token".to_string();
+                        stream_failed = true;
+                        break 'chunk_loop;
+                    }
+                }
+            };
+
+            let chunk = match chunk_opt {
+                Some(c) => c,
+                None => {
+                    let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                    break 'chunk_loop;
+                }
+            };
+
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                if let Some(stripped) = line.strip_prefix("data:") {
+                    let data = stripped.trim();
+                    if data == "[DONE]" {
+                        let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                        break 'chunk_loop;
+                    }
+
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                        if let Some(err_obj) = parsed.get("error") {
+                            let msg = err_obj["message"].as_str().unwrap_or("Upstream API error");
+                            let code = err_obj["code"].as_i64().unwrap_or(0);
+                            let is_transient = code == 429 || code == 500 || code == 502 || code == 503 || msg.contains("unreachable") || msg.contains("queue-time") || msg.contains("rate limit") || msg.contains("temporarily unavailable");
+                            if is_transient && attempt < max_attempts {
+                                last_error = format!("Stream Upstream Error ({}): {}", code, msg);
+                                stream_failed = true;
+                                break 'chunk_loop;
+                            }
+                            return Err(format!("Stream Upstream Error ({}): {}", code, msg));
+                        }
+
+                        if let Some(usage) = parsed.get("usage") {
+                            has_usage = true;
+                            if let Some(pt) = usage["prompt_tokens"].as_u64().or_else(|| usage["input_tokens"].as_u64()) {
+                                prompt_tokens = pt as u32;
+                            }
+                            if let Some(ct) = usage["completion_tokens"].as_u64().or_else(|| usage["output_tokens"].as_u64()) {
+                                completion_tokens = ct as u32;
+                            }
+                            if let Some(c) = usage["cost"].as_f64() {
+                                cost = c;
+                            }
+                            if let Some(ptd) = usage.get("prompt_tokens_details") {
+                                if let Some(cached) = ptd["cached_tokens"].as_u64().or_else(|| ptd["cache_read_input_tokens"].as_u64()) {
+                                    cached_tokens = cached as u32;
+                                }
+                            } else if let Some(cached) = usage["cached_tokens"].as_u64().or_else(|| usage["cache_read_input_tokens"].as_u64()).or_else(|| usage["cached_content_token_count"].as_u64()) {
+                                cached_tokens = cached as u32;
+                            }
+                            let _ = on_event.send(StreamEvent::Usage {
+                                prompt_tokens,
+                                completion_tokens,
+                                cached_tokens,
+                                cost,
+                            });
+                        }
+
+                        if let Some(choices) = parsed["choices"].as_array() {
+                            if let Some(choice) = choices.get(0) {
+                                if let Some(delta) = choice.get("delta") {
+                                    let reasoning_chunk = delta["reasoning"].as_str()
+                                        .or_else(|| delta["reasoning_content"].as_str())
+                                        .or_else(|| delta["thinking"].as_str());
+
+                                    if let Some(r) = reasoning_chunk {
+                                        if !r.is_empty() {
+                                            if !in_reasoning_phase {
+                                                in_reasoning_phase = true;
+                                                let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                            }
+                                            accumulated_reasoning.push_str(r);
+                                            let _ = on_event.send(StreamEvent::Reasoning(r.to_string()));
+                                        }
+                                    }
+
+                                    if let Some(c) = delta["content"].as_str() {
+                                        if !c.is_empty() {
+                                            if c.contains("<think>") || in_think_tag {
+                                                in_think_tag = true;
+                                                if !in_reasoning_phase {
+                                                    in_reasoning_phase = true;
+                                                    let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                                }
+                                                if c.contains("</think>") {
+                                                    in_think_tag = false;
+                                                    let parts: Vec<&str> = c.split("</think>").collect();
+                                                    let think_part = parts[0].replace("<think>", "");
+                                                    if !think_part.is_empty() {
+                                                        accumulated_reasoning.push_str(&think_part);
+                                                        let _ = on_event.send(StreamEvent::Reasoning(think_part));
+                                                    }
+                                                    if parts.len() > 1 && !parts[1].is_empty() {
+                                                        if !in_content_phase {
+                                                            in_content_phase = true;
+                                                            let _ = on_event.send(StreamEvent::Status("translating".to_string()));
+                                                        }
+                                                        accumulated_content.push_str(parts[1]);
+                                                        let _ = on_event.send(StreamEvent::Chunk(parts[1].to_string()));
+                                                    }
+                                                } else {
+                                                    let clean_chunk = c.replace("<think>", "");
+                                                    accumulated_reasoning.push_str(&clean_chunk);
+                                                    let _ = on_event.send(StreamEvent::Reasoning(clean_chunk));
+                                                }
+                                            } else {
+                                                if !in_content_phase {
+                                                    in_content_phase = true;
+                                                    let _ = on_event.send(StreamEvent::Status("translating".to_string()));
+                                                }
+                                                accumulated_content.push_str(c);
+                                                let _ = on_event.send(StreamEvent::Chunk(c.to_string()));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
+                                    if !fr.is_empty() && fr != "null" {
+                                        content_finished = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        if content_finished && has_usage {
+                            let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                            break 'chunk_loop;
+                        }
+                    }
+                }
+            }
+
+            if buffer.contains("[DONE]") {
+                let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                break 'chunk_loop;
+            }
+        }
+
+        if stream_failed {
+            if attempt < max_attempts {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let final_content = if !accumulated_content.trim().is_empty() {
+            accumulated_content.trim().to_string()
+        } else {
+            accumulated_reasoning.trim().to_string()
+        };
+
+        if final_content.is_empty() {
+            if attempt < max_attempts {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            return Err("Empty response stream received from OpenRouter".to_string());
+        }
+
+        if completion_tokens == 0 {
+            completion_tokens = (final_content.len() / 4).max(1) as u32;
+        }
+
+        return Ok(OpenRouterCompletionResponse {
+            content: final_content,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            cost,
+        });
+    }
+
+    Err(last_error)
+}
+
+#[tauri::command]
+async fn llm_stream_chat_completion(
+    url: String,
+    headers: std::collections::HashMap<String, String>,
+    payload_json: String,
+    timeout_seconds: Option<u64>,
+    on_event: Channel<StreamEvent>,
+) -> Result<OpenRouterCompletionResponse, String> {
+    let client = get_http_client();
+    let timeout_duration = std::time::Duration::from_secs(timeout_seconds.unwrap_or(600));
+
+    let mut payload: serde_json::Value = serde_json::from_str(&payload_json)
+        .map_err(|e| format!("Invalid payload JSON: {}", e))?;
+
+    // Ensure stream is enabled in payload
+    payload["stream"] = serde_json::json!(true);
+    let is_anthropic = url.contains("/messages");
+    if !is_anthropic {
+        payload["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
+
+    let start_cancel_count = ABORT_STREAM_COUNTER.load(std::sync::atomic::Ordering::SeqCst);
+    let max_attempts = 3;
+    let mut last_error = String::new();
+
+    for attempt in 1..=max_attempts {
+        if ABORT_STREAM_COUNTER.load(std::sync::atomic::Ordering::SeqCst) != start_cancel_count {
+            return Err("Stream aborted by user.".to_string());
+        }
+
+        let _ = on_event.send(StreamEvent::Status("connecting".to_string()));
+
+        let mut req = client
+            .post(&url)
+            .timeout(timeout_duration)
+            .header("Accept", "text/event-stream");
+
+        for (k, v) in &headers {
+            req = req.header(k, v);
+        }
+
+        let send_res = req.json(&payload).send().await;
+        let mut resp = match send_res {
+            Ok(r) => r,
+            Err(e) => {
+                last_error = format_reqwest_error(&format!("Failed to connect to LLM streaming API ({})", url), &e);
+                if attempt < max_attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            let bytes = resp.bytes().await.unwrap_or_default();
+            let body_text = String::from_utf8_lossy(&bytes).to_string();
+            let status_code = status.as_u16();
+            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504;
+            if is_transient && attempt < max_attempts {
+                last_error = format!("LLM API error (HTTP {}): {}", status, body_text);
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            }
+            return Err(format!("LLM API error (HTTP {}): {}", status, body_text));
+        }
+
+        let mut accumulated_content = String::new();
+        let mut accumulated_reasoning = String::new();
+        let mut prompt_tokens: u32 = 0;
+        let mut completion_tokens: u32 = 0;
+        let mut cached_tokens: u32 = 0;
+        let cost: f64 = 0.0;
+        let mut buffer = String::new();
+        let mut in_reasoning_phase = false;
+        let mut in_content_phase = false;
+        let mut in_think_tag = false;
+        let mut stream_failed = false;
+        let mut content_finished = false;
+        let mut has_usage = false;
+
+        'chunk_loop: loop {
+            if ABORT_STREAM_COUNTER.load(std::sync::atomic::Ordering::SeqCst) != start_cancel_count {
+                return Err("Stream aborted by user.".to_string());
+            }
+
+            let is_json_done = is_json_completed(&accumulated_content);
+            let next_chunk_timeout = if is_json_done || content_finished {
+                // If content is done or JSON is complete, wait at most 1500ms for final usage / [DONE]
+                std::time::Duration::from_millis(1500)
+            } else {
+                timeout_duration
+            };
+
+            let chunk_opt = match tokio::time::timeout(next_chunk_timeout, resp.chunk()).await {
+                Ok(Ok(Some(c))) => Some(c),
+                Ok(Ok(None)) => None,
+                Ok(Err(e)) => {
+                    last_error = format_reqwest_error("Error reading stream chunk", &e);
+                    stream_failed = true;
+                    break 'chunk_loop;
+                }
+                Err(_) => {
+                    // Timeout elapsed
+                    if is_json_done || content_finished {
+                        // Content was finished; break cleanly with accumulated content
+                        let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                        break 'chunk_loop;
+                    } else {
+                        last_error = "Stream connection timed out while waiting for next token".to_string();
+                        stream_failed = true;
+                        break 'chunk_loop;
+                    }
+                }
+            };
+
+            let chunk = match chunk_opt {
+                Some(c) => c,
+                None => {
+                    let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                    break 'chunk_loop;
+                }
+            };
+
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                if let Some(stripped) = line.strip_prefix("data:") {
+                    let data = stripped.trim();
+                    if data == "[DONE]" {
+                        let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                        break 'chunk_loop;
+                    }
+
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                        if let Some(err_obj) = parsed.get("error") {
+                            let msg = err_obj["message"].as_str().unwrap_or("Upstream API error");
+                            return Err(format!("LLM Stream Error: {}", msg));
+                        }
+
+                        if is_anthropic {
+                            let event_type = parsed["type"].as_str().unwrap_or("");
+                            if event_type == "content_block_delta" {
+                                if let Some(delta) = parsed.get("delta") {
+                                    let delta_type = delta["type"].as_str().unwrap_or("");
+                                    if delta_type == "thinking_delta" {
+                                        if let Some(t) = delta["thinking"].as_str() {
+                                            if !in_reasoning_phase {
+                                                in_reasoning_phase = true;
+                                                let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                            }
+                                            accumulated_reasoning.push_str(t);
+                                            let _ = on_event.send(StreamEvent::Reasoning(t.to_string()));
+                                        }
+                                    } else if delta_type == "text_delta" {
+                                        if let Some(t) = delta["text"].as_str() {
+                                            if !in_content_phase {
+                                                in_content_phase = true;
+                                                let _ = on_event.send(StreamEvent::Status("translating".to_string()));
+                                            }
+                                            accumulated_content.push_str(t);
+                                            let _ = on_event.send(StreamEvent::Chunk(t.to_string()));
+                                        }
+                                    }
+                                }
+                            } else if event_type == "message_start" {
+                                if let Some(usage) = parsed["message"].get("usage") {
+                                    if let Some(it) = usage["input_tokens"].as_u64() {
+                                        prompt_tokens = it as u32;
+                                    }
+                                    if let Some(cached) = usage["cache_read_input_tokens"].as_u64() {
+                                        cached_tokens = cached as u32;
+                                    }
+                                }
+                            } else if event_type == "message_delta" {
+                                if let Some(usage) = parsed.get("usage") {
+                                    has_usage = true;
+                                    if let Some(ot) = usage["output_tokens"].as_u64() {
+                                        completion_tokens = ot as u32;
+                                    }
+                                    let _ = on_event.send(StreamEvent::Usage {
+                                        prompt_tokens,
+                                        completion_tokens,
+                                        cached_tokens,
+                                        cost,
+                                    });
+                                }
+                            } else if event_type == "message_stop" {
+                                content_finished = true;
+                            }
+                        } else {
+                            if let Some(usage) = parsed.get("usage") {
+                                has_usage = true;
+                                if let Some(pt) = usage["prompt_tokens"].as_u64().or_else(|| usage["input_tokens"].as_u64()) {
+                                    prompt_tokens = pt as u32;
+                                }
+                                if let Some(ct) = usage["completion_tokens"].as_u64().or_else(|| usage["output_tokens"].as_u64()) {
+                                    completion_tokens = ct as u32;
+                                }
+                                if let Some(ptd) = usage.get("prompt_tokens_details") {
+                                    if let Some(cached) = ptd["cached_tokens"].as_u64().or_else(|| ptd["cache_read_input_tokens"].as_u64()) {
+                                        cached_tokens = cached as u32;
+                                    }
+                                } else if let Some(cached) = usage["cached_tokens"].as_u64().or_else(|| usage["cache_read_input_tokens"].as_u64()).or_else(|| usage["cached_content_token_count"].as_u64()) {
+                                    cached_tokens = cached as u32;
+                                }
+                                let _ = on_event.send(StreamEvent::Usage {
+                                    prompt_tokens,
+                                    completion_tokens,
+                                    cached_tokens,
+                                    cost,
+                                });
+                            }
+
+                            if let Some(choices) = parsed["choices"].as_array() {
+                                if let Some(choice) = choices.get(0) {
+                                    if let Some(delta) = choice.get("delta") {
+                                        let reasoning_chunk = delta["reasoning"].as_str()
+                                            .or_else(|| delta["reasoning_content"].as_str())
+                                            .or_else(|| delta["thinking"].as_str());
+
+                                        if let Some(r) = reasoning_chunk {
+                                            if !r.is_empty() {
+                                                if !in_reasoning_phase {
+                                                    in_reasoning_phase = true;
+                                                    let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                                }
+                                                accumulated_reasoning.push_str(r);
+                                                let _ = on_event.send(StreamEvent::Reasoning(r.to_string()));
+                                            }
+                                        }
+
+                                        if let Some(c) = delta["content"].as_str() {
+                                            if !c.is_empty() {
+                                                if c.contains("<think>") || in_think_tag {
+                                                    in_think_tag = true;
+                                                    if !in_reasoning_phase {
+                                                        in_reasoning_phase = true;
+                                                        let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                                    }
+                                                    if c.contains("</think>") {
+                                                        in_think_tag = false;
+                                                        let parts: Vec<&str> = c.split("</think>").collect();
+                                                        let think_part = parts[0].replace("<think>", "");
+                                                        if !think_part.is_empty() {
+                                                            accumulated_reasoning.push_str(&think_part);
+                                                            let _ = on_event.send(StreamEvent::Reasoning(think_part));
+                                                        }
+                                                        if parts.len() > 1 && !parts[1].is_empty() {
+                                                            if !in_content_phase {
+                                                                in_content_phase = true;
+                                                                let _ = on_event.send(StreamEvent::Status("translating".to_string()));
+                                                            }
+                                                            accumulated_content.push_str(parts[1]);
+                                                            let _ = on_event.send(StreamEvent::Chunk(parts[1].to_string()));
+                                                        }
+                                                    } else {
+                                                        let clean_chunk = c.replace("<think>", "");
+                                                        accumulated_reasoning.push_str(&clean_chunk);
+                                                        let _ = on_event.send(StreamEvent::Reasoning(clean_chunk));
+                                                    }
+                                                } else {
+                                                    if !in_content_phase {
+                                                        in_content_phase = true;
+                                                        let _ = on_event.send(StreamEvent::Status("translating".to_string()));
+                                                    }
+                                                    accumulated_content.push_str(c);
+                                                    let _ = on_event.send(StreamEvent::Chunk(c.to_string()));
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
+                                        if !fr.is_empty() && fr != "null" {
+                                            content_finished = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if content_finished && has_usage {
+                            let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                            break 'chunk_loop;
+                        }
+                    }
+                }
+            }
+
+            if buffer.contains("[DONE]") {
+                let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                break 'chunk_loop;
+            }
+        }
+
+        if stream_failed {
+            if attempt < max_attempts {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            return Err(last_error);
+        }
+
+        let final_content = if !accumulated_content.trim().is_empty() {
+            accumulated_content.trim().to_string()
+        } else {
+            accumulated_reasoning.trim().to_string()
+        };
+
+        if final_content.is_empty() {
+            if attempt < max_attempts {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            return Err("Empty response stream received from LLM API".to_string());
+        }
+
+        if completion_tokens == 0 {
+            completion_tokens = (final_content.len() / 4).max(1) as u32;
+        }
+
+        return Ok(OpenRouterCompletionResponse {
+            content: final_content,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            cost,
+        });
+    }
+
+    Err(last_error)
 }
 
 #[tauri::command]
@@ -980,10 +1852,13 @@ pub fn run() {
             show_pick_files_dialog,
             show_pick_directory_dialog,
             openrouter_chat_completion,
+            openrouter_stream_chat_completion,
             llm_chat_completion,
+            llm_stream_chat_completion,
             test_llm_connection,
             append_debug_log,
-            open_file_in_default_app
+            open_file_in_default_app,
+            cancel_all_llm_streams
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

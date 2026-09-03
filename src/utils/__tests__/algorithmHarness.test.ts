@@ -12,6 +12,7 @@ import {
   formatReasoningEffortLabel,
   getModelPreferredReasoningEffort,
   setModelPreferredReasoningEffort,
+  parseStructuredDialogueOutput,
 } from "../../services/openRouterService";
 
 describe("Algorithm Verification Test Harness", () => {
@@ -177,6 +178,37 @@ describe("Algorithm Verification Test Harness", () => {
     // Setting to default removes the model override
     setModelPreferredReasoningEffort("openai/o3-mini", "default");
     expect(getModelPreferredReasoningEffort("openai/o3-mini")).toBeUndefined();
+  });
+
+  it("repairs and parses malformed LLM JSON using jsonrepair", () => {
+    // 1. Batch JSON with unescaped nested quotes, single quotes, and trailing comma
+    const brokenBatchJson = `
+    \`\`\`json
+    {
+      'translations': [
+        { id: 1, 'translated_speaker': 'Alice', 'translated_message': 'She said "Hello!" with a smile' },
+        { id: 2, 'translated_speaker': null, 'translated_message': 'Yes, absolutely.', },
+      ]
+    }
+    \`\`\`
+    `;
+    const dummyItems = [
+      { id: 1, originalMessage: "こんにちは" },
+      { id: 2, originalMessage: "はい。" },
+    ];
+    const parsedBatch = parseLlmBatchResponse(brokenBatchJson, dummyItems);
+    expect(parsedBatch).toHaveLength(2);
+    expect(parsedBatch[0].id).toBe(1);
+    expect(parsedBatch[0].translated_speaker).toBe("Alice");
+    expect(parsedBatch[0].translated_message).toContain("Hello!");
+    expect(parsedBatch[1].id).toBe(2);
+    expect(parsedBatch[1].translated_message).toBe("Yes, absolutely.");
+
+    // 2. Structured dialogue output with unescaped nested quotes in live translation
+    const brokenLiveJson = `{ "translated_speaker": "Bob", "translated_message": "He shouted "Wait!" before leaving" }`;
+    const parsedLive = parseStructuredDialogueOutput(brokenLiveJson);
+    expect(parsedLive.translatedSpeaker).toBe("Bob");
+    expect(parsedLive.translatedMessage).toContain("Wait!");
   });
 });
 

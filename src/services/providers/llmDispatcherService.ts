@@ -1,8 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { LlmProviderRegistry, CuratedModelInfo } from "./llmProviderRegistry";
 import { OpenRouterCompletionResponse } from "../openRouterService";
 import { logger } from "../loggerService";
 import { ReasoningEffort } from "../../types";
+
+export interface StreamEvent {
+  type: "Chunk" | "Reasoning" | "Status" | "Usage";
+  data: any;
+}
 
 export interface UniversalChatOptions {
   modelId: string; // May be composite (e.g. "deepseek:deepseek-chat") or standard OpenRouter model
@@ -10,9 +15,12 @@ export interface UniversalChatOptions {
   temperature?: number;
   maxTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  reasoningMaxTokens?: number;
+  excludeReasoning?: boolean;
   timeoutSeconds?: number;
   overrideApiKey?: string;
   overrideBaseUrl?: string;
+  onEvent?: (event: StreamEvent) => void;
 }
 
 export interface UniversalChatResult {
@@ -41,71 +49,42 @@ export class LlmDispatcherService {
     const baseUrl = (customBaseUrl || def.defaultBaseUrl).replace(/\/+$/, "");
 
     try {
-      if (providerId === "openrouter") {
-        const resp = await invoke<string>("test_llm_connection", {
-          url: "https://openrouter.ai/api/v1/auth/key",
-          headers: {
-            Authorization: `Bearer ${cleanKey}`,
-          },
-        });
-        const parsed = JSON.parse(resp);
-        const label = parsed.data?.label || "OpenRouter Key";
-        const usage = parsed.data?.usage !== undefined ? ` (Usage: $${Number(parsed.data.usage).toFixed(2)})` : "";
-        return { isValid: true, message: `Connected to ${label}${usage}` };
-      }
+      let url = `${baseUrl}/models`;
+      let headers: Record<string, string> = cleanKey ? { Authorization: `Bearer ${cleanKey}` } : {};
 
       if (providerId === "anthropic") {
-        const resp = await invoke<string>("test_llm_connection", {
-          url: `${baseUrl}/v1/models`,
-          headers: {
-            "x-api-key": cleanKey,
-            "anthropic-version": "2023-06-01",
-          },
-        });
-        const parsed = JSON.parse(resp);
-        const count = Array.isArray(parsed.data) ? parsed.data.length : undefined;
-        return {
-          isValid: true,
-          message: `Anthropic API verified successfully!${count ? ` (${count} models available)` : ""}`,
-          modelsCount: count,
+        url = `${baseUrl}/v1/models`;
+        headers = {
+          "x-api-key": cleanKey,
+          "anthropic-version": "2023-06-01",
         };
+      } else if (providerId === "github-copilot") {
+        headers = {
+          Authorization: `Bearer ${cleanKey}`,
+          "Editor-Version": "vscode/1.107.0",
+          "Copilot-Integration-Id": "vscode-chat",
+          "X-GitHub-Api-Version": "2026-06-01",
+        };
+      } else if (providerId === "google" && !baseUrl.includes("/openai")) {
+        url = `${baseUrl}/models?key=${cleanKey}`;
+        headers = {};
       }
 
-      if (providerId === "github-copilot") {
-        const resp = await invoke<string>("test_llm_connection", {
-          url: `${baseUrl}/models`,
-          headers: {
-            Authorization: `Bearer ${cleanKey}`,
-            "Editor-Version": "vscode/1.107.0",
-            "Copilot-Integration-Id": "vscode-chat",
-            "X-GitHub-Api-Version": "2026-06-01",
-          },
-        });
-        const parsed = JSON.parse(resp);
-        const count = Array.isArray(parsed.data) ? parsed.data.length : undefined;
-        return {
-          isValid: true,
-          message: `GitHub Copilot token verified!${count ? ` (${count} models available)` : ""}`,
-          modelsCount: count,
-        };
-      }
-
-      // Default for all OpenAI-compatible and Google v1beta/openai providers: GET /models
-      const modelsUrl = baseUrl.endsWith("/models") ? baseUrl : `${baseUrl}/models`;
-      const resp = await invoke<string>("test_llm_connection", {
-        url: modelsUrl,
-        headers: cleanKey ? { Authorization: `Bearer ${cleanKey}` } : {},
-      });
-
+      const resp = await invoke<string>("test_llm_connection", { url, headers });
       const parsed = JSON.parse(resp);
-      const dataList = Array.isArray(parsed.data) ? parsed.data : Array.isArray(parsed.models) ? parsed.models : [];
+      const count = Array.isArray(parsed.data)
+        ? parsed.data.length
+        : Array.isArray(parsed.models)
+        ? parsed.models.length
+        : 1;
+
       return {
         isValid: true,
-        message: `${def.name} verified successfully! (${dataList.length} models found)`,
-        modelsCount: dataList.length,
+        message: `Successfully connected to ${def.name}! (${count} models available)`,
+        modelsCount: count,
       };
-    } catch (err: any) {
-      const errMsg = err?.message || String(err);
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
       return {
         isValid: false,
         message: `Validation failed: ${errMsg.slice(0, 180)}`,
@@ -235,14 +214,29 @@ export class LlmDispatcherService {
 
     // If using OpenRouter specifically, we can use the native openrouter_chat_completion
     if (providerId === "openrouter") {
-      const nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
-        apiKey,
-        modelId,
-        messagesJson: JSON.stringify(options.messages),
-        temperature: options.temperature ?? 0.3,
-        maxTokens: options.maxTokens,
-        timeoutSeconds: options.timeoutSeconds,
-      });
+      let nativeRes: OpenRouterCompletionResponse;
+      if (options.onEvent) {
+        const channel = new Channel<StreamEvent>();
+        channel.onmessage = options.onEvent;
+        nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_stream_chat_completion", {
+          apiKey,
+          modelId,
+          messagesJson: JSON.stringify(options.messages),
+          temperature: options.temperature ?? 0.3,
+          maxTokens: options.maxTokens,
+          timeoutSeconds: options.timeoutSeconds,
+          onEvent: channel,
+        });
+      } else {
+        nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
+          apiKey,
+          modelId,
+          messagesJson: JSON.stringify(options.messages),
+          temperature: options.temperature ?? 0.3,
+          maxTokens: options.maxTokens,
+          timeoutSeconds: options.timeoutSeconds,
+        });
+      }
 
       return {
         content: nativeRes.content,
@@ -270,6 +264,41 @@ export class LlmDispatcherService {
         temperature: options.temperature ?? 0.3,
       };
 
+      // Anthropic Extended Thinking (Claude 3.7+ / Claude 4)
+      const isAnthropicThinking = /claude-3-7|claude-4/i.test(modelId);
+      if (isAnthropicThinking) {
+        const effort = options.reasoningEffort || "medium";
+        const exclude = Boolean(options.excludeReasoning || effort === "none");
+
+        if (!exclude && effort !== "none") {
+          let budgetTokens = 2048;
+          if (options.reasoningMaxTokens && options.reasoningMaxTokens >= 1024) {
+            budgetTokens = options.reasoningMaxTokens;
+          } else if (effort === "low") {
+            budgetTokens = 1024;
+          } else if (effort === "medium") {
+            budgetTokens = 2048;
+          } else if (effort === "high") {
+            budgetTokens = 4096;
+          } else if (effort === "max") {
+            budgetTokens = 8192;
+          }
+
+          payload.thinking = {
+            type: "enabled",
+            budget_tokens: budgetTokens,
+          };
+
+          // In Anthropic API: max_tokens must be strictly greater than budget_tokens!
+          payload.max_tokens = Math.max(payload.max_tokens || 4096, budgetTokens + 2048);
+
+          // In Anthropic API: temperature must be 1.0 when thinking is enabled
+          payload.temperature = 1.0;
+        } else {
+          payload.thinking = { type: "disabled" };
+        }
+      }
+
       if (systemMessage) {
         payload.system = systemMessage.content;
       }
@@ -281,12 +310,25 @@ export class LlmDispatcherService {
       };
 
       const url = `${baseUrl}/v1/messages`;
-      const nativeRes = await invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
-        url,
-        headers,
-        payload_json: JSON.stringify(payload),
-        timeoutSeconds: options.timeoutSeconds,
-      });
+      let nativeRes: OpenRouterCompletionResponse;
+      if (options.onEvent) {
+        const channel = new Channel<StreamEvent>();
+        channel.onmessage = options.onEvent;
+        nativeRes = await invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", {
+          url,
+          headers,
+          payload_json: JSON.stringify(payload),
+          timeoutSeconds: options.timeoutSeconds,
+          onEvent: channel,
+        });
+      } else {
+        nativeRes = await invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
+          url,
+          headers,
+          payload_json: JSON.stringify(payload),
+          timeoutSeconds: options.timeoutSeconds,
+        });
+      }
 
       return {
         content: nativeRes.content,
@@ -297,7 +339,7 @@ export class LlmDispatcherService {
       };
     }
 
-    // Protocol: OpenAI-Compatible, Google Gemini, GitHub Copilot, Custom
+    // Protocol: OpenAI-Compatible, Google Gemini, GitHub Copilot, Groq, DeepSeek, Custom
     const url = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -324,12 +366,102 @@ export class LlmDispatcherService {
       payload.max_tokens = options.maxTokens;
     }
 
-    const nativeRes = await invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
-      url,
-      headers,
-      payload_json: JSON.stringify(payload),
-      timeoutSeconds: options.timeoutSeconds,
-    });
+    // Provider-specific reasoning request assembly
+    // 1. OpenAI o1 / o3 reasoning models
+    if (providerId === "openai" && (/^o[13](-|$)/i.test(modelId) || /o1|o3/i.test(modelId))) {
+      const effort = options.reasoningEffort || "medium";
+      const validEffort = effort === "none" ? "low" : (effort === "max" ? "high" : effort);
+      payload.reasoning_effort = validEffort;
+
+      // OpenAI o1 / o3-mini: temperature is NOT supported (passing it throws 400 Bad Request)
+      delete payload.temperature;
+
+      // OpenAI o1 / o3-mini uses max_completion_tokens instead of max_tokens
+      if (payload.max_tokens) {
+        payload.max_completion_tokens = payload.max_tokens;
+        delete payload.max_tokens;
+      }
+    }
+
+    // 2. DeepSeek direct (deepseek-reasoner / R1)
+    else if (providerId === "deepseek" && (/reasoner|r1/i.test(modelId))) {
+      // DeepSeek R1 has native reasoning; avoid overriding low temperature
+      delete payload.temperature;
+    }
+
+    // 3. Google Gemini (via OpenAI-compatible endpoint)
+    else if ((providerId === "google" || providerId === "google-vertex") && (/thinking|gemini-2\.5|gemini-3/i.test(modelId))) {
+      const effort = options.reasoningEffort || "medium";
+      const exclude = Boolean(options.excludeReasoning || effort === "none");
+
+      if (exclude || effort === "none") {
+        payload.reasoning_effort = "none";
+        payload.extra_body = {
+          google: {
+            thinking_config: { thinking_budget: 0 },
+          },
+        };
+      } else {
+        const mappedEffort = effort === "max" ? "high" : effort;
+        payload.reasoning_effort = mappedEffort;
+
+        let budget = -1; // dynamic default
+        if (options.reasoningMaxTokens && options.reasoningMaxTokens > 0) {
+          budget = options.reasoningMaxTokens;
+        } else if (effort === "low") budget = 1024;
+        else if (effort === "medium") budget = 4096;
+        else if (effort === "high" || effort === "max") budget = 8192;
+
+        payload.extra_body = {
+          google: {
+            thinking_config: { thinking_budget: budget },
+          },
+        };
+      }
+    }
+
+    // 4. Groq direct (deepseek-r1, qwen-qwq, etc.)
+    else if (providerId === "groq" && (/r1|qwq/i.test(modelId))) {
+      const effort = options.reasoningEffort || "medium";
+      const exclude = Boolean(options.excludeReasoning || effort === "none");
+
+      if (exclude || effort === "none") {
+        payload.reasoning_format = "hidden";
+      } else {
+        payload.reasoning_format = "parsed";
+        if (effort && effort !== "default") {
+          payload.reasoning_effort = effort === "max" ? "high" : effort;
+        }
+      }
+    }
+
+    // 5. xAI / generic reasoning models (Ollama, NIM, Hugging Face, etc.)
+    else if (/r1|reason|reasoning|o1|o3|thinking|qwq/i.test(modelId)) {
+      const effort = options.reasoningEffort || "medium";
+      if (effort && effort !== "default" && effort !== "none") {
+        payload.reasoning_effort = effort === "max" ? "high" : effort;
+      }
+    }
+
+    let nativeRes: OpenRouterCompletionResponse;
+    if (options.onEvent) {
+      const channel = new Channel<StreamEvent>();
+      channel.onmessage = options.onEvent;
+      nativeRes = await invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", {
+        url,
+        headers,
+        payload_json: JSON.stringify(payload),
+        timeoutSeconds: options.timeoutSeconds,
+        onEvent: channel,
+      });
+    } else {
+      nativeRes = await invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
+        url,
+        headers,
+        payload_json: JSON.stringify(payload),
+        timeoutSeconds: options.timeoutSeconds,
+      });
+    }
 
     return {
       content: nativeRes.content,

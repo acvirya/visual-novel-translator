@@ -136,7 +136,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     maxCharsPerLine: 250,
     reasoningEffort: "default",
     reasoningMaxTokens: 0,
-    excludeReasoning: true,
+    excludeReasoning: false,
     providers: {
       openai: {
         id: "openai",
@@ -474,7 +474,19 @@ class SettingsManager {
   }
 
   public getExcludeReasoning(): boolean {
-    return this.cache.translation.excludeReasoning !== false;
+    return Boolean(this.cache.translation.excludeReasoning);
+  }
+
+  public getReasoningSettings(): {
+    effort: ReasoningEffort;
+    maxTokens: number;
+    exclude: boolean;
+  } {
+    return {
+      effort: this.getReasoningEffort(),
+      maxTokens: this.getReasoningMaxTokens(),
+      exclude: this.getExcludeReasoning(),
+    };
   }
 
   public updateReasoningSettings(patch: {

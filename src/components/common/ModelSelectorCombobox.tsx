@@ -35,54 +35,54 @@ export interface ModelSelectorComboboxProps {
 }
 
 export function splitModelProviderAndName(model: { id: string; name?: string }): { provider: string; modelName: string } {
-  const rawName = (model.name || model.id).trim();
-  const idParts = model.id.split("/");
+  const rawId = model.id || "";
+  let cleanName = (model.name || rawId).trim();
 
-  // 1. If name has "Provider: Model Name" (e.g. "DeepSeek: DeepSeek V3", "Z.ai: GLM 5.2", "Google: Gemini 2.0 Flash")
-  if (rawName.includes(":")) {
-    const colonIdx = rawName.indexOf(":");
-    const prefixProvider = rawName.slice(0, colonIdx).trim();
-    let cleanName = rawName.slice(colonIdx + 1).trim();
-    if (!cleanName) cleanName = rawName;
+  // 1. Free MT
+  if (rawId.startsWith("mt:")) {
     return {
-      provider: prefixProvider,
+      provider: "free_mt",
       modelName: cleanName,
     };
   }
 
-  // 2. If no colon in name, derive clean provider label from model ID prefix
-  let provider = "";
-  if (idParts.length > 1) {
-    const authorSlug = idParts[0].toLowerCase();
-    const KNOWN_PROVIDERS: Record<string, string> = {
-      "openai": "OpenAI",
-      "anthropic": "Anthropic",
-      "google": "Google",
-      "deepseek": "DeepSeek",
-      "meta-llama": "Meta",
-      "qwen": "Qwen",
-      "mistralai": "Mistral",
-      "z-ai": "Z.AI",
-      "minimax": "MiniMax",
-      "cohere": "Cohere",
-      "x-ai": "xAI",
-      "microsoft": "Microsoft",
-      "amazon": "Amazon",
-      "nvidia": "NVIDIA",
-      "ai21": "AI21",
-      "nousresearch": "NousResearch",
-      "gryphe": "Gryphe",
-      "sao10k": "Sao10K",
-      "neversleep": "NeverSleep",
-    };
-    provider = KNOWN_PROVIDERS[authorSlug] || (idParts[0].charAt(0).toUpperCase() + idParts[0].slice(1));
-  } else if (model.id.startsWith("mt:")) {
-    provider = "Free MT";
+  // 2. Parse providerId and modelId using LlmProviderRegistry
+  const { providerId, modelId } = LlmProviderRegistry.parseModelId(rawId);
+
+  // If cleanName had "Provider: Model Name", strip "Provider: " for clean title
+  if (cleanName.includes(":")) {
+    const colonIdx = cleanName.indexOf(":");
+    const stripped = cleanName.slice(colonIdx + 1).trim();
+    if (stripped) {
+      cleanName = stripped;
+    }
   }
 
+  // 3. Determine vendor/family
+  let vendor = "";
+  if (modelId.includes("/")) {
+    vendor = modelId.split("/")[0].toLowerCase();
+  } else {
+    const lowId = modelId.toLowerCase();
+    if (lowId.startsWith("deepseek")) vendor = "deepseek";
+    else if (lowId.startsWith("claude")) vendor = "anthropic";
+    else if (lowId.startsWith("gpt") || lowId.startsWith("o1") || lowId.startsWith("o3") || lowId.startsWith("chatgpt")) vendor = "openai";
+    else if (lowId.startsWith("gemini")) vendor = "google";
+    else if (lowId.startsWith("llama")) vendor = "meta-llama";
+    else if (lowId.startsWith("qwen")) vendor = "qwen";
+    else if (lowId.startsWith("mistral") || lowId.startsWith("codestral") || lowId.startsWith("pixtral")) vendor = "mistral";
+    else if (lowId.startsWith("grok")) vendor = "xai";
+    else if (lowId.startsWith("glm")) vendor = "z-ai";
+    else if (lowId.startsWith("mimo")) vendor = "xiaomi";
+    else vendor = providerId.toLowerCase();
+  }
+
+  const sourcePrefix = providerId.toLowerCase();
+  const provider = `${sourcePrefix}/${vendor}`;
+
   return {
-    provider: provider || "AI Provider",
-    modelName: rawName,
+    provider,
+    modelName: cleanName,
   };
 }
 
@@ -240,7 +240,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
       clearTimeout(submenuLeaveTimeoutRef.current);
       submenuLeaveTimeoutRef.current = null;
     }
-    const capabilities = getModelReasoningCapabilities(m, models);
+    const capabilities = getModelReasoningCapabilities(m, allMergedModels);
     if (capabilities.isSupported) {
       const rect = e.currentTarget.getBoundingClientRect();
       const submenuWidth = 200;
@@ -356,7 +356,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     if (selectedModelId === "mt:deepl-free") return "DeepL Free (Web Endpoint)";
     if (currentModel) {
       const parsed = splitModelProviderAndName(currentModel);
-      return parsed.modelName;
+      return `${parsed.modelName} [${parsed.provider}]`;
     }
     return selectedModelId || "Select a model...";
   };
@@ -615,7 +615,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               {filteredStarred.map((m) => {
                 const isSelected = m.id === selectedModelId;
                 const parsed = splitModelProviderAndName(m);
-                const capabilities = getModelReasoningCapabilities(m, models);
+                const capabilities = getModelReasoningCapabilities(m, allMergedModels);
                 const preferredEffort = getModelPreferredReasoningEffort(m.id);
                 const effortPreviewLabel = preferredEffort && preferredEffort !== "default"
                   ? formatReasoningEffortLabel(preferredEffort)
@@ -648,7 +648,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
                         {parsed.modelName}
                       </span>
-                      <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
+                      <span style={{ fontSize: "10.5px", color: "var(--accent-cyan)", fontWeight: 500, fontFamily: "var(--font-mono)" }}>
                         {parsed.provider}
                       </span>
                     </div>
@@ -827,7 +827,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                       <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
                         {parsed.modelName}
                       </span>
-                      <span style={{ fontSize: "11px", color: "var(--accent-cyan)", fontWeight: 500 }}>
+                      <span style={{ fontSize: "10.5px", color: "var(--accent-cyan)", fontWeight: 500, fontFamily: "var(--font-mono)" }}>
                         {parsed.provider}
                       </span>
                     </div>
