@@ -297,16 +297,32 @@ export function getCustomPreprocessingRules(): PreprocessingStep[] {
     return cachedCustomRules;
   }
   try {
-    const customRulesJson =
-      localStorage.getItem("vn_custom_replacement_rules") ||
-      localStorage.getItem("vn_preprocessing_pipeline");
-    if (customRulesJson) {
-      const parsed = JSON.parse(customRulesJson);
-      if (Array.isArray(parsed)) {
-        cachedCustomRules = parsed.filter(
-          (r) => r && r.isEnabled && (r.type === "custom_regex" || r.isCustom)
-        );
-        return cachedCustomRules;
+    // 1. Check canonical universal settings first
+    if (typeof localStorage !== "undefined") {
+      const rawSettings = localStorage.getItem("vn_translator_universal_settings_v2");
+      if (rawSettings) {
+        const parsed = JSON.parse(rawSettings);
+        const pipeline = parsed?.textPreprocessing?.pipeline;
+        if (Array.isArray(pipeline)) {
+          cachedCustomRules = pipeline.filter(
+            (r: PreprocessingStep) => r && r.isEnabled && (r.type === "custom_regex" || r.isCustom)
+          );
+          return cachedCustomRules;
+        }
+      }
+
+      // 2. Fallback to legacy keys
+      const customRulesJson =
+        localStorage.getItem("vn_custom_replacement_rules") ||
+        localStorage.getItem("vn_preprocessing_pipeline");
+      if (customRulesJson) {
+        const parsed = JSON.parse(customRulesJson);
+        if (Array.isArray(parsed)) {
+          cachedCustomRules = parsed.filter(
+            (r: PreprocessingStep) => r && r.isEnabled && (r.type === "custom_regex" || r.isCustom)
+          );
+          return cachedCustomRules;
+        }
       }
     }
   } catch {

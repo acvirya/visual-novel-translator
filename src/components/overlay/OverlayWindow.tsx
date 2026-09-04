@@ -6,7 +6,7 @@ import {
   OverlayEvent,
 } from "../../utils/overlayChannel";
 import { compileOverlayTemplate, getOverlayAnimationCss } from "../../utils/overlayTemplateEngine";
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "../../services/tauriBridge";
 import { Check, X, Move } from "lucide-react";
 
 const DEFAULT_CONFIG: OverlayConfig = {
@@ -94,13 +94,20 @@ export const OverlayWindow: React.FC = () => {
         });
       } else if (event.type === "SET_EDIT_MODE") {
         setIsEditing(event.isEditing);
+      } else if (event.type === "RESET_SEQUENCE") {
+        highestIdRef.current = 0;
       } else if (event.type === "DIALOGUE_UPDATE") {
         const msgId = typeof event.dialogue.id === "number" ? event.dialogue.id : 0;
-        // Rule 6: Only accept packets with the highest ID (strictly discard older packets to eliminate race conditions)
-        if (msgId > 0 && msgId < highestIdRef.current) {
-          return;
+        // Rule 6: Only accept packets with the highest ID (discard older packets to eliminate race conditions)
+        // If msgId drops significantly, upstream sequence has been reset (e.g. game restarted / re-attached)
+        if (msgId > 0 && highestIdRef.current > 0 && msgId < highestIdRef.current) {
+          if (highestIdRef.current - msgId > 5) {
+            highestIdRef.current = msgId;
+          } else {
+            return;
+          }
         }
-        if (msgId > 0 && msgId > highestIdRef.current) {
+        if (msgId > 0 && msgId >= highestIdRef.current) {
           highestIdRef.current = msgId;
         }
         setDialogue(event.dialogue);
@@ -163,7 +170,7 @@ export const OverlayWindow: React.FC = () => {
 
     // Tell Tauri to shrink window back to box bounds and re-enable click-through settings
     try {
-      await invoke("set_overlay_edit_mode", {
+      await TauriBridge.setOverlayEditMode({
         isEditing: false,
         monitorName: updated.targetMonitor,
         x: updated.x,
@@ -189,7 +196,7 @@ export const OverlayWindow: React.FC = () => {
     overlayChannel.send({ type: "SET_EDIT_MODE", isEditing: false });
 
     try {
-      await invoke("set_overlay_edit_mode", {
+      await TauriBridge.setOverlayEditMode({
         isEditing: false,
         monitorName: config.targetMonitor,
         x: Math.round(config.x),

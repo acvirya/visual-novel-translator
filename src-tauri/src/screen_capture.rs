@@ -110,7 +110,7 @@ pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
 
-        let buffer_size = (width * height * 4) as usize;
+        let buffer_size = (width.max(0) as usize) * (height.max(0) as usize) * 4;
         let mut raw_pixels = vec![0u8; buffer_size];
 
         let get_bits_ok = GetDIBits(
@@ -127,22 +127,14 @@ pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
             return Err("GetDIBits failed to extract pixel buffer".to_string());
         }
 
-        // Convert raw BGRA to RGBA DynamicImage
-        let mut rgba_pixels = vec![0u8; buffer_size];
-        for i in (0..buffer_size).step_by(4) {
-            let b = raw_pixels[i];
-            let g = raw_pixels[i + 1];
-            let r = raw_pixels[i + 2];
-            let a = 255u8;
-
-            rgba_pixels[i] = r;
-            rgba_pixels[i + 1] = g;
-            rgba_pixels[i + 2] = b;
-            rgba_pixels[i + 3] = a;
-        }
+        // Convert raw BGRA to RGBA in-place to eliminate double heap allocation and reduce cache misses
+        raw_pixels.chunks_exact_mut(4).for_each(|chunk| {
+            chunk.swap(0, 2); // Swap B and R: [B, G, R, A] -> [R, G, B, A]
+            chunk[3] = 255;   // Ensure full opacity
+        });
 
         let img_buffer: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_raw(width as u32, height as u32, rgba_pixels)
+            ImageBuffer::from_raw(width as u32, height as u32, raw_pixels)
                 .ok_or_else(|| "Failed to construct ImageBuffer from raw pixels".to_string())?;
 
         let dynamic_image = DynamicImage::ImageRgba8(img_buffer);
@@ -167,6 +159,7 @@ pub fn image_to_base64_data_url(img: &DynamicImage) -> Result<String, String> {
 }
 
 /// Resize DynamicImage according to scale percent (e.g. 50, 75, 100, 150, 200)
+/// Uses FilterType::Triangle (Bilinear) for fast CPU throughput during frequent OCR loops.
 pub fn resize_image(img: &DynamicImage, scale_percent: u32) -> DynamicImage {
     if scale_percent == 100 || scale_percent == 0 {
         return img.clone();
@@ -176,5 +169,34 @@ pub fn resize_image(img: &DynamicImage, scale_percent: u32) -> DynamicImage {
     let new_width = ((img.width() as f32) * scale).round().max(1.0) as u32;
     let new_height = ((img.height() as f32) * scale).round().max(1.0) as u32;
 
-    img.resize_exact(new_width, new_height, FilterType::Lanczos3)
+    img.resize_exact(new_width, new_height, FilterType::Triangle)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_capture_screen_rect_invalid_dimensions() {
+        assert!(capture_screen_rect(0, 0, 0, 100).is_err());
+        assert!(capture_screen_rect(0, 0, 100, -5).is_err());
+        assert!(capture_screen_rect(0, 0, 20_000, 100).is_err());
+    }
+
+    #[test]
+    fn test_resize_image_dimensions() {
+        let dummy = DynamicImage::new_rgba8(100, 50);
+        let same = resize_image(&dummy, 100);
+        assert_eq!(same.width(), 100);
+        assert_eq!(same.height(), 50);
+
+        let doubled = resize_image(&dummy, 200);
+        assert_eq!(doubled.width(), 200);
+        assert_eq!(doubled.height(), 100);
+
+        let halved = resize_image(&dummy, 50);
+        assert_eq!(halved.width(), 50);
+        assert_eq!(halved.height(), 25);
+    }
+}
+

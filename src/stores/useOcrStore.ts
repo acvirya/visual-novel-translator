@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { OcrEngineStatus, OcrRegion, OcrScanResult } from "../types";
+import { settingsManager } from "../services/settingsManager";
 
 export interface OcrState {
   engineStatus: OcrEngineStatus;
@@ -66,39 +67,43 @@ const DEFAULT_REGIONS: OcrRegion[] = [
   },
 ];
 
-export const useOcrStore = create<OcrState>((set) => {
-  // Load persisted values from localStorage
-  const savedRegions = (() => {
-    try {
-      const saved = localStorage.getItem("vn_ocr_regions");
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return DEFAULT_REGIONS;
-  })();
+let isOcrSettingsSubscribed = false;
 
-  const savedScale = Number(localStorage.getItem("vn_ocr_scale_percent") ?? "100");
-  const savedInterval = Number(localStorage.getItem("vn_ocr_scan_interval") ?? "350");
-  const savedCustomPath = localStorage.getItem("vn_ocr_custom_path") || "";
-  const savedTargetMonitor = localStorage.getItem("vn_ocr_target_monitor") || "monitor_1";
-  const savedAutoForward = localStorage.getItem("vn_ocr_auto_forward") !== "false";
-  const savedEnableMotion = localStorage.getItem("vn_ocr_enable_motion") !== "false";
-  const savedSettleTime = Number(localStorage.getItem("vn_ocr_settle_time_ms") ?? "250");
-  const savedMotionSens = Number(localStorage.getItem("vn_ocr_motion_sensitivity") ?? "3");
-  const savedIgnoreBlinking = localStorage.getItem("vn_ocr_ignore_blinking") !== "false";
+export const useOcrStore = create<OcrState>((set) => {
+  const ocrSettings = settingsManager.getOcr();
+
+  if (!isOcrSettingsSubscribed) {
+    isOcrSettingsSubscribed = true;
+    settingsManager.subscribe((newSettings) => {
+      const o = newSettings.ocr;
+      set({
+        regions: o.regions || DEFAULT_REGIONS,
+        scalePercent: o.scalePercent || 100,
+        scanInterval: o.scanInterval || 350,
+        targetMonitor: o.targetMonitor || "monitor_1",
+        customPath: o.customPath || "",
+        autoForwardToOverlay: o.autoForwardToOverlay !== false,
+        enableMotionDetection: o.stability?.enableMotionDetection !== false,
+        settleTimeMs: o.stability?.settleTimeMs ?? 250,
+        motionSensitivity: o.stability?.motionSensitivity ?? 3,
+        ignoreBlinkingPrompt: o.stability?.ignoreBlinkingPrompt !== false,
+      });
+    });
+  }
 
   return {
     engineStatus: { isAvailable: false, dllPath: "", modelPath: "" },
     isScanning: false,
-    regions: savedRegions,
-    scalePercent: isNaN(savedScale) || savedScale < 10 ? 100 : savedScale,
-    scanInterval: isNaN(savedInterval) || savedInterval < 50 ? 350 : savedInterval,
-    targetMonitor: savedTargetMonitor,
-    customPath: savedCustomPath,
-    autoForwardToOverlay: savedAutoForward,
-    enableMotionDetection: savedEnableMotion,
-    settleTimeMs: isNaN(savedSettleTime) || savedSettleTime < 0 ? 250 : savedSettleTime,
-    motionSensitivity: isNaN(savedMotionSens) || savedMotionSens < 1 ? 3 : savedMotionSens,
-    ignoreBlinkingPrompt: savedIgnoreBlinking,
+    regions: ocrSettings.regions || DEFAULT_REGIONS,
+    scalePercent: ocrSettings.scalePercent || 100,
+    scanInterval: ocrSettings.scanInterval || 350,
+    targetMonitor: ocrSettings.targetMonitor || "monitor_1",
+    customPath: ocrSettings.customPath || "",
+    autoForwardToOverlay: ocrSettings.autoForwardToOverlay !== false,
+    enableMotionDetection: ocrSettings.stability?.enableMotionDetection !== false,
+    settleTimeMs: ocrSettings.stability?.settleTimeMs ?? 250,
+    motionSensitivity: ocrSettings.stability?.motionSensitivity ?? 3,
+    ignoreBlinkingPrompt: ocrSettings.stability?.ignoreBlinkingPrompt !== false,
     latestSpeaker: "",
     latestMessage: "",
     latestRawText: "",
@@ -113,44 +118,76 @@ export const useOcrStore = create<OcrState>((set) => {
     setRegions: (regionsOrFn) =>
       set((state) => {
         const nextRegions = typeof regionsOrFn === "function" ? regionsOrFn(state.regions) : regionsOrFn;
-        localStorage.setItem("vn_ocr_regions", JSON.stringify(nextRegions));
+        settingsManager.updateOcr({ regions: nextRegions });
         return { regions: nextRegions };
       }),
     setScalePercent: (scalePercent) => {
-      localStorage.setItem("vn_ocr_scale_percent", String(scalePercent));
+      settingsManager.updateOcr({ scalePercent });
       set({ scalePercent });
     },
     setScanInterval: (scanInterval) => {
-      localStorage.setItem("vn_ocr_scan_interval", String(scanInterval));
+      settingsManager.updateOcr({ scanInterval });
       set({ scanInterval });
     },
     setTargetMonitor: (targetMonitor) => {
-      localStorage.setItem("vn_ocr_target_monitor", targetMonitor);
+      settingsManager.updateOcr({ targetMonitor });
       set({ targetMonitor });
     },
     setCustomPath: (customPath) => {
-      localStorage.setItem("vn_ocr_custom_path", customPath);
+      settingsManager.updateOcr({ customPath });
       set({ customPath });
     },
     setAutoForwardToOverlay: (autoForwardToOverlay) => {
-      localStorage.setItem("vn_ocr_auto_forward", String(autoForwardToOverlay));
+      settingsManager.updateOcr({ autoForwardToOverlay });
       set({ autoForwardToOverlay });
     },
     setEnableMotionDetection: (enableMotionDetection) => {
-      localStorage.setItem("vn_ocr_enable_motion", String(enableMotionDetection));
-      set({ enableMotionDetection });
+      set((state) => {
+        const stability = {
+          enableMotionDetection,
+          settleTimeMs: state.settleTimeMs,
+          motionSensitivity: state.motionSensitivity,
+          ignoreBlinkingPrompt: state.ignoreBlinkingPrompt,
+        };
+        settingsManager.updateOcr({ stability });
+        return { enableMotionDetection };
+      });
     },
     setSettleTimeMs: (settleTimeMs) => {
-      localStorage.setItem("vn_ocr_settle_time_ms", String(settleTimeMs));
-      set({ settleTimeMs });
+      set((state) => {
+        const stability = {
+          enableMotionDetection: state.enableMotionDetection,
+          settleTimeMs,
+          motionSensitivity: state.motionSensitivity,
+          ignoreBlinkingPrompt: state.ignoreBlinkingPrompt,
+        };
+        settingsManager.updateOcr({ stability });
+        return { settleTimeMs };
+      });
     },
     setMotionSensitivity: (motionSensitivity) => {
-      localStorage.setItem("vn_ocr_motion_sensitivity", String(motionSensitivity));
-      set({ motionSensitivity });
+      set((state) => {
+        const stability = {
+          enableMotionDetection: state.enableMotionDetection,
+          settleTimeMs: state.settleTimeMs,
+          motionSensitivity,
+          ignoreBlinkingPrompt: state.ignoreBlinkingPrompt,
+        };
+        settingsManager.updateOcr({ stability });
+        return { motionSensitivity };
+      });
     },
     setIgnoreBlinkingPrompt: (ignoreBlinkingPrompt) => {
-      localStorage.setItem("vn_ocr_ignore_blinking", String(ignoreBlinkingPrompt));
-      set({ ignoreBlinkingPrompt });
+      set((state) => {
+        const stability = {
+          enableMotionDetection: state.enableMotionDetection,
+          settleTimeMs: state.settleTimeMs,
+          motionSensitivity: state.motionSensitivity,
+          ignoreBlinkingPrompt,
+        };
+        settingsManager.updateOcr({ stability });
+        return { ignoreBlinkingPrompt };
+      });
     },
     setScanResult: (result) =>
       set({

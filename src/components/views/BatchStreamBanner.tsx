@@ -87,10 +87,10 @@ export const BatchStreamBanner: React.FC<BatchStreamBannerProps> = React.memo(({
             {activeStream.phase === "validating" && (
               <RefreshCw size={13} style={{ color: "var(--accent-success)", animation: "spin 1.5s linear infinite" }} />
             )}
-            {activeStream.phase === ("completed" as any) && (
+            {activeStream.phase === "completed" && (
               <CheckCircle2 size={13} style={{ color: "var(--accent-success)" }} />
             )}
-            {activeStream.phase === ("cooldown" as any) && (
+            {activeStream.phase === "cooldown" && (
               <Clock size={13} style={{ color: "var(--accent-gold)" }} />
             )}
             <span
@@ -102,7 +102,7 @@ export const BatchStreamBanner: React.FC<BatchStreamBannerProps> = React.memo(({
                     ? "#c084fc"
                     : activeStream.phase === "translating"
                     ? "var(--accent-cyan)"
-                    : activeStream.phase === "validating" || activeStream.phase === ("completed" as any)
+                    : activeStream.phase === "validating" || activeStream.phase === "completed"
                     ? "var(--accent-success)"
                     : "var(--accent-gold)",
               }}
@@ -111,8 +111,8 @@ export const BatchStreamBanner: React.FC<BatchStreamBannerProps> = React.memo(({
               {activeStream.phase === "thinking" && "Model is Thinking & Reasoning..."}
               {activeStream.phase === "translating" && "Streaming Translation Tokens..."}
               {activeStream.phase === "validating" && "Validating Line IDs..."}
-              {activeStream.phase === ("completed" as any) && "Batch Verified & Saved!"}
-              {activeStream.phase === ("cooldown" as any) && "Cooldown Before Next Batch..."}
+              {activeStream.phase === "completed" && "Batch Verified & Saved!"}
+              {activeStream.phase === "cooldown" && "Cooldown Before Next Batch..."}
             </span>
           </div>
 

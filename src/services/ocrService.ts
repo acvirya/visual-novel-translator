@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "./tauriBridge";
 import { OcrEngineStatus, OcrRegion, OcrScanResult, OcrStabilityConfig } from "../types";
 import { useOcrStore } from "../stores/useOcrStore";
 import { executePreprocessingPipeline, cleanSpeakerName } from "../utils/textPreprocessor";
@@ -9,15 +9,15 @@ export class OcrService {
   private static isProcessing = false;
   private static lastSentText = { speaker: "", message: "" };
   private static consecutiveErrorCount = 0;
+  private static scanSessionId = 0;
+  private static isScanningActive = false;
 
   /**
    * Auto-detect OneOCR files from Windows Snipping Tool directory
    */
   public static async detectOneOcrPath(customPath?: string): Promise<OcrEngineStatus> {
     try {
-      const res = await invoke<OcrEngineStatus>("detect_oneocr_path", {
-        customPath: customPath || null,
-      });
+      const res = await TauriBridge.detectOneOcrPath(customPath);
       useOcrStore.getState().setEngineStatus(res);
       return res;
     } catch (err: any) {
@@ -41,24 +41,20 @@ export class OcrService {
     useOcrStore.getState().setIsLoadingSnapshot(true);
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1.0 : 1.0;
     try {
-      const previews = await invoke<{ [regionId: string]: string }>(
-        "capture_regions_preview",
-        {
-          regions: regions.map((r) => ({
-            id: r.id,
-            name: r.name,
-            role: r.role,
-            x: Math.round(r.x),
-            y: Math.round(r.y),
-            width: Math.round(r.width),
-            height: Math.round(r.height),
-            physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
-            physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
-            physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
-            physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
-          })),
-        }
-      );
+      const mappedRegions = regions.map((r) => ({
+        id: r.id,
+        name: r.name,
+        role: r.role,
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+        physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
+        physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
+        physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
+        physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
+      }));
+      const previews = await TauriBridge.captureRegionsPreview(mappedRegions);
       const res = previews || {};
       useOcrStore.getState().setRegionSnapshots(res);
       return res;
@@ -81,24 +77,25 @@ export class OcrService {
   ): Promise<OcrScanResult> {
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1.0 : 1.0;
     try {
-      const result = await invoke<OcrScanResult>("run_oneocr_scan", {
-        regions: regions.map((r) => ({
-          id: r.id,
-          name: r.name,
-          role: r.role,
-          x: Math.round(r.x),
-          y: Math.round(r.y),
-          width: Math.round(r.width),
-          height: Math.round(r.height),
-          physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
-          physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
-          physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
-          physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
-        })),
-        scalePercent: Math.max(10, Math.min(300, scalePercent)),
-        customPath: customPath || null,
-        stabilityConfig: stabilityConfig || null,
-      });
+      const mappedRegions = regions.map((r) => ({
+        id: r.id,
+        name: r.name,
+        role: r.role,
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+        physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
+        physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
+        physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
+        physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
+      }));
+      const result = await TauriBridge.runOneOcrScan(
+        mappedRegions,
+        Math.max(10, Math.min(300, scalePercent)),
+        customPath || null,
+        stabilityConfig || null
+      );
       return result;
     } catch (err: any) {
       throw new Error(typeof err === "string" ? err : err.message || "OCR scan failed");
@@ -109,17 +106,27 @@ export class OcrService {
    * Start autonomous background OCR loop
    */
   public static startAutoScan() {
-    if (this.scanTimer) return;
+    if (this.isScanningActive) return;
+    this.isScanningActive = true;
+    this.scanSessionId++;
+    const currentSession = this.scanSessionId;
+
+    if (this.scanTimer) {
+      clearTimeout(this.scanTimer);
+      this.scanTimer = null;
+    }
     this.consecutiveErrorCount = 0;
     this.lastSentText = { speaker: "", message: "" };
     useOcrStore.getState().setIsScanning(true);
-    this.scheduleNextScan(10);
+    this.scheduleNextScan(10, currentSession);
   }
 
   /**
    * Stop autonomous background OCR loop
    */
   public static stopAutoScan() {
+    this.isScanningActive = false;
+    this.scanSessionId++;
     if (this.scanTimer) {
       clearTimeout(this.scanTimer);
       this.scanTimer = null;
@@ -130,13 +137,24 @@ export class OcrService {
     useOcrStore.getState().setIsScanning(false);
   }
 
-  private static scheduleNextScan(delayMs?: number) {
+  private static scheduleNextScan(delayMs?: number, sessionId?: number) {
+    const currentSession = sessionId ?? this.scanSessionId;
+    if (!this.isScanningActive || currentSession !== this.scanSessionId) return;
     if (!useOcrStore.getState().isScanning) return;
+
     const interval = delayMs !== undefined ? delayMs : useOcrStore.getState().scanInterval;
-    this.scanTimer = setTimeout(() => this.executeScanCycle(), interval);
+    if (this.scanTimer) {
+      clearTimeout(this.scanTimer);
+    }
+    this.scanTimer = setTimeout(() => this.executeScanCycle(currentSession), interval);
   }
 
-  private static async executeScanCycle() {
+  private static async executeScanCycle(sessionId: number) {
+    if (!this.isScanningActive || sessionId !== this.scanSessionId) {
+      this.scanTimer = null;
+      return;
+    }
+
     const store = useOcrStore.getState();
     if (!store.isScanning) {
       this.scanTimer = null;
@@ -144,13 +162,13 @@ export class OcrService {
     }
 
     if (this.isProcessing) {
-      this.scheduleNextScan();
+      this.scheduleNextScan(undefined, sessionId);
       return;
     }
 
     // Skip scanning if no regions are configured (M9)
     if (!store.regions || store.regions.length === 0) {
-      this.scheduleNextScan(1000);
+      this.scheduleNextScan(1000, sessionId);
       return;
     }
 
@@ -171,6 +189,11 @@ export class OcrService {
         store.customPath || undefined,
         stabilityConfig
       );
+
+      // Discard if stopped while awaiting IPC
+      if (!this.isScanningActive || sessionId !== this.scanSessionId) {
+        return;
+      }
 
       this.consecutiveErrorCount = 0;
       store.setScanResult(result);
@@ -193,13 +216,18 @@ export class OcrService {
         });
       }
     } catch (err: any) {
+      if (!this.isScanningActive || sessionId !== this.scanSessionId) {
+        return;
+      }
       this.consecutiveErrorCount++;
       store.setScanError(err?.message || String(err));
       // Exponential backoff up to 5000ms on repeated errors (H4)
       nextDelay = Math.min(5000, store.scanInterval * Math.pow(1.5, Math.min(this.consecutiveErrorCount, 6)));
     } finally {
       this.isProcessing = false;
-      this.scheduleNextScan(nextDelay);
+      if (this.isScanningActive && sessionId === this.scanSessionId) {
+        this.scheduleNextScan(nextDelay, sessionId);
+      }
     }
   }
 
@@ -211,9 +239,7 @@ export class OcrService {
       const channel = new BroadcastChannel("vn_ocr_channel");
       channel.postMessage({ type: "OPEN_SELECTOR" });
       channel.close();
-      await invoke("open_region_selector_overlay", {
-        monitorName: monitorName || null,
-      });
+      await TauriBridge.openRegionSelectorOverlay(monitorName || null);
     } catch (err) {
       console.warn("Failed to open region selector overlay:", err);
     }
@@ -222,9 +248,9 @@ export class OcrService {
   /**
    * Close the region selector window
    */
-  public static async closeRegionSelector(restoreMain: boolean = true): Promise<void> {
+  public static async closeRegionSelector(_restoreMain: boolean = true): Promise<void> {
     try {
-      await invoke("close_region_selector_overlay", { restoreMain });
+      await TauriBridge.closeRegionSelectorOverlay();
     } catch (err) {
       console.warn("Failed to close region selector overlay:", err);
     }

@@ -119,6 +119,9 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
     }
   }, [threads, inspectedThreadId, setInspectedThreadId]);
 
+  const [isInsertingHook, setIsInsertingHook] = useState<boolean>(false);
+  const [hookFeedback, setHookFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
   // Actions
   const handleAttach = async () => {
     if (!selectedPid) return;
@@ -127,11 +130,34 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
 
   const handleDetach = async () => {
     await TextractorService.stopSidecar();
+    setHookFeedback(null);
   };
 
   const handleInsertHookCode = async () => {
     if (!isHooked || !customHookCode.trim()) return;
-    await TextractorService.sendCommand(customHookCode.trim());
+    setIsInsertingHook(true);
+    setHookFeedback(null);
+    try {
+      const res = await TextractorService.insertHook(customHookCode.trim());
+      if (res.success) {
+        setHookFeedback({
+          type: "success",
+          message: `Custom hook injected successfully to PID ${attachedPid || selectedPid}! Advance game dialogue to detect the new text thread.`,
+        });
+      } else {
+        setHookFeedback({
+          type: "error",
+          message: res.error || "Failed to insert hook code",
+        });
+      }
+    } catch (err: any) {
+      setHookFeedback({
+        type: "error",
+        message: err?.toString() || "Unexpected error inserting hook",
+      });
+    } finally {
+      setIsInsertingHook(false);
+    }
   };
 
   const handleSelectArch = (newArch: "x86" | "x64") => {
@@ -142,6 +168,7 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
       setExePath(exePath.replace("\\x86\\", "\\x64\\"));
     }
   };
+
 
   // Convert threads Map to array
   const allThreadsList = Array.from(threads.values()).sort((a, b) => b.totalLines - a.totalLines);
@@ -1047,6 +1074,7 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
                       if (found) {
                         setSelectedPreset(found);
                         if (found.code) setCustomHookCode(found.code);
+                        setHookFeedback(null);
                       }
                     }}
                     style={{ width: "100%", fontSize: "11.5px" }}
@@ -1066,7 +1094,10 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
                   <input
                     type="text"
                     value={customHookCode}
-                    onChange={(e) => setCustomHookCode(e.target.value)}
+                    onChange={(e) => {
+                      setCustomHookCode(e.target.value);
+                      setHookFeedback(null);
+                    }}
                     placeholder="Enter hook code (e.g. /HN-4*0@...)"
                     style={{ width: "100%", fontFamily: "var(--font-mono)", fontSize: "11.5px" }}
                   />
@@ -1075,14 +1106,66 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
                 <button
                   type="button"
                   onClick={handleInsertHookCode}
-                  disabled={!isHooked || !customHookCode.trim()}
+                  disabled={!isHooked || !customHookCode.trim() || isInsertingHook}
                   className="btn-secondary"
                   style={{ padding: "6px 14px", fontSize: "11.5px", whiteSpace: "nowrap" }}
                 >
-                  <Zap size={12} color="var(--accent-gold)" />
-                  <span>Insert Hook</span>
+                  {isInsertingHook ? (
+                    <RefreshCw size={12} className="spin" />
+                  ) : (
+                    <Zap size={12} color="var(--accent-gold)" />
+                  )}
+                  <span>{isInsertingHook ? "Injecting..." : "Insert Hook"}</span>
                 </button>
               </div>
+
+              {hookFeedback && (
+                <div
+                  style={{
+                    marginTop: "10px",
+                    padding: "8px 12px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "12px",
+                    backgroundColor:
+                      hookFeedback.type === "success"
+                        ? "rgba(46, 160, 67, 0.12)"
+                        : "rgba(248, 81, 73, 0.12)",
+                    border: `1px solid ${
+                      hookFeedback.type === "success"
+                        ? "var(--accent-success, #2ea043)"
+                        : "var(--accent-danger, #f85149)"
+                    }`,
+                    color:
+                      hookFeedback.type === "success"
+                        ? "var(--accent-success, #2ea043)"
+                        : "var(--accent-danger, #f85149)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    {hookFeedback.type === "success" ? <Check size={14} /> : <XCircle size={14} />}
+                    <span>{hookFeedback.message}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHookFeedback(null)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "inherit",
+                      cursor: "pointer",
+                      padding: "2px",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Category 3: Performance & Timing */}

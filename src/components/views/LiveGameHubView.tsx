@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { Cpu, Scan, Radio, Monitor } from "lucide-react";
 import { TextractorInputView } from "./TextractorInputView";
 import { OcrInputView } from "./OcrInputView";
@@ -8,16 +8,19 @@ import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
 import { useTextractorStore } from "../../stores/useTextractorStore";
 import { useOcrStore } from "../../stores/useOcrStore";
 import { useTranslationStore } from "../../stores/useTranslationStore";
+import { useUIStore, LivePipelineStage } from "../../stores/useUIStore";
 
-export type LivePipelineStage = "input" | "stream" | "overlay";
+export type { LivePipelineStage };
 
 interface LiveGameHubViewProps {
   onNavigateToSettings?: () => void;
 }
 
 export const LiveGameHubView: React.FC<LiveGameHubViewProps> = ({ onNavigateToSettings }) => {
-  const [activeStage, setActiveStage] = useState<LivePipelineStage>("stream");
-  const [selectedInputMode, setSelectedInputMode] = useState<"textractor" | "ocr">("textractor");
+  const activeStage = useUIStore((state) => state.liveGameStage);
+  const setActiveStage = useUIStore((state) => state.setLiveGameStage);
+  const selectedInputMode = useUIStore((state) => state.liveGameInputMode);
+  const setSelectedInputMode = useUIStore((state) => state.setLiveGameInputMode);
 
   const isHooked = useTextractorStore((state) => state.isHooked);
   const isOcrScanning = useOcrStore((state) => state.isScanning);

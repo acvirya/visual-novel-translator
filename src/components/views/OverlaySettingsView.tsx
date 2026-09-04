@@ -17,7 +17,7 @@ import {
 import { settingsManager } from "../../services/settingsManager";
 import { shortcutService } from "../../services/shortcutService";
 import { formatMonitorLabel } from "../../utils/monitorUtils";
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "../../services/tauriBridge";
 import {
   Monitor,
   Power,
@@ -150,7 +150,7 @@ export const OverlaySettingsView: React.FC = () => {
   useEffect(() => {
     async function loadMonitors() {
       try {
-        const list = await invoke<MonitorInfo[]>("get_monitors");
+        const list = await TauriBridge.getMonitors();
         if (list && list.length > 0) {
           setMonitors(list);
           const primary = list.find((m) => m.is_primary) || list[0];
@@ -275,7 +275,7 @@ export const OverlaySettingsView: React.FC = () => {
 
     try {
       if (nextState) {
-        await invoke("show_overlay", {
+        await TauriBridge.showOverlay({
           monitorName: config.targetMonitor,
           x: Math.round(config.x),
           y: Math.round(config.y),
@@ -284,7 +284,7 @@ export const OverlaySettingsView: React.FC = () => {
           isClickThrough: config.isClickThrough,
         });
       } else {
-        await invoke("hide_overlay");
+        await TauriBridge.hideOverlay();
         setIsEditingPosition(false);
       }
     } catch {
@@ -301,7 +301,7 @@ export const OverlaySettingsView: React.FC = () => {
     overlayChannel.send({ type: "SET_EDIT_MODE", isEditing: nextEditState });
 
     try {
-      await invoke("set_overlay_edit_mode", {
+      await TauriBridge.setOverlayEditMode({
         isEditing: nextEditState,
         monitorName: config.targetMonitor,
         x: Math.round(config.x),
@@ -318,7 +318,7 @@ export const OverlaySettingsView: React.FC = () => {
   // Dynamically update overlay window bounds when inputs change in settings
   useEffect(() => {
     if (config.isEnabled && !isEditingPosition) {
-      invoke("update_overlay_bounds", {
+      TauriBridge.updateOverlayBounds({
         x: Math.round(config.x),
         y: Math.round(config.y),
         width: Math.round(config.width),

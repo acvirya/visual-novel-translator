@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { OcrRegion, OcrRegionRole, MonitorInfo, DetectedTextLine } from "../../types";
 import { OcrService } from "../../services/ocrService";
 import { translationManager } from "../../services/translationManager";
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "../../services/tauriBridge";
 import { listen } from "@tauri-apps/api/event";
 import {
   Check,
@@ -116,7 +116,7 @@ export const RegionSelectionOverlay: React.FC = () => {
 
   const loadWindowMonitor = async (): Promise<MonitorInfo> => {
     try {
-      const mon = await invoke<MonitorInfo>("get_window_monitor", { label: "region-selector" });
+      const mon = await TauriBridge.getWindowMonitor("region-selector");
       if (mon) {
         setCurrentMonitor(mon);
         currentMonitorRef.current = mon;

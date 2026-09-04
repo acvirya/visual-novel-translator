@@ -1,10 +1,10 @@
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
+import { TauriBridge } from "./tauriBridge";
 import { translateWithFreeMt } from "./freeMtService";
 import {
   buildCompleteSystemPrompt,
   ChatMessage,
   calculateUsageCost,
-  OpenRouterCompletionResponse,
   getSelectedModelProviders,
   buildReasoningPayload,
 } from "./openRouterService";
@@ -14,151 +14,38 @@ import { parseScriptContentAsBatchItems } from "../utils/scriptFileParser";
 import { logger } from "./loggerService";
 import { useBatchStore, FileStreamingState } from "../stores/useBatchStore";
 import { settingsManager } from "./settingsManager";
-import { ReasoningEffort } from "../types";
 import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
 import { LlmDispatcherService, StreamEvent } from "./providers/llmDispatcherService";
 
-export interface BatchItem {
-  id: number;
-  originalSpeaker?: string;
-  originalMessage: string;
-  translatedSpeaker?: string;
-  translatedMessage?: string;
-}
+import {
+  BatchItem,
+  BatchFileEntry,
+  WholeTurnBatch,
+  BatchProgressUpdate,
+  BatchSettings,
+  SOURCE_EAST_ASIAN_CHAR_REGEX,
+  isExplicitTagged,
+  isGenuinelyTranslated,
+  isProcessed,
+  cancellableSleep,
+  calculateOutputPath,
+  serializeBatchItemsToJsonl,
+  saveTranslatedFileToDisk,
+  hydrateExistingTranslationFromDisk,
+} from "../utils/batchFileUtils";
 
-export interface BatchFileEntry {
-  id: string;
-  name: string;
-  path: string;
-  sizeBytes: number;
-  rawContent: string;
-  items: BatchItem[];
-  detectedKeys?: string[];
-  status: "ready" | "processing" | "completed" | "error";
-  completedLines: number;
-  explicitLines?: number;
-  totalLines: number;
-  error?: string;
-}
-
-export interface WholeTurnBatch {
-  userContent: string; // Exact JSON string sent in user prompt
-  assistantContent: string; // Exact JSON string returned by LLM
-  lineCount: number;
-}
-
-export interface BatchSettings {
-  linesPerBatch: number; // dialogue lines grouped into each prompt turn
-  maxBatchContext: number; // maximum preceding batches remembered in context (0 = disabled)
-  retainBatchContext: number; // batches retained when context reaches max
-  concurrency: number; // parallel file workers
-  modelId: string;
-  temperature: number;
-  delayMs: number; // delay between batches in ms
-  timeoutMinutes?: number; // Request timeout in minutes (default: 10)
-  maxBackoffSeconds?: number; // Maximum exponential backoff retry wait in seconds (default: 30)
-  autoContinueUntilCompleted?: boolean; // Infinite retry until 100% completed
-  translateExplicitOnly?: boolean; // Only re-translate lines previously flagged as explicit/censored
-  overrideRawWithPreprocessed?: boolean; // Overwrite raw Japanese text with cleaned preprocessed text in output
-  selectedProviders?: string[]; // Custom provider routing list (e.g. ["Z.AI", "Venice"])
-  reasoningEffort?: ReasoningEffort; // Reasoning effort override for batch
-  outputDir: string;
-  fileSuffix: string;
-}
-
-export interface BatchProgressUpdate {
-  activeFileId: string;
-  activeFileName: string;
-  totalFiles: number;
-  completedFiles: number;
-  totalLines: number;
-  completedLines: number;
-  explicitLines?: number;
-  currentBatch: number;
-  totalBatches: number;
-  recentLine?: {
-    id: number;
-    fileName: string;
-    speaker?: string;
-    translatedSpeaker?: string;
-    original: string;
-    translated: string;
-  };
-}
-
-// Comprehensive East Asian character detection covering Hiragana, Katakana, CJK Unified Ideographs, Extensions, Compatibility, and Hangul
-const SOURCE_EAST_ASIAN_CHAR_REGEX =
-  /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/;
-
-export function isExplicitTagged(item: { translatedMessage?: string; translatedSpeaker?: string }): boolean {
-  const msg = (item.translatedMessage || "").trim().toUpperCase();
-  const spk = (item.translatedSpeaker || "").trim().toUpperCase();
-  return msg === "[EXPLICIT CONTENT]" || spk === "[EXPLICIT CONTENT]";
-}
-
-export function isGenuinelyTranslated(item: {
-  originalMessage: string;
-  translatedMessage?: string;
-  originalSpeaker?: string;
-  translatedSpeaker?: string;
-}): boolean {
-  const rawMsg = (item.originalMessage || "").trim();
-
-  // If the original line has empty/blank dialogue, automatically mark as Done!
-  if (!rawMsg) {
-    return true;
-  }
-
-  if (!item.translatedMessage || !item.translatedMessage.trim()) {
-    return false;
-  }
-
-  const transMsg = item.translatedMessage.trim();
-
-  // If the message is literal "null" or "undefined"
-  if (transMsg === "null" || transMsg === "undefined") {
-    return false;
-  }
-
-  // Explicit / Censored tagged content is NOT genuinely translated
-  if (isExplicitTagged(item)) {
-    return false;
-  }
-
-  // If the translated message is identical to the raw original message:
-  // - If the original contains East Asian / source characters, then identical text means un-translated fallback copas (false).
-  // - If the original has NO source characters (e.g. "...", "……", "!? ", "OK", "Yes"), then identical text is VALID (true)!
-  if (transMsg === rawMsg && SOURCE_EAST_ASIAN_CHAR_REGEX.test(rawMsg)) {
-    return false;
-  }
-
-  return true;
-}
-
-export function isProcessed(item: {
-  originalMessage: string;
-  translatedMessage?: string;
-  originalSpeaker?: string;
-  translatedSpeaker?: string;
-}): boolean {
-  return isGenuinelyTranslated(item) || isExplicitTagged(item);
-}
-
-export function cancellableSleep(ms: number, signal?: AbortSignal | null): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve();
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const onAbort = () => {
-      if (timer) clearTimeout(timer);
-      resolve();
-    };
-    timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
+export type { BatchItem, BatchFileEntry, WholeTurnBatch, BatchProgressUpdate, BatchSettings };
+export {
+  SOURCE_EAST_ASIAN_CHAR_REGEX,
+  isExplicitTagged,
+  isGenuinelyTranslated,
+  isProcessed,
+  cancellableSleep,
+  calculateOutputPath,
+  serializeBatchItemsToJsonl,
+  saveTranslatedFileToDisk,
+  hydrateExistingTranslationFromDisk,
+};
 
 class BatchTranslateService {
   private isRunning = false;
@@ -185,19 +72,7 @@ class BatchTranslateService {
    * Computes the target absolute output path for a given source script file (always saved as .jsonl)
    */
   public calculateOutputPath(sourcePath: string, outputDir?: string, fileSuffix = "_translated"): string {
-    const cleanSource = sourcePath.replace(/\\/g, "/");
-    const fileName = cleanSource.split("/").pop() || "script.jsonl";
-    const lastDot = fileName.lastIndexOf(".");
-    const baseName = lastDot !== -1 ? fileName.substring(0, lastDot) : fileName;
-    const outFileName = `${baseName}${fileSuffix || "_translated"}.jsonl`;
-
-    if (outputDir && outputDir.trim()) {
-      const dir = outputDir.trim().replace(/\\/g, "/").replace(/\/$/, "");
-      return `${dir}/${outFileName}`;
-    } else {
-      const parentDir = cleanSource.substring(0, cleanSource.lastIndexOf("/"));
-      return `${parentDir}/${outFileName}`;
-    }
+    return calculateOutputPath(sourcePath, outputDir, fileSuffix);
   }
 
   /**
@@ -209,71 +84,7 @@ class BatchTranslateService {
     outputDir?: string,
     fileSuffix = "_translated"
   ): Promise<BatchFileEntry> {
-    const targetPath = this.calculateOutputPath(file.path, outputDir, fileSuffix);
-
-    try {
-      const existingContent = await invoke<string | null>("read_script_file_by_path", { path: targetPath });
-      if (existingContent && existingContent.trim()) {
-        const existingItems = this.parseScriptContent(existingContent);
-        if (Array.isArray(existingItems) && existingItems.length > 0) {
-          let translatedCount = 0;
-          let explicitCount = 0;
-          const existingMap = new Map<number, BatchItem>(existingItems.map((e) => [e.id, e]));
-          const hydratedItems = file.items.map((item, idx) => {
-            const found = existingMap.get(item.id) || existingItems[idx];
-            if (found && isGenuinelyTranslated(found)) {
-              translatedCount++;
-              return {
-                ...item,
-                translatedSpeaker: found.translatedSpeaker || undefined,
-                translatedMessage: found.translatedMessage,
-              };
-            } else if (found && isExplicitTagged(found)) {
-              explicitCount++;
-              return {
-                ...item,
-                translatedSpeaker: found.translatedSpeaker || undefined,
-                translatedMessage: found.translatedMessage,
-              };
-            } else {
-              return {
-                ...item,
-                translatedSpeaker: undefined,
-                translatedMessage: undefined,
-              };
-            }
-          });
-
-          file.items = hydratedItems;
-          file.completedLines = translatedCount;
-          file.explicitLines = explicitCount;
-          if (translatedCount + explicitCount >= file.totalLines && file.totalLines > 0) {
-            file.status = "completed";
-          } else {
-            file.status = "ready";
-          }
-
-          logger.info(
-            "BatchTranslate",
-            `[Hydrate] Verified existing output file (.jsonl) on disk for "${file.name}" (${translatedCount}/${file.totalLines} lines genuinely translated, ${explicitCount} explicit).`
-          );
-          return { ...file, items: [...hydratedItems] };
-        }
-      }
-    } catch (err) {
-      logger.warn("BatchTranslate", `Failed to check existing output file for ${file.name}: ${err}`);
-    }
-
-    // If no output file was found on disk, reset untranslated items
-    file.items.forEach((item) => {
-      if (!isProcessed(item)) {
-        item.translatedSpeaker = undefined;
-        item.translatedMessage = undefined;
-      }
-    });
-    file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
-    file.explicitLines = file.items.filter((it) => isExplicitTagged(it)).length;
-    return { ...file };
+    return hydrateExistingTranslationFromDisk(file, outputDir, fileSuffix);
   }
 
   /**
@@ -361,6 +172,7 @@ class BatchTranslateService {
       let loopPass = 0;
       while (!this.abortController?.signal.aborted) {
         loopPass++;
+        const linesBeforePass = files.reduce((acc, f) => acc + f.completedLines, 0);
 
         const uncompletedFiles = files.filter((f) => {
           if (settings.translateExplicitOnly) {
@@ -459,10 +271,20 @@ class BatchTranslateService {
           break;
         }
 
+        const linesAfterPass = files.reduce((acc, f) => acc + f.completedLines, 0);
+        const MAX_AUTO_CONTINUE_PASSES = 5;
+        if (loopPass >= MAX_AUTO_CONTINUE_PASSES || linesAfterPass === linesBeforePass) {
+          logger.warn(
+            "BatchTranslate",
+            `[Auto-Continue] Halting auto-continue loop: ${loopPass >= MAX_AUTO_CONTINUE_PASSES ? `Reached maximum of ${MAX_AUTO_CONTINUE_PASSES} passes` : "No new lines completed in this pass (persistent error detected)"}. Incomplete files: ${stillRemaining.length}.`
+          );
+          break;
+        }
+
         // If there are still remaining files and autoContinue is enabled, pause for cooldown then retry!
         logger.warn(
           "BatchTranslate",
-          `[Auto-Continue] ${stillRemaining.length} file(s) incomplete after pass ${loopPass}. Cooling down 5s before auto-continuing...`
+          `[Auto-Continue] ${stillRemaining.length} file(s) incomplete after pass ${loopPass} (Progress: +${linesAfterPass - linesBeforePass} lines). Cooling down 5s before pass ${loopPass + 1}/${MAX_AUTO_CONTINUE_PASSES}...`
         );
 
         await cancellableSleep(5000, this.abortController?.signal);
@@ -495,7 +317,7 @@ class BatchTranslateService {
     file.status = "processing";
     file.error = undefined;
     file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
-    onFileUpdated(file);
+    onFileUpdated({ ...file, items: [...file.items] });
 
     const isLlm = !settings.modelId.startsWith("mt:");
     const batchSize = Math.max(1, settings.linesPerBatch);
@@ -512,7 +334,7 @@ class BatchTranslateService {
           `[File ${fileIndex + 1}/${totalFilesCount}] "${file.name}" has 0 explicit-flagged lines. Skipping.`
         );
         file.status = "completed";
-        onFileUpdated(file);
+        onFileUpdated({ ...file, items: [...file.items] });
         return;
       }
 
@@ -586,11 +408,11 @@ class BatchTranslateService {
         let batchSuccess = false;
         let retryAttempts = 0;
         const isInfiniteRetry = settings.autoContinueUntilCompleted !== false;
-        const maxRetries = isInfiniteRetry ? Infinity : 5;
+        const maxRetries = isInfiniteRetry ? 20 : 5;
 
         while (!batchSuccess) {
           if (this.abortController?.signal.aborted) break;
-          if (!isInfiniteRetry && retryAttempts >= maxRetries) break;
+          if (retryAttempts >= maxRetries) break;
 
           try {
             if (isLlm) {
@@ -732,7 +554,7 @@ class BatchTranslateService {
 
         if (settings.delayMs > 0 && isLlm) {
           useBatchStore.getState().setFileStreamingState(file.id, (prev) =>
-            prev ? { ...prev, phase: "cooldown" as any } : null
+            prev ? { ...prev, phase: "cooldown" } : null
           );
           await cancellableSleep(settings.delayMs, this.abortController?.signal);
         }
@@ -749,7 +571,7 @@ class BatchTranslateService {
       }
       await this.saveTranslatedFile(file, settings);
       useBatchStore.getState().setFileStreamingState(file.id, null);
-      onFileUpdated({ ...file });
+      onFileUpdated({ ...file, items: [...file.items] });
       return;
     }
 
@@ -768,7 +590,7 @@ class BatchTranslateService {
       file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
       file.explicitLines = file.items.filter((it) => isExplicitTagged(it)).length;
       file.status = "completed";
-      onFileUpdated(file);
+      onFileUpdated({ ...file, items: [...file.items] });
       return;
     }
 
@@ -828,11 +650,11 @@ class BatchTranslateService {
       let batchSuccess = false;
       let retryAttempts = 0;
       const isInfiniteRetry = settings.autoContinueUntilCompleted !== false;
-      const maxRetries = isInfiniteRetry ? Infinity : 5;
+      const maxRetries = isInfiniteRetry ? 20 : 5;
 
       while (!batchSuccess) {
         if (this.abortController?.signal.aborted) break;
-        if (!isInfiniteRetry && retryAttempts >= maxRetries) break;
+        if (retryAttempts >= maxRetries) break;
 
         try {
           if (isLlm) {
@@ -997,7 +819,7 @@ class BatchTranslateService {
 
       if (settings.delayMs > 0 && isLlm) {
         useBatchStore.getState().setFileStreamingState(file.id, (prev) =>
-          prev ? { ...prev, phase: "cooldown" as any } : null
+          prev ? { ...prev, phase: "cooldown" } : null
         );
         await cancellableSleep(settings.delayMs, this.abortController?.signal);
       }
@@ -1052,7 +874,7 @@ class BatchTranslateService {
 
     for (const target of logTargets) {
       try {
-        await invoke("append_debug_log", { fileName: target, content: logEntry });
+        await TauriBridge.appendDebugLog(target, logEntry);
       } catch (e) {
         console.warn(`Failed to write debug log to ${target}:`, e);
       }
@@ -1070,7 +892,11 @@ class BatchTranslateService {
   ): Promise<WholeTurnBatch> {
     const { providerId, modelId: targetModelId } = LlmProviderRegistry.parseModelId(settings.modelId);
     const providerCfg = LlmProviderRegistry.getProviderConfig(providerId);
-    const resolvedKey = (apiKey || providerCfg.apiKey || "").trim();
+    const resolvedKey = (
+      providerId === "openrouter"
+        ? (apiKey || providerCfg.apiKey)
+        : (providerCfg.apiKey || apiKey)
+    || "").trim();
 
     if (!resolvedKey) {
       const providerDef = LlmProviderRegistry.getProvider(providerId);
@@ -1283,7 +1109,7 @@ class BatchTranslateService {
         const channel = new Channel<StreamEvent>();
         channel.onmessage = handleStreamEvent;
 
-        const invokePromise = invoke<OpenRouterCompletionResponse>("openrouter_stream_chat_completion", {
+        const invokePromise = TauriBridge.openrouterStreamChatCompletion({
           apiKey: resolvedKey,
           modelId: targetModelId,
           messagesJson: JSON.stringify(messages),
@@ -1457,7 +1283,7 @@ class BatchTranslateService {
 
     if (fileContext) {
       useBatchStore.getState().setFileStreamingState(fileContext.fileId, (prev) =>
-        prev ? { ...prev, phase: "completed" as any } : null
+        prev ? { ...prev, phase: "completed" } : null
       );
     }
 
@@ -1505,38 +1331,16 @@ class BatchTranslateService {
   }
 
   public async saveTranslatedFile(file: BatchFileEntry, settings: BatchSettings): Promise<void> {
-    try {
-      const outputLines = file.items.map((item) => {
-        const finalRawSpeaker = item.originalSpeaker
-          ? cleanSpeakerName(executePreprocessingPipeline(item.originalSpeaker, "batch"))
-          : item.originalSpeaker;
-
-        const finalRawMessage = executePreprocessingPipeline(item.originalMessage, "batch");
-
-        return JSON.stringify({
-          id: item.id,
-          speaker: finalRawSpeaker || null,
-          message: finalRawMessage,
-          translated_speaker: item.translatedSpeaker !== undefined ? item.translatedSpeaker : null,
-          translated_message: item.translatedMessage !== undefined ? item.translatedMessage : null,
-        });
-      });
-
-      const outputContent = outputLines.join("\n");
-      const targetPath = this.calculateOutputPath(file.path, settings.outputDir, settings.fileSuffix);
-
-      await invoke("save_script_file", { path: targetPath, content: outputContent });
-      logger.info("BatchTranslate", `Saved to disk (.jsonl): ${targetPath} (${file.completedLines}/${file.totalLines} lines)`);
-    } catch (err: any) {
-      logger.error("BatchTranslate", `Failed to save translated file ${file.name}: ${err?.message || err}`);
-    }
+    return saveTranslatedFileToDisk(file, settings);
   }
 
   public cancel() {
     if (this.abortController) {
       this.abortController.abort();
     }
-    invoke("cancel_all_llm_streams").catch(() => {});
+    TauriBridge.cancelAllLlmStreams().catch((err) => {
+      logger.warn("BatchTranslate", `Failed to cancel LLM streams: ${err}`);
+    });
     useBatchStore.getState().clearAllStreamingStates();
     logger.info("BatchTranslate", "Batch translation cancellation requested.");
   }

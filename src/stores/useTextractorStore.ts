@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { TextractorMessage, TextractorProcessInfo, TextractorThread } from "../types";
 import { DEFAULT_TEXTRACTOR_PATH } from "../services/textractorService";
+import { settingsManager } from "../services/settingsManager";
 
 export interface TextractorState {
   exePath: string;
@@ -64,21 +65,26 @@ export interface TextractorState {
   resetTextractor: () => void;
 }
 
+let isTextractorSettingsSubscribed = false;
+
 export const useTextractorStore = create<TextractorState>((set) => {
-  const savedExePath = localStorage.getItem("vn_textractor_path") || DEFAULT_TEXTRACTOR_PATH;
-  const savedArch = (localStorage.getItem("vn_textractor_arch") as "x86" | "x64") || "x86";
-  const savedDebounce = Number(localStorage.getItem("vn_textractor_debounce_ms") ?? "250");
-  const savedThreadSync = Number(localStorage.getItem("vn_textractor_thread_sync_ms") ?? "150");
-  const savedMaxLogs = Number(localStorage.getItem("vn_textractor_max_log_lines") ?? "100");
-  const savedIgnoreDup = localStorage.getItem("vn_ignore_duplicate_lines") !== "false";
-  const savedAutoForward = localStorage.getItem("vn_textractor_auto_forward") !== "false";
-  const savedCharDedup = Number(localStorage.getItem("vn_textractor_char_dedup_count") ?? "0");
-  const savedLoopDedup = localStorage.getItem("vn_textractor_loop_dedup") !== "false";
-  const savedStutter = localStorage.getItem("vn_textractor_stutter_reduction") !== "false";
+  const textractorSettings = settingsManager.getTextractor();
+
+  if (!isTextractorSettingsSubscribed) {
+    isTextractorSettingsSubscribed = true;
+    settingsManager.subscribe((newSettings) => {
+      const ts = newSettings.textractor;
+      set({
+        exePath: ts.executablePath || DEFAULT_TEXTRACTOR_PATH,
+        threadSyncWaitMs: ts.flushIntervalMs || 150,
+        maxLogLines: ts.threadBufferSize || 100,
+      });
+    });
+  }
 
   return {
-    exePath: savedExePath,
-    arch: savedArch,
+    exePath: textractorSettings.executablePath || DEFAULT_TEXTRACTOR_PATH,
+    arch: "x86",
     processes: [],
     isLoadingProcesses: false,
     selectedPid: null,
@@ -86,31 +92,30 @@ export const useTextractorStore = create<TextractorState>((set) => {
     isAttaching: false,
     attachedPid: null,
     hookError: null,
-    debounceMs: isNaN(savedDebounce) || savedDebounce < 0 ? 250 : savedDebounce,
-    threadSyncWaitMs: isNaN(savedThreadSync) || savedThreadSync < 50 ? 150 : savedThreadSync,
+    debounceMs: 250,
+    threadSyncWaitMs: textractorSettings.flushIntervalMs || 150,
     threads: new Map(),
     combinedThreadId: null,
     messageThreadId: null,
     speakerThreadId: null,
     capturedThreads: [],
     inspectedThreadId: null,
-    maxLogLines: isNaN(savedMaxLogs) || savedMaxLogs < 1 ? 100 : savedMaxLogs,
+    maxLogLines: textractorSettings.threadBufferSize || 100,
     threadLogs: new Map(),
-    ignoreDuplicateLines: savedIgnoreDup,
-    charDeduplicationCount: isNaN(savedCharDedup) || savedCharDedup < 0 ? 0 : savedCharDedup,
-    loopDeduplication: savedLoopDedup,
-    stutterReduction: savedStutter,
+    ignoreDuplicateLines: true,
+    charDeduplicationCount: 0,
+    loopDeduplication: true,
+    stutterReduction: true,
+    autoForwardToOverlay: true,
     latestSpeaker: "",
     latestMessage: "",
     latestRawMessage: "",
-    autoForwardToOverlay: savedAutoForward,
 
     setExePath: (exePath) => {
-      localStorage.setItem("vn_textractor_path", exePath);
+      settingsManager.updateTextractor({ executablePath: exePath });
       set({ exePath });
     },
     setArch: (arch) => {
-      localStorage.setItem("vn_textractor_arch", arch);
       set({ arch });
     },
     setProcesses: (processes) => set({ processes }),
@@ -121,12 +126,11 @@ export const useTextractorStore = create<TextractorState>((set) => {
     setAttachedPid: (attachedPid) => set({ attachedPid }),
     setHookError: (hookError) => set({ hookError }),
     setDebounceMs: (debounceMs) => {
-      localStorage.setItem("vn_textractor_debounce_ms", String(debounceMs));
       set({ debounceMs });
     },
     setThreadSyncWaitMs: (threadSyncWaitMs) => {
       const clamped = Math.max(50, threadSyncWaitMs);
-      localStorage.setItem("vn_textractor_thread_sync_ms", String(clamped));
+      settingsManager.updateTextractor({ flushIntervalMs: clamped });
       set({ threadSyncWaitMs: clamped });
     },
     setThreads: (threadsOrFn) =>

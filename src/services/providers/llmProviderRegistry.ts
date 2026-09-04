@@ -160,7 +160,7 @@ export const SUPPORTED_PROVIDERS: LlmProviderDefinition[] = [
   },
 ];
 
-const STORAGE_PREFIX = "vn_provider_";
+import { settingsManager } from "../settingsManager";
 
 export class LlmProviderRegistry {
   public static getProviders(): LlmProviderDefinition[] {
@@ -172,40 +172,11 @@ export class LlmProviderRegistry {
   }
 
   public static getProviderConfig(providerId: string): StoredProviderConfig {
-    const key = localStorage.getItem(`${STORAGE_PREFIX}${providerId}_key`) || "";
-    const baseUrl = localStorage.getItem(`${STORAGE_PREFIX}${providerId}_base_url`) || undefined;
-    const isVerified = localStorage.getItem(`${STORAGE_PREFIX}${providerId}_verified`) === "true";
-    const customRaw = localStorage.getItem(`${STORAGE_PREFIX}${providerId}_custom_models`);
-    let customModels: CuratedModelInfo[] = [];
-    if (customRaw) {
-      try {
-        customModels = JSON.parse(customRaw);
-      } catch {}
-    }
-
-    return {
-      id: providerId,
-      apiKey: key,
-      baseUrl,
-      isVerified,
-      customModels,
-    };
+    return settingsManager.getLlmProvider(providerId);
   }
 
   public static saveProviderConfig(config: StoredProviderConfig): void {
-    localStorage.setItem(`${STORAGE_PREFIX}${config.id}_key`, config.apiKey);
-    if (config.baseUrl) {
-      localStorage.setItem(`${STORAGE_PREFIX}${config.id}_base_url`, config.baseUrl);
-    } else {
-      localStorage.removeItem(`${STORAGE_PREFIX}${config.id}_base_url`);
-    }
-    localStorage.setItem(`${STORAGE_PREFIX}${config.id}_verified`, String(!!config.isVerified));
-
-    if (config.customModels && config.customModels.length > 0) {
-      localStorage.setItem(`${STORAGE_PREFIX}${config.id}_custom_models`, JSON.stringify(config.customModels));
-    } else if (config.customModels && config.customModels.length === 0) {
-      localStorage.removeItem(`${STORAGE_PREFIX}${config.id}_custom_models`);
-    }
+    settingsManager.saveLlmProvider(config);
   }
 
   /**

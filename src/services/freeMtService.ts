@@ -5,8 +5,9 @@
  * Uses native Rust command via Tauri to bypass CORS and webview network limits.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "./tauriBridge";
 import { extractSpeakerAndDialogue } from "../utils/textPreprocessor";
+import { settingsManager } from "./settingsManager";
 
 export interface FreeMtTranslateOptions {
   speaker?: string;
@@ -148,14 +149,14 @@ export async function translateWithNativeRust(
   provider = "google"
 ): Promise<{ text: string; error?: string }> {
   try {
-    const apiKey = localStorage.getItem("vn_deepl_api_key") || undefined;
-    const result = await invoke<string>("translate_free_mt", {
+    const apiKey = provider === "deepl" ? settingsManager.getDeepLApiKey() : undefined;
+    const result = await TauriBridge.translateFreeMt(
       text,
       sourceLang,
       targetLang,
       provider,
-      apiKey,
-    });
+      apiKey
+    );
     return { text: result };
   } catch (err: any) {
     console.warn("Native MT command failed, trying fallback:", err);

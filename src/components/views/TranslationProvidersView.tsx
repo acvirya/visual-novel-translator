@@ -106,7 +106,7 @@ export const TranslationProvidersView: React.FC = () => {
   };
 
   // Hyperparameters
-  const [temperature, setTemperature] = useState<number>(0.3);
+  const [temperature, setTemperature] = useState<number>(() => settingsManager.getTranslation().temperature ?? 0.3);
 
   // Reasoning / Thinking Tokens State
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(() => settingsManager.getReasoningEffort());
@@ -189,6 +189,17 @@ export const TranslationProvidersView: React.FC = () => {
       exclude: excludeReasoning,
     });
   }, [reasoningEffort, reasoningMaxTokens, excludeReasoning]);
+
+  useEffect(() => {
+    settingsManager.updateTranslation({ temperature });
+  }, [temperature]);
+
+  const selectedProviderFromStore = useTranslationStore((s) => s.selectedProvider);
+  useEffect(() => {
+    if (selectedProviderFromStore && selectedProviderFromStore !== selectedModelId) {
+      setSelectedModelId(selectedProviderFromStore);
+    }
+  }, [selectedProviderFromStore]);
 
   // Test Provider Connection
   const handleTestProvider = async (providerId: string) => {

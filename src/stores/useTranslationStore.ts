@@ -1,15 +1,8 @@
 import { create } from "zustand";
-import { TranslationLogItem, ReasoningEffort } from "../types";
-import { LlmContextSettings } from "../services/translationManager";
+import { TranslationLogItem, ReasoningEffort, SessionUsageStats } from "../types";
+import { translationManager, LlmContextSettings } from "../services/translationManager";
 import { scriptManagerService } from "../services/scriptManagerService";
 import { settingsManager } from "../services/settingsManager";
-
-export interface SessionUsageStats {
-  promptTokens: number;
-  completionTokens: number;
-  cachedTokens: number;
-  totalCost: number;
-}
 
 export interface TranslationState {
   liveLogs: TranslationLogItem[];
@@ -37,27 +30,81 @@ export interface TranslationState {
   resetSessionStats: () => void;
 }
 
+let isTranslationManagerSubscribed = false;
+let isSettingsManagerSubscribed = false;
+
 export const useTranslationStore = create<TranslationState>((set) => {
-  const savedProvider = localStorage.getItem("vn_selected_model") || "mt:google-translate";
-  const savedEffort = (localStorage.getItem("vn_live_reasoning_effort") as any) || "default";
-  const savedUseScriptOnly = localStorage.getItem("vn_use_script_only") === "true";
+  const translationSettings = settingsManager.getTranslation();
   const savedThreshold = scriptManagerService.getMatchThreshold();
-  const savedMax = parseInt(localStorage.getItem("vn_llm_max_context_lines") || "10", 10);
-  const savedRetain = parseInt(localStorage.getItem("vn_llm_retain_context_lines") || "3", 10);
-  const savedMaxChars = parseInt(localStorage.getItem("vn_max_chars_per_line") || "250", 10);
 
   const initialContext: LlmContextSettings = {
-    maxContextLines: isNaN(savedMax) || savedMax < 1 ? 10 : savedMax,
-    retainContextLines: isNaN(savedRetain) || savedRetain < 1 ? 3 : savedRetain,
-    maxCharsPerLine: isNaN(savedMaxChars) ? 250 : savedMaxChars,
+    maxContextLines: translationSettings.maxContextLines || 10,
+    retainContextLines: translationSettings.retainContextLines || 3,
+    maxCharsPerLine: translationSettings.maxCharsPerLine || 250,
   };
+
+  if (!isSettingsManagerSubscribed) {
+    isSettingsManagerSubscribed = true;
+    settingsManager.subscribe((newSettings) => {
+      const liveModel = newSettings.translation.liveModel || newSettings.translation.activeProviderId || "mt:google-translate";
+      const effort = newSettings.translation.reasoningEffort || "default";
+      const scriptOnly = newSettings.translation.useScriptOnly ?? false;
+      const ctx: LlmContextSettings = {
+        maxContextLines: newSettings.translation.maxContextLines || 10,
+        retainContextLines: newSettings.translation.retainContextLines || 3,
+        maxCharsPerLine: newSettings.translation.maxCharsPerLine || 250,
+      };
+
+      set({
+        selectedProvider: liveModel,
+        reasoningEffort: effort,
+        useScriptOnly: scriptOnly,
+        contextSettings: ctx,
+      });
+    });
+  }
+
+  if (!isTranslationManagerSubscribed) {
+    isTranslationManagerSubscribed = true;
+    translationManager.onEvent((event) => {
+      switch (event.type) {
+        case "log":
+          set((state) => ({
+            liveLogs: [event.item, ...state.liveLogs].slice(0, 250),
+          }));
+          break;
+        case "sessionUsage":
+          set((state) => ({
+            sessionStats: {
+              promptTokens: state.sessionStats.promptTokens + event.promptTokens,
+              completionTokens: state.sessionStats.completionTokens + event.completionTokens,
+              cachedTokens: state.sessionStats.cachedTokens + event.cachedTokens,
+              totalCost: state.sessionStats.totalCost + event.cost,
+            },
+          }));
+          break;
+        case "paused":
+          set({ isPaused: event.isPaused });
+          break;
+        case "contextLength":
+          set({ contextHistoryLength: event.length });
+          break;
+        case "contextSettings":
+          set({ contextSettings: event.settings });
+          break;
+        case "useScriptOnly":
+          set({ useScriptOnly: event.val });
+          break;
+      }
+    });
+  }
 
   return {
     liveLogs: [],
     isPaused: false,
-    selectedProvider: savedProvider,
-    reasoningEffort: savedEffort,
-    useScriptOnly: savedUseScriptOnly,
+    selectedProvider: translationSettings.liveModel || translationSettings.activeProviderId || "mt:google-translate",
+    reasoningEffort: translationSettings.reasoningEffort || "default",
+    useScriptOnly: translationSettings.useScriptOnly || false,
     scriptThreshold: savedThreshold,
     contextSettings: initialContext,
     contextHistoryLength: 0,
@@ -74,18 +121,20 @@ export const useTranslationStore = create<TranslationState>((set) => {
       })),
     setLiveLogs: (liveLogs) => set({ liveLogs }),
     clearLiveLogs: () => set({ liveLogs: [] }),
-    setIsPaused: (isPaused) => set({ isPaused }),
+    setIsPaused: (isPaused) => {
+      translationManager.setPaused(isPaused);
+      set({ isPaused });
+    },
     setSelectedProvider: (selectedProvider) => {
-      localStorage.setItem("vn_selected_model", selectedProvider);
       settingsManager.updateTranslation({ liveModel: selectedProvider, activeProviderId: selectedProvider });
       set({ selectedProvider });
     },
     setReasoningEffort: (reasoningEffort) => {
-      localStorage.setItem("vn_live_reasoning_effort", reasoningEffort);
+      settingsManager.updateTranslation({ reasoningEffort });
       set({ reasoningEffort });
     },
     setUseScriptOnly: (useScriptOnly) => {
-      localStorage.setItem("vn_use_script_only", String(useScriptOnly));
+      translationManager.setUseScriptOnly(useScriptOnly);
       set({ useScriptOnly });
     },
     setScriptThreshold: (scriptThreshold) => {
@@ -93,9 +142,7 @@ export const useTranslationStore = create<TranslationState>((set) => {
       set({ scriptThreshold });
     },
     setContextSettings: (contextSettings) => {
-      localStorage.setItem("vn_llm_max_context_lines", String(contextSettings.maxContextLines));
-      localStorage.setItem("vn_llm_retain_context_lines", String(contextSettings.retainContextLines));
-      localStorage.setItem("vn_max_chars_per_line", String(contextSettings.maxCharsPerLine));
+      translationManager.setContextSettings(contextSettings);
       set({ contextSettings });
     },
     setContextHistoryLength: (contextHistoryLength) => set({ contextHistoryLength }),

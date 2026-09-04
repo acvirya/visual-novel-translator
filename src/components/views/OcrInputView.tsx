@@ -21,7 +21,7 @@ import {
 import { OcrRegion, OcrRegionRole, MonitorInfo } from "../../types";
 import { OcrService } from "../../services/ocrService";
 import { formatMonitorLabel } from "../../utils/monitorUtils";
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "../../services/tauriBridge";
 import { useOcrStore } from "../../stores/useOcrStore";
 
 interface OcrInputViewProps {
@@ -89,7 +89,7 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
 
   // Load monitors from Tauri backend and sync OCR regions across windows
   useEffect(() => {
-    invoke<MonitorInfo[]>("get_monitors")
+    TauriBridge.getMonitors()
       .then((m) => {
         if (m && m.length > 0) {
           setMonitors(m);

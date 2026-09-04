@@ -1,6 +1,7 @@
 import { OverlayConfig } from "../types";
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { settingsManager } from "../services/settingsManager";
+import { logger } from "../services/loggerService";
 
 export interface OverlayDialogueMessage {
   id?: number | string;
@@ -14,7 +15,8 @@ export type OverlayEvent =
   | { type: "CONFIG_UPDATE"; config: OverlayConfig }
   | { type: "SET_EDIT_MODE"; isEditing: boolean }
   | { type: "POSITION_SAVED"; x: number; y: number; width: number; height: number }
-  | { type: "DIALOGUE_UPDATE"; dialogue: OverlayDialogueMessage };
+  | { type: "DIALOGUE_UPDATE"; dialogue: OverlayDialogueMessage }
+  | { type: "RESET_SEQUENCE" };
 
 class OverlayChannel {
   private channel: BroadcastChannel | null = null;
@@ -68,11 +70,17 @@ class OverlayChannel {
     if (this.channel) {
       try {
         this.channel.postMessage(event);
-      } catch {}
+      } catch (err) {
+        logger.debug("OverlayChannel", `BroadcastChannel postMessage failed: ${err}`);
+      }
     }
 
     // 2. Dual broadcast via Tauri native event for cross-webview resilience (A3)
-    emit("vn-overlay-event", event).catch(() => {});
+    if (typeof window !== "undefined") {
+      emit("vn-overlay-event", event).catch((err) => {
+        logger.debug("OverlayChannel", `Tauri emit vn-overlay-event failed: ${err}`);
+      });
+    }
 
     // 3. Persist config via SettingsManager
     if (event.type === "CONFIG_UPDATE") {
@@ -101,7 +109,9 @@ class OverlayChannel {
     if (this.channel) {
       try {
         this.channel.close();
-      } catch {}
+      } catch (err) {
+        logger.debug("OverlayChannel", `BroadcastChannel close failed: ${err}`);
+      }
       this.channel = null;
     }
     if (this.tauriUnlistenFn) {

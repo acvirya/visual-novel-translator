@@ -1,9 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "./tauriBridge";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { TextractorProcessInfo, TextractorMessage } from "../types";
 import { useTextractorStore } from "../stores/useTextractorStore";
 import { cleanSpeakerName, executePreprocessingPipeline, extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
+import { logger } from "./loggerService";
+import { overlayChannel } from "../utils/overlayChannel";
 
 export interface EngineHookPreset {
   name: string;
@@ -74,9 +76,10 @@ export const DEFAULT_TEXTRACTOR_DIR = "C:\\Program Files\\Textractor";
 
 export async function detectTextractorPath(): Promise<string | null> {
   try {
-    const found = await invoke<string | null>("find_textractor_installation");
+    const found = await TauriBridge.findTextractorInstallation();
     return found || null;
-  } catch {
+  } catch (err) {
+    logger.debug("Textractor", `Textractor auto-detection failed or not found: ${err}`);
     return null;
   }
 }
@@ -184,6 +187,7 @@ export class TextractorService {
   // Unified Multi-Thread Coordinator State
   private static syncTimer: ReturnType<typeof setTimeout> | null = null;
   private static syncFirstThreadRole: "speaker" | "dialogue" | "combined" | null = null;
+  private static syncStartTime = 0;
   private static bufferedSpeaker = "";
   private static bufferedDialogue = "";
   private static globalDialogueSeq = 0;
@@ -233,7 +237,7 @@ export class TextractorService {
   public static async listProcesses(): Promise<TextractorProcessInfo[]> {
     useTextractorStore.getState().setIsLoadingProcesses(true);
     try {
-      const procs = await invoke<TextractorProcessInfo[]>("list_target_processes");
+      const procs = await TauriBridge.listTargetProcesses();
       useTextractorStore.getState().setProcesses(procs);
       return procs;
     } catch (error) {
@@ -253,9 +257,14 @@ export class TextractorService {
     store.setHookError(null);
 
     await this.initListener();
+    this.globalDialogueSeq = 0;
+    this.lastDispatchedText = { speaker: "", message: "" };
+    this.bufferedSpeaker = "";
+    this.bufferedDialogue = "";
+    overlayChannel.send({ type: "RESET_SEQUENCE" });
 
     try {
-      await invoke("start_textractor", { exePath, targetPid });
+      await TauriBridge.startTextractor(exePath, targetPid);
       store.setIsHooked(true);
       store.setAttachedPid(targetPid);
       return { success: true };
@@ -273,20 +282,59 @@ export class TextractorService {
    */
   public static async sendCommand(command: string): Promise<{ success: boolean; error?: string }> {
     try {
-      await invoke("send_textractor_command", { command });
+      const store = useTextractorStore.getState();
+      let finalCommand = command.trim();
+
+      // Ensure target process flag (-P<pid>) is present if a process is actively attached
+      if (!/-P\d+/i.test(finalCommand) && store.attachedPid) {
+        finalCommand = `${finalCommand} -P${store.attachedPid}`;
+      }
+
+      await TauriBridge.sendTextractorCommand(finalCommand);
+      logger.info("Textractor", `Sent command to Textractor stdin: ${finalCommand}`);
       return { success: true };
     } catch (error: any) {
-      return { success: false, error: error?.toString() || "Failed to send command" };
+      const errStr = error?.toString() || "Failed to send command";
+      logger.error("Textractor", `Failed to send command: ${errStr}`);
+      return { success: false, error: errStr };
     }
   }
+
+  /**
+   * Insert custom memory hook code into the attached game process
+   */
+  public static async insertHook(hookCode: string): Promise<{ success: boolean; error?: string }> {
+    const trimmed = hookCode.trim();
+    if (!trimmed) {
+      return { success: false, error: "Hook code cannot be empty" };
+    }
+
+    // Textractor hook format validation:
+    // Starts with optional '/', followed by H-code or R-code type, and contains '@'
+    const hookPattern = /^\/?([Hh]|[Rr]).*@/i;
+    if (!hookPattern.test(trimmed)) {
+      return {
+        success: false,
+        error: "Invalid hook code format. Example: /HN-4*0@SiglusEngine.exe or HS-8*0@43F9B0",
+      };
+    }
+
+    return await this.sendCommand(trimmed);
+  }
+
 
   /**
    * Detach and stop Textractor CLI
    */
   public static async stopSidecar(): Promise<{ success: boolean }> {
     try {
-      await invoke("stop_textractor");
+      await TauriBridge.stopTextractor();
       this.cleanupListener();
+      this.globalDialogueSeq = 0;
+      this.lastDispatchedText = { speaker: "", message: "" };
+      this.bufferedSpeaker = "";
+      this.bufferedDialogue = "";
+      overlayChannel.send({ type: "RESET_SEQUENCE" });
       useTextractorStore.getState().resetTextractor();
       return { success: true };
     } catch (error) {
@@ -390,16 +438,29 @@ export class TextractorService {
 
     if (!isCombined && !isMessage && !isSpeaker) return;
 
-    // Rule 1 & 3: If no timer is active, start a global timer and record the first thread role.
-    // Never reset/overwrite the running timer when new fragments/threads arrive!
+    // If new typewriter fragments arrive while timer is running, extend debounce up to limit
     const syncWaitMs = isCombined ? Math.max(80, store.debounceMs || 250) : Math.max(120, store.threadSyncWaitMs || 200);
+    const MAX_DEBOUNCE_CEILING_MS = 1200;
+    const now = Date.now();
 
-    if (!this.syncTimer) {
-      this.syncFirstThreadRole = isSpeaker ? "speaker" : isMessage ? "dialogue" : "combined";
-      this.syncTimer = setTimeout(() => {
+    if (this.syncTimer) {
+      if (now - this.syncStartTime > MAX_DEBOUNCE_CEILING_MS) {
+        // Force flush accumulated dialogue to prevent starvation on continuous typewriter stream
+        clearTimeout(this.syncTimer);
         this.finalizeAndDispatch();
-      }, syncWaitMs);
+        this.syncStartTime = now;
+        this.syncFirstThreadRole = isSpeaker ? "speaker" : isMessage ? "dialogue" : "combined";
+      } else {
+        clearTimeout(this.syncTimer);
+      }
+    } else {
+      this.syncStartTime = now;
+      this.syncFirstThreadRole = isSpeaker ? "speaker" : isMessage ? "dialogue" : "combined";
     }
+
+    this.syncTimer = setTimeout(() => {
+      this.finalizeAndDispatch();
+    }, syncWaitMs);
 
     // Accumulate/buffer data into respective slots during the global sync timer window
     if (isCombined) {
@@ -444,6 +505,7 @@ export class TextractorService {
     } finally {
       this.syncTimer = null;
       this.syncFirstThreadRole = null;
+      this.syncStartTime = 0;
       this.bufferedSpeaker = "";
       this.bufferedDialogue = "";
     }

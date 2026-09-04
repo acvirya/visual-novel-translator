@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 import { parseScriptContentAsEntries } from "../utils/scriptFileParser";
+import { TauriBridge } from "./tauriBridge";
 
 export function generateUniqueId(prefix = "entry"): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -36,21 +36,8 @@ export function calcLevenshteinDistance(a: string, b: string): number {
   return row[a.length];
 }
 
-export interface ScriptEntry {
-  id: string;
-  speaker?: string;
-  translated_speaker?: string;
-  message: string;
-  translated_message: string;
-  matchedCount?: number;
-  lastUsed?: string;
-  // Precomputed index cache (O(1) lookups during searches)
-  _normSpeaker?: string;
-  _normMessage?: string;
-  _canonicalKey?: string;
-  _bigramCounts?: Map<string, number>;
-  _numBigrams?: number;
-}
+import { ScriptEntry } from "../types";
+export type { ScriptEntry };
 
 export interface ScriptDatabaseState {
   activeFilePath: string | null;
@@ -185,7 +172,7 @@ class ScriptManagerService {
 
       if (this.activeFilePath) {
         try {
-          const diskContent = await invoke<string | null>("read_script_file_by_path", { path: this.activeFilePath });
+          const diskContent = await TauriBridge.readScriptFileByPath(this.activeFilePath);
           if (diskContent) {
             this.entries = this.parseEntriesFromContent(diskContent);
             this.rebuildIndexes();
@@ -241,7 +228,7 @@ class ScriptManagerService {
           if (!this.activeFilePath) return;
           const isJson = this.activeFilePath.toLowerCase().endsWith(".json");
           const content = this.exportAsContent(isJson);
-          await invoke("save_script_file", { path: this.activeFilePath, content });
+          await TauriBridge.saveScriptFile(this.activeFilePath, content);
         } catch (err) {
           console.warn("Failed to write autosave to disk file:", err);
         }
@@ -294,7 +281,7 @@ class ScriptManagerService {
    */
   public async createNewScriptNative(defaultName = "my_script.jsonl"): Promise<{ success: boolean; path?: string }> {
     try {
-      const selectedPath = await invoke<string | null>("show_save_script_dialog", { defaultName });
+      const selectedPath = await TauriBridge.showSaveScriptDialog(defaultName);
       if (!selectedPath) {
         return { success: false }; // User cancelled
       }
@@ -317,7 +304,7 @@ class ScriptManagerService {
    */
   public async openScriptNative(): Promise<{ success: boolean; count: number; error?: string }> {
     try {
-      const result = await invoke<[string, string] | null>("show_open_script_dialog");
+      const result = await TauriBridge.showOpenScriptDialog();
       if (!result) {
         return { success: false, count: 0 }; // User cancelled
       }
@@ -377,7 +364,7 @@ class ScriptManagerService {
     }
 
     try {
-      const results = await invoke<Array<[string, string, number]>>("show_pick_files_dialog");
+      const results = await TauriBridge.showPickFilesDialog();
       if (!Array.isArray(results) || results.length === 0) {
         return { success: false, importedCount: 0, filesCount: 0 }; // User cancelled
       }

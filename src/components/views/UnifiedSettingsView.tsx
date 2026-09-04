@@ -1,15 +1,17 @@
-import React, { useState } from "react";
+import React from "react";
 import { Sliders, Terminal, KeyRound, Code } from "lucide-react";
 import { TranslationProvidersView } from "./TranslationProvidersView";
 import { CustomReplacementRulesView } from "./CustomReplacementRulesView";
 import { GeneralSettingsView } from "./GeneralSettingsView";
 import { LogsView } from "./LogsView";
 import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
+import { useUIStore, SettingsSubTab } from "../../stores/useUIStore";
 
-export type SettingsSubTab = "providers" | "custom_rules" | "general" | "logs";
+export type { SettingsSubTab };
 
 export const UnifiedSettingsView: React.FC = () => {
-  const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>("providers");
+  const activeSubTab = useUIStore((state) => state.settingsSubTab);
+  const setActiveSubTab = useUIStore((state) => state.setSettingsSubTab);
 
   const settingOptions: SegmentedOption<SettingsSubTab>[] = [
     {

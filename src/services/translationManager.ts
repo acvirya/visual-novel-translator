@@ -5,7 +5,7 @@ import { settingsManager } from "./settingsManager";
 import { overlayChannel } from "../utils/overlayChannel";
 import { TranslationLogItem } from "../types";
 import { logger } from "./loggerService";
-import { useTranslationStore } from "../stores/useTranslationStore";
+import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
 
 export interface TranslatePipelineOptions {
   id?: number;
@@ -35,6 +35,14 @@ export interface LlmContextSettings {
   maxCharsPerLine: number;
 }
 
+export type TranslationManagerEvent =
+  | { type: "log"; item: TranslationLogItem }
+  | { type: "sessionUsage"; promptTokens: number; completionTokens: number; cachedTokens: number; cost: number }
+  | { type: "paused"; isPaused: boolean }
+  | { type: "contextLength"; length: number }
+  | { type: "contextSettings"; settings: LlmContextSettings }
+  | { type: "useScriptOnly"; val: boolean };
+
 interface TranslationTask {
   options: TranslatePipelineOptions;
   resolve: (res: TranslatePipelineResult) => void;
@@ -52,6 +60,7 @@ function generateLogId(prefix: string = "log"): string {
 
 class TranslationManager {
   private listeners: ((item: TranslationLogItem) => void)[] = [];
+  private eventListeners: ((event: TranslationManagerEvent) => void)[] = [];
   private contextHistory: { user: string; assistant: string }[] = [];
   private queue: TranslationTask[] = [];
   private isProcessingQueue = false;
@@ -66,9 +75,26 @@ class TranslationManager {
     };
   }
 
+  public onEvent(callback: (event: TranslationManagerEvent) => void) {
+    this.eventListeners.push(callback);
+    return () => {
+      this.eventListeners = this.eventListeners.filter((cb) => cb !== callback);
+    };
+  }
+
+  private emit(event: TranslationManagerEvent) {
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        logger.error("TranslationManager", `Event listener error: ${err}`);
+      }
+    }
+  }
+
   public notify(item: TranslationLogItem) {
     this.listeners.forEach((cb) => cb(item));
-    useTranslationStore.getState().addLiveLog(item);
+    this.emit({ type: "log", item });
   }
 
   public getContextHistoryLength(): number {
@@ -85,7 +111,7 @@ class TranslationManager {
 
   public setPaused(paused: boolean) {
     this.isPausedInternal = paused;
-    useTranslationStore.getState().setIsPaused(paused);
+    this.emit({ type: "paused", isPaused: paused });
     if (!paused) {
       this.processQueue();
     }
@@ -98,10 +124,11 @@ class TranslationManager {
 
   public setMaxCharsPerLine(val: number) {
     settingsManager.updateTranslation({ maxCharsPerLine: val });
-    useTranslationStore.getState().setContextSettings({
+    const settings = {
       ...this.getContextSettings(),
       maxCharsPerLine: val,
-    });
+    };
+    this.emit({ type: "contextSettings", settings });
   }
 
   public getContextSettings(): LlmContextSettings {
@@ -131,10 +158,10 @@ class TranslationManager {
     // Prune existing if exceeding new max
     if (this.contextHistory.length >= currentMax) {
       this.contextHistory = this.contextHistory.slice(-Math.min(currentRetain, currentMax));
-      useTranslationStore.getState().setContextHistoryLength(this.contextHistory.length);
+      this.emit({ type: "contextLength", length: this.contextHistory.length });
     }
 
-    useTranslationStore.getState().setContextSettings(this.getContextSettings());
+    this.emit({ type: "contextSettings", settings: this.getContextSettings() });
   }
 
   public getUseScriptOnly(): boolean {
@@ -143,16 +170,18 @@ class TranslationManager {
 
   public setUseScriptOnly(val: boolean) {
     settingsManager.updateTranslation({ useScriptOnly: val });
-    useTranslationStore.getState().setUseScriptOnly(val);
+    this.emit({ type: "useScriptOnly", val });
   }
 
   public clearContextHistory() {
     this.contextHistory = [];
-    useTranslationStore.getState().setContextHistoryLength(0);
+    this.emit({ type: "contextLength", length: 0 });
+    overlayChannel.send({ type: "RESET_SEQUENCE" });
   }
 
   public clearQueue() {
     this.queue = [];
+    overlayChannel.send({ type: "RESET_SEQUENCE" });
   }
 
   /**
@@ -278,7 +307,9 @@ class TranslationManager {
       this.isProcessingQueue = false;
       // Re-trigger if tasks were enqueued concurrently during completion
       if (this.queue.length > 0 && !this.isPausedInternal) {
-        this.processQueue();
+        queueMicrotask(() => {
+          this.processQueue();
+        });
       }
     }
   }
@@ -293,17 +324,20 @@ class TranslationManager {
    */
   private async executeTranslate(options: TranslatePipelineOptions, reqSeq: number = 0): Promise<TranslatePipelineResult> {
     const startTime = Date.now();
-    const {
-      speaker,
-      message,
-      sourceLang = options.sourceLang || settingsManager.getSourceLang(),
-      targetLang = options.targetLang || settingsManager.getTargetLang(),
-      providerId = options.providerId || useTranslationStore.getState().selectedProvider || settingsManager.getSelectedModel(),
-      useScriptOnly = options.useScriptOnly !== undefined ? options.useScriptOnly : this.getUseScriptOnly(),
-    } = options;
-
-    const cleanMsg = message.trim();
-    const cleanSpk = speaker?.trim() || undefined;
+    const cleanMsg = options.message.trim();
+    const cleanSpk = options.speaker?.trim() || undefined;
+    const sourceLang = options.sourceLang || settingsManager.getSourceLang();
+    const targetLang = options.targetLang || settingsManager.getTargetLang();
+    const translationSettings = settingsManager.getTranslation();
+    const providerId =
+      options.providerId ||
+      translationSettings.liveModel ||
+      translationSettings.activeProviderId ||
+      settingsManager.getSelectedModel();
+    const useScriptOnly =
+      options.useScriptOnly !== undefined
+        ? options.useScriptOnly
+        : this.getUseScriptOnly();
 
     // Reset context window if switching between different models or MT providers (H10)
     if (this.lastUsedProviderId && this.lastUsedProviderId !== providerId) {
@@ -482,10 +516,19 @@ class TranslationManager {
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
       translatedMessage = res.translatedMessage || cleanMsg;
     }
-    // C. OpenRouter LLM Translation with Multi-turn Context, Dynamic Languages, Style Presets & Glossary Injection
+    // C. LLM Translation with Multi-turn Context, Dynamic Languages, Style Presets & Glossary Injection
     else {
-      providerLabel = `OpenRouter (${providerId.split("/").pop() || providerId})`;
-      const apiKey = settingsManager.getOpenRouterApiKey();
+      const { providerId: parsedProvider } = LlmProviderRegistry.parseModelId(providerId);
+      const providerDef = LlmProviderRegistry.getProvider(parsedProvider);
+      const providerCfg = LlmProviderRegistry.getProviderConfig(parsedProvider);
+      const modelDisplayName = providerId.split("/").pop() || providerId;
+      providerLabel = parsedProvider === "openrouter"
+        ? `OpenRouter (${modelDisplayName})`
+        : `${providerDef?.name || parsedProvider} (${modelDisplayName})`;
+
+      const apiKey = parsedProvider === "openrouter"
+        ? settingsManager.getOpenRouterApiKey()
+        : (providerCfg.apiKey || settingsManager.getOpenRouterApiKey());
 
       const res = await translateWithOpenRouter({
         apiKey,
@@ -495,19 +538,23 @@ class TranslationManager {
         sourceLang,
         targetLang,
         contextHistory: this.contextHistory,
-        reasoningEffort: useTranslationStore.getState().reasoningEffort,
+        reasoningEffort: translationSettings.reasoningEffort || "default",
+        reasoningMaxTokens: translationSettings.reasoningMaxTokens || settingsManager.getReasoningMaxTokens(),
+        excludeReasoning: translationSettings.excludeReasoning ?? settingsManager.getExcludeReasoning(),
+        temperature: translationSettings.temperature ?? settingsManager.getTemperature(),
       });
 
       isSuccess = res.success;
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
       translatedMessage = res.translatedMessage || cleanMsg;
       if (res.success) {
-        useTranslationStore.getState().incrementSessionUsage(
-          res.promptTokens || 0,
-          res.completionTokens || 0,
-          res.cachedTokens || 0,
-          res.cost || 0
-        );
+        this.emit({
+          type: "sessionUsage",
+          promptTokens: res.promptTokens || 0,
+          completionTokens: res.completionTokens || 0,
+          cachedTokens: res.cachedTokens || 0,
+          cost: res.cost || 0,
+        });
       } else {
         logger.error("TranslationManager", `OpenRouter translation returned error: ${res.error}`);
       }
@@ -590,12 +637,12 @@ class TranslationManager {
     const { maxContextLines, retainContextLines } = this.getContextSettings();
     this.contextHistory.push({ user, assistant });
 
-    if (this.contextHistory.length >= maxContextLines) {
+    if (this.contextHistory.length > maxContextLines) {
       const retainCount = Math.max(1, Math.min(retainContextLines, maxContextLines));
       this.contextHistory = this.contextHistory.slice(-retainCount);
     }
 
-    useTranslationStore.getState().setContextHistoryLength(this.contextHistory.length);
+    this.emit({ type: "contextLength", length: this.contextHistory.length });
   }
 }
 

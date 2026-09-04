@@ -6,7 +6,7 @@
 export interface AppLogEntry {
   id: string;
   time: string;
-  level: "INFO" | "WARN" | "ERROR";
+  level: "INFO" | "WARN" | "ERROR" | "DEBUG";
   source: string;
   message: string;
   details?: any;
@@ -34,7 +34,7 @@ class LoggerService {
     this.listeners.forEach((cb) => cb(list));
   }
 
-  public log(level: "INFO" | "WARN" | "ERROR", source: string, message: string, details?: any) {
+  public log(level: "INFO" | "WARN" | "ERROR" | "DEBUG", source: string, message: string, details?: any) {
     const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? `log_${crypto.randomUUID()}`
       : `log_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -54,12 +54,18 @@ class LoggerService {
       console.error(consoleMsg, details || "");
     } else if (level === "WARN") {
       console.warn(consoleMsg, details || "");
+    } else if (level === "DEBUG") {
+      console.debug(consoleMsg, details || "");
     } else {
       console.log(consoleMsg, details || "");
     }
 
     this.logs = [entry, ...this.logs].slice(0, this.maxLogs);
     this.notify();
+  }
+
+  public debug(source: string, message: string, details?: any) {
+    this.log("DEBUG", source, message, details);
   }
 
   public info(source: string, message: string, details?: any) {

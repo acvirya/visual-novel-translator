@@ -9,6 +9,7 @@ import {
   LogSettings,
   settingsManager,
 } from "../services/settingsManager";
+import { BatchSettings } from "../types";
 
 export interface SettingsStoreState {
   settings: AppSettings;
@@ -18,6 +19,7 @@ export interface SettingsStoreState {
   updateOverlay: (overlay: Partial<OverlaySettings>) => void;
   updateTextPreprocessing: (tp: Partial<TextPreprocessingSettings>) => void;
   updateLogs: (logs: Partial<LogSettings>) => void;
+  updateBatch: (batch: Partial<BatchSettings>) => void;
   resetSettings: (category?: keyof AppSettings) => void;
 }
 
@@ -51,6 +53,9 @@ export const useSettingsStore = create<SettingsStoreState>((set) => {
     },
     updateLogs: (partial) => {
       settingsManager.updateLogs(partial);
+    },
+    updateBatch: (partial) => {
+      settingsManager.updateBatch(partial);
     },
     resetSettings: (category) => {
       settingsManager.resetSettings(category);

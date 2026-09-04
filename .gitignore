@@ -31,3 +31,6 @@ Thumbs.db
 
 # Debug files
 *debug_log.txt
+batch_debug_log.jsonl
+stdin.txt
+*.jsonl.tmp

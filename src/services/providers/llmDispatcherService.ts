@@ -1,13 +1,10 @@
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
+import { TauriBridge } from "../tauriBridge";
 import { LlmProviderRegistry, CuratedModelInfo } from "./llmProviderRegistry";
 import { OpenRouterCompletionResponse } from "../openRouterService";
 import { logger } from "../loggerService";
-import { ReasoningEffort } from "../../types";
-
-export interface StreamEvent {
-  type: "Chunk" | "Reasoning" | "Status" | "Usage";
-  data: any;
-}
+import { ReasoningEffort, StreamEvent } from "../../types";
+export type { StreamEvent };
 
 export interface UniversalChatOptions {
   modelId: string; // May be composite (e.g. "deepseek:deepseek-chat") or standard OpenRouter model
@@ -20,6 +17,7 @@ export interface UniversalChatOptions {
   timeoutSeconds?: number;
   overrideApiKey?: string;
   overrideBaseUrl?: string;
+  streamId?: string;
   onEvent?: (event: StreamEvent) => void;
 }
 
@@ -70,7 +68,7 @@ export class LlmDispatcherService {
         headers = {};
       }
 
-      const resp = await invoke<string>("test_llm_connection", { url, headers });
+      const resp = await TauriBridge.testLlmConnection(url, headers);
       const parsed = JSON.parse(resp);
       const count = Array.isArray(parsed.data)
         ? parsed.data.length
@@ -128,7 +126,7 @@ export class LlmDispatcherService {
         headers = {};
       }
 
-      const resp = await invoke<string>("test_llm_connection", { url, headers });
+      const resp = await TauriBridge.testLlmConnection(url, headers);
       const parsed = JSON.parse(resp);
       const rawList = Array.isArray(parsed.data)
         ? parsed.data
@@ -218,17 +216,18 @@ export class LlmDispatcherService {
       if (options.onEvent) {
         const channel = new Channel<StreamEvent>();
         channel.onmessage = options.onEvent;
-        nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_stream_chat_completion", {
+        nativeRes = await TauriBridge.openrouterStreamChatCompletion({
           apiKey,
           modelId,
           messagesJson: JSON.stringify(options.messages),
           temperature: options.temperature ?? 0.3,
           maxTokens: options.maxTokens,
           timeoutSeconds: options.timeoutSeconds,
+          streamId: options.streamId,
           onEvent: channel,
         });
       } else {
-        nativeRes = await invoke<OpenRouterCompletionResponse>("openrouter_chat_completion", {
+        nativeRes = await TauriBridge.openrouterChatCompletion({
           apiKey,
           modelId,
           messagesJson: JSON.stringify(options.messages),
@@ -289,7 +288,7 @@ export class LlmDispatcherService {
             budget_tokens: budgetTokens,
           };
 
-          // In Anthropic API: max_tokens must be strictly greater than budget_tokens!
+          // Anthropic requires max_tokens > budget_tokens
           payload.max_tokens = Math.max(payload.max_tokens || 4096, budgetTokens + 2048);
 
           // In Anthropic API: temperature must be 1.0 when thinking is enabled
@@ -314,15 +313,16 @@ export class LlmDispatcherService {
       if (options.onEvent) {
         const channel = new Channel<StreamEvent>();
         channel.onmessage = options.onEvent;
-        nativeRes = await invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", {
+        nativeRes = await TauriBridge.llmStreamChatCompletion({
           url,
           headers,
           payload_json: JSON.stringify(payload),
           timeoutSeconds: options.timeoutSeconds,
+          streamId: options.streamId,
           onEvent: channel,
         });
       } else {
-        nativeRes = await invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
+        nativeRes = await TauriBridge.llmChatCompletion({
           url,
           headers,
           payload_json: JSON.stringify(payload),
@@ -387,6 +387,8 @@ export class LlmDispatcherService {
     else if (providerId === "deepseek" && (/reasoner|r1/i.test(modelId))) {
       // DeepSeek R1 has native reasoning; avoid overriding low temperature
       delete payload.temperature;
+      // DeepSeek R1 does not support response_format: { type: "json_object" } and will reject with HTTP 400
+      delete payload.response_format;
     }
 
     // 3. Google Gemini (via OpenAI-compatible endpoint)
@@ -444,23 +446,40 @@ export class LlmDispatcherService {
     }
 
     let nativeRes: OpenRouterCompletionResponse;
-    if (options.onEvent) {
-      const channel = new Channel<StreamEvent>();
-      channel.onmessage = options.onEvent;
-      nativeRes = await invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", {
-        url,
-        headers,
-        payload_json: JSON.stringify(payload),
-        timeoutSeconds: options.timeoutSeconds,
-        onEvent: channel,
-      });
-    } else {
-      nativeRes = await invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
-        url,
-        headers,
-        payload_json: JSON.stringify(payload),
-        timeoutSeconds: options.timeoutSeconds,
-      });
+    const executeCall = async (currentPayload: any) => {
+      if (options.onEvent) {
+        const channel = new Channel<StreamEvent>();
+        channel.onmessage = options.onEvent;
+        return await TauriBridge.llmStreamChatCompletion({
+          url,
+          headers,
+          payload_json: JSON.stringify(currentPayload),
+          timeoutSeconds: options.timeoutSeconds,
+          streamId: options.streamId,
+          onEvent: channel,
+        });
+      } else {
+        return await TauriBridge.llmChatCompletion({
+          url,
+          headers,
+          payload_json: JSON.stringify(currentPayload),
+          timeoutSeconds: options.timeoutSeconds,
+        });
+      }
+    };
+
+    try {
+      nativeRes = await executeCall(payload);
+    } catch (err: any) {
+      const errMsg = String(err?.message || err || "");
+      const isFormatError = /response_format|json_object|json schema|unsupported.*format/i.test(errMsg);
+      if (isFormatError && payload.response_format) {
+        logger.warn("LLMDispatcher", `Provider rejected response_format, retrying without response_format...`, { modelId, error: errMsg });
+        delete payload.response_format;
+        nativeRes = await executeCall(payload);
+      } else {
+        throw err;
+      }
     }
 
     return {

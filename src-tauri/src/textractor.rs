@@ -191,13 +191,24 @@ fn resolve_textractor_exe(requested: &str) -> std::path::PathBuf {
     let is_x64 = requested.to_lowercase().contains("x64");
     let arch_dir = if is_x64 { "x64" } else { "x86" };
 
-    let candidates = [
-        format!("D:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
-        format!("C:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
-        format!("C:\\Program Files (x86)\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
-        format!("D:\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
-        format!("C:\\Textractor\\{}\\TextractorCLI.exe", arch_dir),
-    ];
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        candidates.push(format!("{}\\Textractor\\{}\\TextractorCLI.exe", pf, arch_dir));
+    }
+    if let Ok(pfx86) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(format!("{}\\Textractor\\{}\\TextractorCLI.exe", pfx86, arch_dir));
+    }
+    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+        candidates.push(format!("{}\\Programs\\Textractor\\{}\\TextractorCLI.exe", local_app, arch_dir));
+        candidates.push(format!("{}\\Textractor\\{}\\TextractorCLI.exe", local_app, arch_dir));
+    }
+
+    candidates.push(format!("C:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
+    candidates.push(format!("C:\\Program Files (x86)\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
+    candidates.push(format!("C:\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
+    candidates.push(format!("D:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
+    candidates.push(format!("D:\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
 
     for c in candidates {
         let p = Path::new(&c);
@@ -252,41 +263,51 @@ pub fn start_textractor(
             .spawn()
             .map_err(|e| format!("Failed to spawn Textractor at '{:?}': {}", resolved_exe, e))?;
 
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Failed to capture Textractor stdin".to_string())?;
+        let mut stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Failed to capture Textractor stdin".to_string());
+            }
+        };
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Failed to capture Textractor stdout".to_string())?;
+        let stdout = match child.stdout.take() {
+            Some(o) => o,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Failed to capture Textractor stdout".to_string());
+            }
+        };
 
         let stderr = child.stderr.take();
 
-        // Send initial attach command to stdin (UTF-16LE encoded for Textractor std::wcin)
-        let attach_cmd = format!("attach -P{}\r\n", target_pid);
-        if let Err(e) = stdin.write_all(&str_to_utf16_bytes(&attach_cmd)) {
-            let _ = child.kill();
-            return Err(format!("Failed to send attach command to Textractor stdin: {}", e));
-        }
-        if let Err(e) = stdin.flush() {
-            let _ = child.kill();
-            return Err(format!("Failed to flush Textractor stdin: {}", e));
-        }
-
-        // Store child & stdin safely (recovering from poisoned mutex if previous thread panicked)
+        // Store child & active_pid immediately in state so it is tracked and can be cleaned up
         {
             let mut c = state.child.lock().unwrap_or_else(|e| e.into_inner());
             *c = Some(child);
         }
         {
-            let mut s = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
-            *s = Some(stdin);
-        }
-        {
             let mut p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
             *p = Some(target_pid);
+        }
+
+        // Send initial attach command to stdin (UTF-16LE encoded for Textractor std::wcin)
+        let attach_cmd = format!("attach -P{}\r\n", target_pid);
+        if let Err(e) = stdin.write_all(&str_to_utf16_bytes(&attach_cmd)) {
+            stop_textractor_internal(&state);
+            return Err(format!("Failed to send attach command to Textractor stdin: {}", e));
+        }
+        if let Err(e) = stdin.flush() {
+            stop_textractor_internal(&state);
+            return Err(format!("Failed to flush Textractor stdin: {}", e));
+        }
+
+        // Store stdin safely (recovering from poisoned mutex if previous thread panicked)
+        {
+            let mut s = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
+            *s = Some(stdin);
         }
 
         // Spawn async reader thread for stderr
@@ -354,24 +375,54 @@ pub fn start_textractor(
     }
 }
 
+/// Format command to Textractor CLI specifications:
+/// `swscanf(input, L"%500s -P%d", command, &processId) != 2 -> ExitProcess(0)`
+/// Ensures that `-P<pid>` is always attached to prevent TextractorCLI from terminating.
+pub fn format_textractor_command(command: &str, active_pid: Option<u32>) -> Result<String, String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("Perintah atau hook code tidak boleh kosong".to_string());
+    }
+
+    // Check if command already contains a valid -P<digits> or -p<digits> flag
+    let has_pid_flag = trimmed
+        .split_whitespace()
+        .any(|part| (part.starts_with("-P") || part.starts_with("-p")) && part[2..].parse::<u32>().is_ok());
+
+    if has_pid_flag {
+        Ok(trimmed.to_string())
+    } else if let Some(pid) = active_pid {
+        Ok(format!("{} -P{}", trimmed, pid))
+    } else {
+        Err("Tidak ada proses game yang terhubung (attach ke game terlebih dahulu atau sertakan -P<pid>)".to_string())
+    }
+}
+
 /// Send custom command to Textractor stdin (e.g. hookcode -P1234, detach -P1234)
 #[tauri::command]
 pub fn send_textractor_command(
     state: tauri::State<'_, TextractorState>,
     command: String,
 ) -> Result<(), String> {
-    if let Ok(mut stdin_opt) = state.stdin.lock() {
-        if let Some(ref mut stdin) = *stdin_opt {
-            let formatted = format!("{}\r\n", command.trim());
-            let utf16_bytes = str_to_utf16_bytes(&formatted);
-            stdin
-                .write_all(&utf16_bytes)
-                .map_err(|e| format!("Failed to write to Textractor stdin: {}", e))?;
-            stdin
-                .flush()
-                .map_err(|e| format!("Failed to flush Textractor stdin: {}", e))?;
-            return Ok(());
-        }
+    let mut stdin_lock = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ref mut stdin) = *stdin_lock {
+        let active_pid = {
+            let p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
+            *p
+        };
+
+        let final_cmd = format_textractor_command(&command, active_pid)?;
+        eprintln!("[Textractor::SendCommand] Sending stdin command: {}", final_cmd);
+
+        let formatted = format!("{}\r\n", final_cmd);
+        let utf16_bytes = str_to_utf16_bytes(&formatted);
+        stdin
+            .write_all(&utf16_bytes)
+            .map_err(|e| format!("Failed to write to Textractor stdin: {}", e))?;
+        stdin
+            .flush()
+            .map_err(|e| format!("Failed to flush Textractor stdin: {}", e))?;
+        return Ok(());
     }
     Err("Textractor is not running or stdin is unavailable".to_string())
 }
@@ -382,6 +433,7 @@ pub fn stop_textractor(state: tauri::State<'_, TextractorState>) -> Result<(), S
     stop_textractor_internal(&state);
     Ok(())
 }
+
 
 pub fn stop_textractor_internal(state: &TextractorState) {
     // 1. Send graceful detach command to target process if active
@@ -448,8 +500,13 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
     let mut hook_code = String::new();
 
     if parts.len() >= 6 {
-        let clean_pid = parts[1].trim().trim_start_matches("0x").trim_start_matches("0X");
-        pid = u32::from_str_radix(clean_pid, 16).unwrap_or_else(|_| clean_pid.parse::<u32>().unwrap_or(fallback_pid));
+        let raw_pid = parts[1].trim();
+        if raw_pid.starts_with("0x") || raw_pid.starts_with("0X") {
+            let clean_pid = raw_pid.trim_start_matches("0x").trim_start_matches("0X");
+            pid = u32::from_str_radix(clean_pid, 16).unwrap_or_else(|_| clean_pid.parse::<u32>().unwrap_or(fallback_pid));
+        } else {
+            pid = raw_pid.parse::<u32>().unwrap_or_else(|_| u32::from_str_radix(raw_pid, 16).unwrap_or(fallback_pid));
+        }
         address = parts[2].trim().to_string();
         context = parts[3].trim().to_string();
         context2 = parts[4].trim().to_string();
@@ -484,29 +541,37 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
 
 #[tauri::command]
 pub fn find_textractor_installation() -> Option<String> {
-    let candidates = [
-        r"C:\Program Files\Textractor\x86\TextractorCLI.exe",
-        r"C:\Program Files (x86)\Textractor\x86\TextractorCLI.exe",
-        r"C:\Program Files\Textractor\x64\TextractorCLI.exe",
-        r"C:\Program Files (x86)\Textractor\x64\TextractorCLI.exe",
-        r"D:\Program Files\Textractor\x86\TextractorCLI.exe",
-        r"D:\Program Files\Textractor\x64\TextractorCLI.exe",
-    ];
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        candidates.push(format!("{}\\Textractor\\x64\\TextractorCLI.exe", pf));
+        candidates.push(format!("{}\\Textractor\\x86\\TextractorCLI.exe", pf));
+    }
+    if let Ok(pfx86) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(format!("{}\\Textractor\\x64\\TextractorCLI.exe", pfx86));
+        candidates.push(format!("{}\\Textractor\\x86\\TextractorCLI.exe", pfx86));
+    }
+    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+        candidates.push(format!("{}\\Programs\\Textractor\\x64\\TextractorCLI.exe", local_app));
+        candidates.push(format!("{}\\Programs\\Textractor\\x86\\TextractorCLI.exe", local_app));
+        candidates.push(format!("{}\\Textractor\\x64\\TextractorCLI.exe", local_app));
+        candidates.push(format!("{}\\Textractor\\x86\\TextractorCLI.exe", local_app));
+    }
+
+    candidates.push(r"C:\Program Files\Textractor\x64\TextractorCLI.exe".to_string());
+    candidates.push(r"C:\Program Files (x86)\Textractor\x64\TextractorCLI.exe".to_string());
+    candidates.push(r"C:\Program Files\Textractor\x86\TextractorCLI.exe".to_string());
+    candidates.push(r"C:\Program Files (x86)\Textractor\x86\TextractorCLI.exe".to_string());
+    candidates.push(r"C:\Textractor\x64\TextractorCLI.exe".to_string());
+    candidates.push(r"C:\Textractor\x86\TextractorCLI.exe".to_string());
+    candidates.push(r"D:\Program Files\Textractor\x64\TextractorCLI.exe".to_string());
+    candidates.push(r"D:\Program Files\Textractor\x86\TextractorCLI.exe".to_string());
+    candidates.push(r"D:\Textractor\x64\TextractorCLI.exe".to_string());
+    candidates.push(r"D:\Textractor\x86\TextractorCLI.exe".to_string());
 
     for path in &candidates {
         if Path::new(path).exists() {
             return Some(path.to_string());
-        }
-    }
-
-    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        let p86 = Path::new(&local_app_data).join("Textractor").join("x86").join("TextractorCLI.exe");
-        if p86.exists() {
-            return Some(p86.to_string_lossy().to_string());
-        }
-        let p64 = Path::new(&local_app_data).join("Textractor").join("x64").join("TextractorCLI.exe");
-        if p64.exists() {
-            return Some(p64.to_string_lossy().to_string());
         }
     }
 
@@ -516,3 +581,39 @@ pub fn find_textractor_installation() -> Option<String> {
 fn chrono_local_time() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_textractor_command_auto_appends_pid() {
+        let res = format_textractor_command("/HN-4*0@SiglusEngine.exe", Some(12345));
+        assert_eq!(res.unwrap(), "/HN-4*0@SiglusEngine.exe -P12345");
+
+        let res2 = format_textractor_command("HS-8*0@43F9B0", Some(8888));
+        assert_eq!(res2.unwrap(), "HS-8*0@43F9B0 -P8888");
+    }
+
+    #[test]
+    fn test_format_textractor_command_preserves_existing_pid() {
+        let res = format_textractor_command("/HS-8*0@cs2.exe -P9999", Some(12345));
+        assert_eq!(res.unwrap(), "/HS-8*0@cs2.exe -P9999");
+
+        let res2 = format_textractor_command("attach -p777", Some(12345));
+        assert_eq!(res2.unwrap(), "attach -p777");
+    }
+
+    #[test]
+    fn test_format_textractor_command_error_when_no_pid() {
+        let res = format_textractor_command("/HN-4*0@SiglusEngine.exe", None);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_format_textractor_command_empty_error() {
+        let res = format_textractor_command("   ", Some(12345));
+        assert!(res.is_err());
+    }
+}
+

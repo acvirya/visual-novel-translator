@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import {
   TextractorProcessInfo,
   MonitorInfo,
@@ -7,6 +7,7 @@ import {
   CaptureRegion,
   OcrEngineStatus,
   OpenRouterCompletionResponse,
+  StreamEvent,
 } from "../types";
 
 /**
@@ -16,6 +17,9 @@ export const TauriBridge = {
   // Monitor & Overlay Controls
   getMonitors: (): Promise<MonitorInfo[]> =>
     invoke<MonitorInfo[]>("get_monitors"),
+
+  getWindowMonitor: (label: string): Promise<MonitorInfo> =>
+    invoke<MonitorInfo>("get_window_monitor", { label }),
 
   showOverlay: (options?: {
     monitorName?: string | null;
@@ -132,6 +136,58 @@ export const TauriBridge = {
       reasoning: params.reasoning,
     }),
 
+  openrouterStreamChatCompletion: (params: {
+    apiKey: string;
+    modelId: string;
+    messagesJson: string;
+    temperature: number;
+    maxTokens?: number;
+    timeoutSeconds?: number;
+    providers?: string[];
+    reasoning?: any;
+    streamId?: string;
+    onEvent: Channel<StreamEvent>;
+  }): Promise<OpenRouterCompletionResponse> =>
+    invoke<OpenRouterCompletionResponse>("openrouter_stream_chat_completion", {
+      apiKey: params.apiKey,
+      modelId: params.modelId,
+      messagesJson: params.messagesJson,
+      temperature: params.temperature,
+      maxTokens: params.maxTokens,
+      timeoutSeconds: params.timeoutSeconds,
+      providers: params.providers,
+      reasoning: params.reasoning,
+      streamId: params.streamId,
+      onEvent: params.onEvent,
+    }),
+
+  llmChatCompletion: (params: {
+    url: string;
+    headers: Record<string, string>;
+    payload_json: string;
+    timeoutSeconds?: number;
+  }): Promise<OpenRouterCompletionResponse> =>
+    invoke<OpenRouterCompletionResponse>("llm_chat_completion", params),
+
+  llmStreamChatCompletion: (params: {
+    url: string;
+    headers: Record<string, string>;
+    payload_json: string;
+    timeoutSeconds?: number;
+    streamId?: string;
+    onEvent: Channel<StreamEvent>;
+  }): Promise<OpenRouterCompletionResponse> =>
+    invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", params),
+
+  testLlmConnection: (url: string, headers: Record<string, string>): Promise<string> =>
+    invoke<string>("test_llm_connection", { url, headers }),
+
+  cancelAllLlmStreams: (): Promise<void> =>
+    invoke("cancel_all_llm_streams"),
+
+  cancelLlmStream: (streamId: string): Promise<void> =>
+    invoke("cancel_llm_stream", { streamId }),
+
   // File Dialogs & Disk I/O
   showOpenScriptDialog: (): Promise<[string, string] | null> =>
     invoke<[string, string] | null>("show_open_script_dialog"),
@@ -154,6 +210,6 @@ export const TauriBridge = {
   appendDebugLog: (fileName: string, content: string): Promise<void> =>
     invoke("append_debug_log", { fileName, content }),
 
-  openFilesInDefaultApp: (path: string): Promise<void> =>
+  openFileInDefaultApp: (path: string): Promise<void> =>
     invoke("open_file_in_default_app", { path }),
 };

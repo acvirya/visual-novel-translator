@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "../../services/tauriBridge";
 import {
   Play,
   Plus,
@@ -43,6 +43,7 @@ import {
   isProcessed,
 } from "../../services/batchTranslateService";
 import { useBatchStore } from "../../stores/useBatchStore";
+import { useUIStore } from "../../stores/useUIStore";
 import { BatchStreamBanner } from "./BatchStreamBanner";
 import { ReasoningEffort } from "../../types";
 
@@ -70,7 +71,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   } = useBatchStore();
 
   // Mode Switcher: "preview" vs "settings"
-  const [activeTab, setActiveTab] = useState<"preview" | "settings">("preview");
+  const activeTab = useUIStore((state) => state.batchSubTab);
+  const setActiveTab = useUIStore((state) => state.setBatchSubTab);
 
   // Settings State
   const [selectedEngine, setSelectedEngine] = useState<string>(() => {
@@ -274,7 +276,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
   const handleAddFiles = async () => {
     try {
-      const results = await invoke<Array<[string, string, number]>>("show_pick_files_dialog");
+      const results = await TauriBridge.showPickFilesDialog();
       if (Array.isArray(results) && results.length > 0) {
         const rawFiles: BatchFileEntry[] = results.map(([filePath, content, sizeBytes]) => {
           const fileName = filePath.replace(/\\/g, "/").split("/").pop() || "script.jsonl";
@@ -309,7 +311,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
 
   const handleBrowseOutputDir = async () => {
     try {
-      const folder = await invoke<string | null>("show_pick_directory_dialog");
+      const folder = await TauriBridge.showPickDirectoryDialog();
       if (folder) {
         setOutputDir(folder);
         if (queuedFiles.length > 0) {

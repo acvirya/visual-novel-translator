@@ -72,9 +72,32 @@ struct MotionState {
 static OCR_ENGINE_INSTANCE: Mutex<Option<SendOcrEngine>> = Mutex::new(None);
 static REGION_MOTION_STATES: Mutex<Option<HashMap<String, MotionState>>> = Mutex::new(None);
 
+/// Deterministic 64-bit FNV-1a Hasher
+struct Fnv1a64(u64);
+impl Fnv1a64 {
+    #[inline]
+    fn new() -> Self {
+        Self(0xcbf29ce484222325)
+    }
+    #[inline]
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= b as u64;
+            self.0 = self.0.wrapping_mul(0x100000001b3);
+        }
+    }
+    #[inline]
+    fn write_u32(&mut self, val: u32) {
+        self.write_bytes(&val.to_le_bytes());
+    }
+    #[inline]
+    fn finish(self) -> u64 {
+        self.0
+    }
+}
+
 /// Computes a high-frequency stroke/edge hash of text, ignoring smooth background animations
 fn compute_stroke_edge_hash(img: &image::DynamicImage, sensitivity: u8) -> u64 {
-    use std::hash::{Hash, Hasher};
     let gray = img.to_luma8();
     let (w, h) = (gray.width(), gray.height());
     if w < 2 || h < 2 {
@@ -84,7 +107,7 @@ fn compute_stroke_edge_hash(img: &image::DynamicImage, sensitivity: u8) -> u64 {
     // Sensitivity threshold: 1 (lenient) to 10 (strict)
     let threshold = (11 - sensitivity.clamp(1, 10) as i32) * 5;
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = Fnv1a64::new();
     let raw = gray.as_raw();
 
     // Sample stroke transitions across grid
@@ -97,7 +120,7 @@ fn compute_stroke_edge_hash(img: &image::DynamicImage, sensitivity: u8) -> u64 {
 
             let grad = (current - right).abs() + (current - bottom).abs();
             if grad > threshold {
-                (x, y).hash(&mut hasher);
+                hasher.write_u32(((x as u32) << 16) | (y as u32));
             }
         }
     }
@@ -106,14 +129,13 @@ fn compute_stroke_edge_hash(img: &image::DynamicImage, sensitivity: u8) -> u64 {
 }
 
 fn compute_fast_pixel_hash(img: &image::DynamicImage) -> u64 {
-    use std::hash::{Hash, Hasher};
     let raw = img.as_bytes();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for chunk in raw.chunks(8) {
-        chunk.hash(&mut hasher);
-    }
+    let mut hasher = Fnv1a64::new();
+    hasher.write_bytes(raw);
     hasher.finish()
 }
+
+static OCR_SCRATCH_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn run_ocr_pipeline_on_image(
     engine: &oneocr_rs::OcrEngine,
@@ -124,9 +146,11 @@ fn run_ocr_pipeline_on_image(
     idx: usize,
     region_name: &str,
 ) -> (String, Vec<DetectedTextLine>) {
-    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}.png", std::process::id(), idx));
+    let seq = OCR_SCRATCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}_{}.png", std::process::id(), seq, idx));
     if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Png) {
         eprintln!("Warning: Failed to write temporary crop image {}: {}", temp_file.display(), e);
+        let _ = std::fs::remove_file(&temp_file);
         return (String::new(), Vec::new());
     }
 

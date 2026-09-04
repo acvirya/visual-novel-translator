@@ -62,6 +62,13 @@ export interface ManualDialogueInput {
   message: string;  // Manual input without speaker name
 }
 
+export interface SessionUsageStats {
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+  totalCost: number;
+}
+
 export interface ScriptEntry {
   id: string;
   speaker?: string;
@@ -70,16 +77,12 @@ export interface ScriptEntry {
   translated_message: string;
   matchedCount?: number;
   lastUsed?: string;
-}
-
-export interface ScriptLineItem {
-  id: string;
-  speaker?: string;
-  translatedSpeaker?: string;
-  original: string;
-  translated: string;
-  matchedCount?: number;
-  lastUsed?: string;
+  // Precomputed index cache (O(1) lookups during searches)
+  _normSpeaker?: string;
+  _normMessage?: string;
+  _canonicalKey?: string;
+  _bigramCounts?: Map<string, number>;
+  _numBigrams?: number;
 }
 
 export interface TranslationLogItem {
@@ -256,13 +259,68 @@ export interface OcrEngineStatus {
   error?: string;
 }
 
+export interface StreamUsageData {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cached_tokens?: number;
+  cost?: number;
+}
+
+export type StreamEvent =
+  | { type: "Chunk"; data: string }
+  | { type: "Reasoning"; data: string }
+  | { type: "Status"; data: string }
+  | { type: "Usage"; data: StreamUsageData };
+
+export type FileStreamingPhase =
+  | "connecting"
+  | "thinking"
+  | "translating"
+  | "validating"
+  | "cooldown"
+  | "completed"
+  | "idle";
+
+export interface FileStreamingState {
+  fileId: string;
+  fileName: string;
+  batchIndex: number;
+  totalBatches: number;
+  phase: FileStreamingPhase;
+  reasoningText: string;
+  accumulatedText: string;
+  tokenCount: number;
+  tokensPerSec: number;
+  startedAt: number;
+  lastChunkTime: number;
+}
+
 export interface OpenRouterCompletionResponse {
   content: string;
   prompt_tokens: number;
   completion_tokens: number;
   cached_tokens: number;
   cost: number;
-  model: string;
+  model?: string;
+}
+
+export interface BatchSettings {
+  linesPerBatch: number;
+  maxBatchContext: number;
+  retainBatchContext: number;
+  concurrency: number;
+  modelId: string;
+  temperature: number;
+  delayMs: number;
+  timeoutMinutes?: number;
+  maxBackoffSeconds?: number;
+  autoContinueUntilCompleted?: boolean;
+  translateExplicitOnly?: boolean;
+  overrideRawWithPreprocessed?: boolean;
+  selectedProviders?: string[];
+  reasoningEffort?: ReasoningEffort;
+  outputDir: string;
+  fileSuffix: string;
 }
 
 export type ReasoningEffort =
@@ -280,6 +338,66 @@ export interface ReasoningConfig {
   effort: ReasoningEffort;
   maxTokens?: number;
   exclude: boolean;
+}
+
+export interface OpenRouterModelPricing {
+  prompt: string;
+  completion: string;
+  image?: string;
+  request?: string;
+  input_cache_read?: string;
+  input_cache_write?: string;
+}
+
+export interface OpenRouterModelReasoning {
+  mandatory?: boolean;
+  default_enabled?: boolean;
+  supported_efforts?: string[];
+  default_effort?: string;
+  supports_max_tokens?: boolean;
+}
+
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  description?: string;
+  context_length: number;
+  pricing: OpenRouterModelPricing;
+  top_provider?: {
+    context_length?: number;
+    max_completion_tokens?: number;
+    is_moderated?: boolean;
+  };
+  supported_parameters?: string[];
+  architecture?: {
+    modality?: string;
+    tokenizer?: string;
+    instruct_type?: string | null;
+    reasoning?: OpenRouterModelReasoning | boolean;
+  };
+  reasoning?: OpenRouterModelReasoning;
+}
+
+export interface OpenRouterEndpoint {
+  name: string;
+  provider_name: string;
+  context_length?: number;
+  pricing?: OpenRouterModelPricing;
+  quantization?: string;
+  status?: number;
+  moderation?: boolean;
+}
+
+export interface OpenRouterKeyInfo {
+  label?: string;
+  usage: number;
+  limit: number | null;
+  limit_remaining?: number | null;
+  is_free_tier: boolean;
+  rate_limit?: {
+    requests: number;
+    interval: string;
+  };
 }
 
 

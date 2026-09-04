@@ -3,7 +3,8 @@ import { settingsManager } from "./settingsManager";
 import { translationManager } from "./translationManager";
 import { ocrService } from "./ocrService";
 import { logger } from "./loggerService";
-import { invoke } from "@tauri-apps/api/core";
+import { TauriBridge } from "./tauriBridge";
+import { executePreprocessingPipeline, cleanSpeakerName } from "../utils/textPreprocessor";
 
 class ShortcutService {
   private isInitialized = false;
@@ -23,26 +24,25 @@ class ShortcutService {
 
     // Subscribe to settings changes to auto-update shortcuts with 300ms debounce
     settingsManager.subscribe(() => {
-      if (this.debounceTimer) clearTimeout(this.debounceTimer);
-      this.debounceTimer = setTimeout(() => {
-        const general = settingsManager.getGeneral();
-        const currentKeys = {
-          lockKey: (general.hotkeyLockOverlay || "").trim(),
-          pauseKey: (general.hotkeyTogglePause || "").trim(),
-          ocrKey: (general.hotkeyOcrScan || "").trim(),
-          snippingKey: (general.hotkeyOcrSnipping || "").trim(),
-        };
+      const general = settingsManager.getGeneral();
+      const currentKeys = {
+        lockKey: general.hotkeyLockOverlay?.trim() || "",
+        pauseKey: general.hotkeyTogglePause?.trim() || "",
+        ocrKey: general.hotkeyOcrScan?.trim() || "",
+        snippingKey: general.hotkeyOcrSnipping?.trim() || "",
+      };
 
-        // Only reload if actual shortcut key combinations changed
-        if (
-          currentKeys.lockKey !== this.lastRegisteredKeys.lockKey ||
-          currentKeys.pauseKey !== this.lastRegisteredKeys.pauseKey ||
-          currentKeys.ocrKey !== this.lastRegisteredKeys.ocrKey ||
-          currentKeys.snippingKey !== this.lastRegisteredKeys.snippingKey
-        ) {
+      if (
+        currentKeys.lockKey !== this.lastRegisteredKeys.lockKey ||
+        currentKeys.pauseKey !== this.lastRegisteredKeys.pauseKey ||
+        currentKeys.ocrKey !== this.lastRegisteredKeys.ocrKey ||
+        currentKeys.snippingKey !== this.lastRegisteredKeys.snippingKey
+      ) {
+        if (this.debounceTimer) clearTimeout(this.debounceTimer);
+        this.debounceTimer = setTimeout(() => {
           this.reloadShortcuts();
-        }
-      }, 300);
+        }, 300);
+      }
     });
   }
 
@@ -75,7 +75,7 @@ class ShortcutService {
           await register(lockKey, async (event) => {
             if (event.state === "Pressed") {
               this.isOverlayClickThrough = !this.isOverlayClickThrough;
-              await invoke("set_overlay_click_through", { enable: this.isOverlayClickThrough });
+              await TauriBridge.setOverlayClickThrough(this.isOverlayClickThrough);
               logger.info(
                 "Shortcuts",
                 `Hotkey [${lockKey}] pressed: Overlay click-through set to ${this.isOverlayClickThrough}`
@@ -122,10 +122,15 @@ class ShortcutService {
                     ocrSettings.customPath || undefined,
                     ocrSettings.stability
                   );
-                  if (res.message) {
+                  const rawMsg = res.message || res.rawText || "";
+                  const cleanMsg = rawMsg ? executePreprocessingPipeline(rawMsg, "ocr").trim() : "";
+                  const cleanSpk = res.speaker ? cleanSpeakerName(executePreprocessingPipeline(res.speaker, "ocr")) : "";
+
+                  if (cleanMsg) {
                     translationManager.translate({
-                      speaker: res.speaker || undefined,
-                      message: res.message,
+                      speaker: cleanSpk || undefined,
+                      message: cleanMsg,
+                      sourceType: "ocr",
                     });
                   }
                 } catch (ocrErr) {
@@ -147,7 +152,7 @@ class ShortcutService {
             if (event.state === "Pressed") {
               logger.info("Shortcuts", `Hotkey [${snippingKey}] pressed: Opening OCR Snipping Tool.`);
               try {
-                await invoke("open_region_selector_overlay", { mode: "snipping" });
+                await TauriBridge.openRegionSelectorOverlay();
               } catch (e) {
                 logger.error("Shortcuts", `Failed to open OCR Snipping overlay: ${e}`);
               }
@@ -170,7 +175,9 @@ class ShortcutService {
     }
     try {
       await unregisterAll();
-    } catch {}
+    } catch (err) {
+      logger.debug("Shortcuts", `Error while unregistering shortcuts during dispose: ${err}`);
+    }
     this.isInitialized = false;
   }
 

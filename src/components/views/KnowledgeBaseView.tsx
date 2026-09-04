@@ -1,11 +1,15 @@
-import React, { useState } from "react";
+import React from "react";
 import { BookOpen, Database } from "lucide-react";
 import { GlossaryManagerView } from "./GlossaryManagerView";
 import { ScriptManagerView } from "./ScriptManagerView";
 import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
+import { useUIStore, KnowledgeBaseSubTab } from "../../stores/useUIStore";
+
+export type { KnowledgeBaseSubTab };
 
 export const KnowledgeBaseView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<"glossary" | "script">("glossary");
+  const activeTab = useUIStore((state) => state.knowledgeBaseSubTab);
+  const setActiveTab = useUIStore((state) => state.setKnowledgeBaseSubTab);
 
   const tabOptions: SegmentedOption<"glossary" | "script">[] = [
     {
