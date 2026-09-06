@@ -57,11 +57,11 @@ export const TauriBridge = {
   }): Promise<void> =>
     invoke("set_overlay_edit_mode", options),
 
-  openRegionSelectorOverlay: (monitorName?: string | null): Promise<void> =>
-    invoke("open_region_selector_overlay", { monitorName }),
+  openRegionSelectorOverlay: (monitorName?: string | null, mode?: string | null): Promise<void> =>
+    invoke("open_region_selector_overlay", { monitorName, mode }),
 
-  closeRegionSelectorOverlay: (): Promise<void> =>
-    invoke("close_region_selector_overlay"),
+  closeRegionSelectorOverlay: (restoreMain?: boolean): Promise<void> =>
+    invoke("close_region_selector_overlay", { restoreMain }),
 
   // Textractor Sidecar
   listTargetProcesses: (): Promise<TextractorProcessInfo[]> =>

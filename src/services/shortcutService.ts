@@ -152,7 +152,7 @@ class ShortcutService {
             if (event.state === "Pressed") {
               logger.info("Shortcuts", `Hotkey [${snippingKey}] pressed: Opening OCR Snipping Tool.`);
               try {
-                await TauriBridge.openRegionSelectorOverlay();
+                await ocrService.openRegionSelector(undefined, "snipping");
               } catch (e) {
                 logger.error("Shortcuts", `Failed to open OCR Snipping overlay: ${e}`);
               }

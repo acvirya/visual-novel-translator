@@ -234,12 +234,12 @@ export class OcrService {
   /**
    * Open the dedicated transparent fullscreen region selector window
    */
-  public static async openRegionSelector(monitorName?: string): Promise<void> {
+  public static async openRegionSelector(monitorName?: string, mode: "setup" | "snipping" = "setup"): Promise<void> {
     try {
       const channel = new BroadcastChannel("vn_ocr_channel");
-      channel.postMessage({ type: "OPEN_SELECTOR" });
+      channel.postMessage({ type: "OPEN_SELECTOR", mode });
       channel.close();
-      await TauriBridge.openRegionSelectorOverlay(monitorName || null);
+      await TauriBridge.openRegionSelectorOverlay(monitorName || null, mode);
     } catch (err) {
       console.warn("Failed to open region selector overlay:", err);
     }
@@ -248,9 +248,9 @@ export class OcrService {
   /**
    * Close the region selector window
    */
-  public static async closeRegionSelector(_restoreMain: boolean = true): Promise<void> {
+  public static async closeRegionSelector(restoreMain: boolean = true): Promise<void> {
     try {
-      await TauriBridge.closeRegionSelectorOverlay();
+      await TauriBridge.closeRegionSelectorOverlay(restoreMain);
     } catch (err) {
       console.warn("Failed to close region selector overlay:", err);
     }
