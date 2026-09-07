@@ -18,12 +18,13 @@ import { translateWithFreeMt } from "../../services/freeMtService";
 import { translateWithOpenRouter } from "../../services/openRouterService";
 import { scriptManagerService } from "../../services/scriptManagerService";
 import { LlmProviderRegistry } from "../../services/providers/llmProviderRegistry";
+import { settingsManager } from "../../services/settingsManager";
 
 export const ManualTranslateView: React.FC = () => {
   const [sourceText, setSourceText] = useState<string>("");
   const [translatedText, setTranslatedText] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(() => {
-    return localStorage.getItem("vn_selected_model") || "mt:google-translate";
+    return settingsManager.getSelectedModel();
   });
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
@@ -93,7 +94,7 @@ export const ManualTranslateView: React.FC = () => {
           const pCfg = LlmProviderRegistry.getProviderConfig(providerId);
           providerLabel = `${pDef?.name || "AI"} (${modelId})`;
           const apiKey = pCfg.apiKey || "";
-          const systemPrompt = localStorage.getItem("vn_live_system_prompt") || undefined;
+          const systemPrompt = undefined;
 
           const res = await translateWithOpenRouter({
             apiKey,

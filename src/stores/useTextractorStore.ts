@@ -45,6 +45,7 @@ export interface TextractorState {
   setDebounceMs: (ms: number) => void;
   setThreadSyncWaitMs: (ms: number) => void;
   setThreads: (threads: Map<number, TextractorThread> | ((prev: Map<number, TextractorThread>) => Map<number, TextractorThread>)) => void;
+  upsertThread: (handle: number, updater: (existing?: TextractorThread) => TextractorThread) => void;
   setCombinedThreadId: (id: number | null) => void;
   setMessageThreadId: (id: number | null) => void;
   setSpeakerThreadId: (id: number | null) => void;
@@ -54,6 +55,7 @@ export interface TextractorState {
   setInspectedThreadId: (id: number | null) => void;
   setMaxLogLines: (lines: number) => void;
   setThreadLogs: (logs: Map<number, TextractorMessage[]> | ((prev: Map<number, TextractorMessage[]>) => Map<number, TextractorMessage[]>)) => void;
+  appendThreadLog: (handle: number, msg: TextractorMessage) => void;
   setIgnoreDuplicateLines: (ignore: boolean) => void;
   setCharDeduplicationCount: (count: number) => void;
   setLoopDeduplication: (enabled: boolean) => void;
@@ -100,13 +102,13 @@ export const useTextractorStore = create<TextractorState>((set) => {
     speakerThreadId: null,
     capturedThreads: [],
     inspectedThreadId: null,
-    maxLogLines: textractorSettings.threadBufferSize || 100,
+    maxLogLines: textractorSettings.maxLogLines ?? textractorSettings.threadBufferSize ?? 100,
     threadLogs: new Map(),
-    ignoreDuplicateLines: true,
-    charDeduplicationCount: 0,
-    loopDeduplication: true,
-    stutterReduction: true,
-    autoForwardToOverlay: true,
+    ignoreDuplicateLines: textractorSettings.ignoreDuplicateLines ?? true,
+    charDeduplicationCount: textractorSettings.charDeduplicationCount ?? 0,
+    loopDeduplication: textractorSettings.loopDeduplication ?? true,
+    stutterReduction: textractorSettings.stutterReduction ?? true,
+    autoForwardToOverlay: textractorSettings.autoForwardToOverlay ?? true,
     latestSpeaker: "",
     latestMessage: "",
     latestRawMessage: "",
@@ -136,7 +138,15 @@ export const useTextractorStore = create<TextractorState>((set) => {
     setThreads: (threadsOrFn) =>
       set((state) => {
         const next = typeof threadsOrFn === "function" ? threadsOrFn(state.threads) : threadsOrFn;
-        return { threads: new Map(next) };
+        return { threads: next instanceof Map ? next : new Map(next) };
+      }),
+    upsertThread: (handle, updater) =>
+      set((state) => {
+        const existing = state.threads.get(handle);
+        const updated = updater(existing);
+        const next = new Map(state.threads);
+        next.set(handle, updated);
+        return { threads: next };
       }),
     setCombinedThreadId: (combinedThreadId) => set({ combinedThreadId }),
     setMessageThreadId: (messageThreadId) => set({ messageThreadId }),
@@ -169,7 +179,7 @@ export const useTextractorStore = create<TextractorState>((set) => {
       }),
     setInspectedThreadId: (inspectedThreadId) => set({ inspectedThreadId }),
     setMaxLogLines: (maxLogLines) => {
-      localStorage.setItem("vn_textractor_max_log_lines", String(maxLogLines));
+      settingsManager.updateTextractor({ maxLogLines });
       set({ maxLogLines });
     },
     setThreadLogs: (logsOrFn) =>
@@ -177,28 +187,36 @@ export const useTextractorStore = create<TextractorState>((set) => {
         const next = typeof logsOrFn === "function" ? logsOrFn(state.threadLogs) : logsOrFn;
         return { threadLogs: new Map(next) };
       }),
+    appendThreadLog: (handle, msg) =>
+      set((state) => {
+        const list = state.threadLogs.get(handle) || [];
+        const updated = [msg, ...list].slice(0, state.maxLogLines);
+        const next = new Map(state.threadLogs);
+        next.set(handle, updated);
+        return { threadLogs: next };
+      }),
     setIgnoreDuplicateLines: (ignoreDuplicateLines) => {
-      localStorage.setItem("vn_ignore_duplicate_lines", String(ignoreDuplicateLines));
+      settingsManager.updateTextractor({ ignoreDuplicateLines });
       set({ ignoreDuplicateLines });
     },
     setCharDeduplicationCount: (charDeduplicationCount) => {
       const count = Math.max(0, Math.min(10, charDeduplicationCount || 0));
-      localStorage.setItem("vn_textractor_char_dedup_count", String(count));
+      settingsManager.updateTextractor({ charDeduplicationCount: count });
       set({ charDeduplicationCount: count });
     },
     setLoopDeduplication: (loopDeduplication) => {
-      localStorage.setItem("vn_textractor_loop_dedup", String(loopDeduplication));
+      settingsManager.updateTextractor({ loopDeduplication });
       set({ loopDeduplication });
     },
     setStutterReduction: (stutterReduction) => {
-      localStorage.setItem("vn_textractor_stutter_reduction", String(stutterReduction));
+      settingsManager.updateTextractor({ stutterReduction });
       set({ stutterReduction });
     },
     setLatestSpeaker: (latestSpeaker) => set({ latestSpeaker }),
     setLatestMessage: (latestMessage) => set({ latestMessage }),
     setLatestRawMessage: (latestRawMessage) => set({ latestRawMessage }),
     setAutoForwardToOverlay: (autoForwardToOverlay) => {
-      localStorage.setItem("vn_textractor_auto_forward", String(autoForwardToOverlay));
+      settingsManager.updateTextractor({ autoForwardToOverlay });
       set({ autoForwardToOverlay });
     },
     resetTextractor: () =>

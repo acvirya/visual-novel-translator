@@ -1,6 +1,7 @@
 mod file_dialogs;
 mod free_mt;
 mod http;
+mod keyring_store;
 mod llm;
 mod ocr_commands;
 mod oneocr;
@@ -66,6 +67,9 @@ pub fn run() {
             llm::test_llm_connection,
             llm::cancel_all_llm_streams,
             llm::cancel_llm_stream,
+            keyring_store::get_secure_key,
+            keyring_store::set_secure_key,
+            keyring_store::delete_secure_key,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

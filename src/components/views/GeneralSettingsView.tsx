@@ -8,39 +8,33 @@ import { SUPPORTED_PROVIDERS } from "../../services/providers/llmProviderRegistr
 
 export const GeneralSettingsView: React.FC = () => {
   const toast = useToast();
-  const [sourceLang, setSourceLang] = useState<string>(() => {
-    return localStorage.getItem("vn_source_lang") || "ja";
-  });
-  const [targetLang, setTargetLang] = useState<string>(() => {
-    return localStorage.getItem("vn_target_lang") || "en";
-  });
+  const initialGeneral = settingsManager.getGeneral();
+  const [sourceLang, setSourceLang] = useState<string>(initialGeneral.sourceLang || "ja");
+  const [targetLang, setTargetLang] = useState<string>(initialGeneral.targetLang || "en");
 
-  const [hotkeyLockOverlay, setHotkeyLockOverlay] = useState<string>(() => {
-    return localStorage.getItem("vn_hotkey_lock") || "Ctrl+Shift+L";
-  });
-  const [hotkeyTogglePause, setHotkeyTogglePause] = useState<string>(() => {
-    return localStorage.getItem("vn_hotkey_pause") || "Ctrl+Shift+P";
-  });
-  const [hotkeyOcrScan, setHotkeyOcrScan] = useState<string>(() => {
-    return localStorage.getItem("vn_hotkey_ocr") || "Alt+O";
-  });
-  const [hotkeyOcrSnipping, setHotkeyOcrSnipping] = useState<string>(() => {
-    return localStorage.getItem("vn_hotkey_snipping") || "Alt+S";
-  });
+  const [hotkeyLockOverlay, setHotkeyLockOverlay] = useState<string>(initialGeneral.hotkeyLockOverlay || "Alt+L");
+  const [hotkeyTogglePause, setHotkeyTogglePause] = useState<string>(initialGeneral.hotkeyTogglePause || "Alt+P");
+  const [hotkeyOcrScan, setHotkeyOcrScan] = useState<string>(initialGeneral.hotkeyOcrScan || "Alt+O");
+  const [hotkeyOcrSnipping, setHotkeyOcrSnipping] = useState<string>(initialGeneral.hotkeyOcrSnipping || "Alt+S");
+
+  // Keep state updated when settings change externally
+  useEffect(() => {
+    return settingsManager.subscribe((settings) => {
+      setSourceLang(settings.general.sourceLang);
+      setTargetLang(settings.general.targetLang);
+      setHotkeyLockOverlay(settings.general.hotkeyLockOverlay);
+      setHotkeyTogglePause(settings.general.hotkeyTogglePause);
+      setHotkeyOcrScan(settings.general.hotkeyOcrScan);
+      setHotkeyOcrSnipping(settings.general.hotkeyOcrSnipping);
+    });
+  }, []);
 
   // Reset Confirmation Modal State
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
   const [resetCategory, setResetCategory] = useState<string>("all");
 
-  // Auto-Save Effect
+  // Auto-Save Effect exclusively through settingsManager
   useEffect(() => {
-    localStorage.setItem("vn_source_lang", sourceLang);
-    localStorage.setItem("vn_target_lang", targetLang);
-    localStorage.setItem("vn_hotkey_lock", hotkeyLockOverlay);
-    localStorage.setItem("vn_hotkey_pause", hotkeyTogglePause);
-    localStorage.setItem("vn_hotkey_ocr", hotkeyOcrScan);
-    localStorage.setItem("vn_hotkey_snipping", hotkeyOcrSnipping);
-
     settingsManager.updateGeneral({
       sourceLang,
       targetLang,

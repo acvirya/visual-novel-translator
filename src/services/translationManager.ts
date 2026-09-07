@@ -1,4 +1,4 @@
-import { translateWithFreeMt } from "./freeMtService";
+import { translateWithFreeMt, isGoogleTranslate, isDeepLFree } from "./freeMtService";
 import { translateWithOpenRouter, formatStructuredDialogueInput } from "./openRouterService";
 import { scriptManagerService } from "./scriptManagerService";
 import { settingsManager } from "./settingsManager";
@@ -6,6 +6,8 @@ import { overlayChannel } from "../utils/overlayChannel";
 import { TranslationLogItem } from "../types";
 import { logger } from "./loggerService";
 import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
+import { eventBus } from "./eventBus";
+import { ManagedService } from "./appContainer";
 
 export interface TranslatePipelineOptions {
   id?: number;
@@ -58,7 +60,8 @@ function generateLogId(prefix: string = "log"): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-class TranslationManager {
+class TranslationManager implements ManagedService {
+  public readonly id = "translationManager";
   private listeners: ((item: TranslationLogItem) => void)[] = [];
   private eventListeners: ((event: TranslationManagerEvent) => void)[] = [];
   private contextHistory: { user: string; assistant: string }[] = [];
@@ -67,6 +70,17 @@ class TranslationManager {
   private isPausedInternal = false;
   private dialogueSeq = 0;
   private lastUsedProviderId = "";
+
+  public init() {
+    // Lifecycle init if needed
+  }
+
+  public dispose() {
+    this.listeners = [];
+    this.eventListeners = [];
+    this.queue = [];
+    this.contextHistory = [];
+  }
 
   public subscribe(callback: (item: TranslationLogItem) => void) {
     this.listeners.push(callback);
@@ -83,12 +97,27 @@ class TranslationManager {
   }
 
   private emit(event: TranslationManagerEvent) {
+    // Emit through internal eventListeners
     for (const listener of this.eventListeners) {
       try {
         listener(event);
       } catch (err) {
         logger.error("TranslationManager", `Event listener error: ${err}`);
       }
+    }
+
+    // Emit to centralized eventBus (A3)
+    if (event.type === "log") {
+      eventBus.emit("translation:logged", event.item);
+    } else if (event.type === "paused") {
+      eventBus.emit("translation:paused", event.isPaused);
+    } else if (event.type === "sessionUsage") {
+      eventBus.emit("translation:sessionUsage", {
+        promptTokens: event.promptTokens,
+        completionTokens: event.completionTokens,
+        cachedTokens: event.cachedTokens,
+        cost: event.cost,
+      });
     }
   }
 
@@ -209,6 +238,7 @@ class TranslationManager {
         name: options.speaker ? { source: options.speaker, translated: options.speaker } : undefined,
         message: { source: cleanMsg, translated: `[Skipped - Exceeded ${maxChars} chars limit]` },
       };
+      this.notify(discardedItem);
 
       return Promise.resolve({
         success: false,
@@ -244,6 +274,7 @@ class TranslationManager {
             name: dropped.options.speaker ? { source: dropped.options.speaker, translated: dropped.options.speaker } : undefined,
             message: { source: dropped.options.message, translated: "[Skipped - Queue Overflow]" },
           };
+          this.notify(overflowItem);
           dropped.resolve({
             success: false,
             item: overflowItem,
@@ -305,11 +336,9 @@ class TranslationManager {
       }
     } finally {
       this.isProcessingQueue = false;
-      // Re-trigger if tasks were enqueued concurrently during completion
+      // Re-trigger via microtask to decouple call stack and prevent deep recursion
       if (this.queue.length > 0 && !this.isPausedInternal) {
-        queueMicrotask(() => {
-          this.processQueue();
-        });
+        queueMicrotask(() => this.processQueue());
       }
     }
   }
@@ -489,7 +518,7 @@ class TranslationManager {
     let isSuccess = false;
 
     // A. Google Translate Free MT
-    if (providerId === "mt:google-translate" || providerId === "google") {
+    if (isGoogleTranslate(providerId)) {
       providerLabel = "Google Translate (Free)";
       const res = await translateWithFreeMt({
         speaker: cleanSpk,
@@ -503,7 +532,7 @@ class TranslationManager {
       translatedMessage = res.translatedMessage || cleanMsg;
     }
     // B. DeepL Free MT
-    else if (providerId === "mt:deepl-free" || providerId === "deepl") {
+    else if (isDeepLFree(providerId)) {
       providerLabel = "DeepL Free";
       const res = await translateWithFreeMt({
         speaker: cleanSpk,

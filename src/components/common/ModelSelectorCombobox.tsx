@@ -23,6 +23,7 @@ import {
   Check,
 } from "lucide-react";
 import { ReasoningEffort } from "../../types";
+import { settingsManager } from "../../services/settingsManager";
 
 export interface ModelSelectorComboboxProps {
   selectedModelId: string;
@@ -164,8 +165,8 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
   const [searchFilter, setSearchFilter] = useState<string>("");
   const [starredIds, setStarredIds] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem("vn_starred_models");
-      return saved ? JSON.parse(saved) : INITIAL_STARRED_IDS;
+      const saved = settingsManager.getTranslation().starredModelIds;
+      return saved && saved.length > 0 ? saved : INITIAL_STARRED_IDS;
     } catch {
       return INITIAL_STARRED_IDS;
     }
@@ -213,7 +214,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
       updated = [...starredIds, modelId];
     }
     setStarredIds(updated);
-    localStorage.setItem("vn_starred_models", JSON.stringify(updated));
+    settingsManager.updateTranslation({ starredModelIds: updated });
   };
 
   const handleSelect = (modelId: string, effort?: ReasoningEffort) => {

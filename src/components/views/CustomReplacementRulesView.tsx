@@ -16,18 +16,12 @@ import {
   Info,
 } from "lucide-react";
 
+import { settingsManager } from "../../services/settingsManager";
+
 export const CustomReplacementRulesView: React.FC = () => {
   const [customRules, setCustomRules] = useState<PreprocessingStep[]>(() => {
-    try {
-      const saved = localStorage.getItem("vn_custom_replacement_rules") || localStorage.getItem("vn_preprocessing_pipeline");
-      if (saved) {
-        const parsed: PreprocessingStep[] = JSON.parse(saved);
-        return parsed.filter((r) => r.type === "custom_regex" || r.isCustom);
-      }
-      return [];
-    } catch {
-      return [];
-    }
+    const pipeline = settingsManager.getTextPreprocessing().pipeline || [];
+    return pipeline.filter((r) => r.type === "custom_regex" || r.isCustom);
   });
 
   // Test Sandbox State
@@ -37,9 +31,13 @@ export const CustomReplacementRulesView: React.FC = () => {
   );
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Save custom rules to localStorage and invalidate high-speed in-memory cache
+  // Save custom rules via settingsManager and invalidate high-speed in-memory cache
   useEffect(() => {
-    localStorage.setItem("vn_custom_replacement_rules", JSON.stringify(customRules));
+    const currentPipeline = settingsManager.getTextPreprocessing().pipeline || [];
+    const nonCustom = currentPipeline.filter((r) => r.type !== "custom_regex" && !r.isCustom);
+    settingsManager.updateTextPreprocessing({
+      pipeline: [...nonCustom, ...customRules],
+    });
     invalidateCustomRulesCache();
   }, [customRules]);
 

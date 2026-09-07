@@ -3,6 +3,26 @@ import { OcrEngineStatus, OcrRegion, OcrScanResult, OcrStabilityConfig } from ".
 import { useOcrStore } from "../stores/useOcrStore";
 import { executePreprocessingPipeline, cleanSpeakerName } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
+import { logger } from "./loggerService";
+
+/**
+ * Maps logical OCR region coordinates to physical screen coordinates using device pixel ratio (M5)
+ */
+function mapRegionsToPhysical(regions: OcrRegion[], dpr: number) {
+  return regions.map((r) => ({
+    id: r.id,
+    name: r.name,
+    role: r.role,
+    x: Math.round(r.x),
+    y: Math.round(r.y),
+    width: Math.round(r.width),
+    height: Math.round(r.height),
+    physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
+    physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
+    physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
+    physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
+  }));
+}
 
 export class OcrService {
   private static scanTimer: ReturnType<typeof setTimeout> | null = null;
@@ -25,7 +45,7 @@ export class OcrService {
         isAvailable: false,
         dllPath: "",
         modelPath: "",
-        error: String(err),
+        error: err?.message || "Failed to detect OneOCR",
       };
       useOcrStore.getState().setEngineStatus(errorStatus);
       return errorStatus;
@@ -41,25 +61,13 @@ export class OcrService {
     useOcrStore.getState().setIsLoadingSnapshot(true);
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1.0 : 1.0;
     try {
-      const mappedRegions = regions.map((r) => ({
-        id: r.id,
-        name: r.name,
-        role: r.role,
-        x: Math.round(r.x),
-        y: Math.round(r.y),
-        width: Math.round(r.width),
-        height: Math.round(r.height),
-        physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
-        physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
-        physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
-        physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
-      }));
+      const mappedRegions = mapRegionsToPhysical(regions, dpr);
       const previews = await TauriBridge.captureRegionsPreview(mappedRegions);
       const res = previews || {};
       useOcrStore.getState().setRegionSnapshots(res);
       return res;
     } catch (err) {
-      console.warn("Failed to capture region previews:", err);
+      logger.warn("OCR", `Failed to capture region previews: ${err}`);
       return {};
     } finally {
       useOcrStore.getState().setIsLoadingSnapshot(false);
@@ -77,19 +85,7 @@ export class OcrService {
   ): Promise<OcrScanResult> {
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1.0 : 1.0;
     try {
-      const mappedRegions = regions.map((r) => ({
-        id: r.id,
-        name: r.name,
-        role: r.role,
-        x: Math.round(r.x),
-        y: Math.round(r.y),
-        width: Math.round(r.width),
-        height: Math.round(r.height),
-        physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
-        physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
-        physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
-        physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
-      }));
+      const mappedRegions = mapRegionsToPhysical(regions, dpr);
       const result = await TauriBridge.runOneOcrScan(
         mappedRegions,
         Math.max(10, Math.min(300, scalePercent)),
@@ -167,7 +163,8 @@ export class OcrService {
     }
 
     // Skip scanning if no regions are configured (M9)
-    if (!store.regions || store.regions.length === 0) {
+    const regionsSnapshot = (store.regions || []).map((r) => ({ ...r }));
+    if (regionsSnapshot.length === 0) {
       this.scheduleNextScan(1000, sessionId);
       return;
     }
@@ -184,7 +181,7 @@ export class OcrService {
       };
 
       const result = await this.runOneOcrScan(
-        store.regions,
+        regionsSnapshot,
         store.scalePercent,
         store.customPath || undefined,
         stabilityConfig
@@ -204,7 +201,7 @@ export class OcrService {
       const cleanMsg = rawMsg ? executePreprocessingPipeline(rawMsg, "ocr").trim() : "";
 
       const hasText = cleanMsg.length > 0;
-      const isSettled = result.isSettled;
+      const isSettled = result.isSettled !== false;
       const hasChanged = cleanSpk !== this.lastSentText.speaker || cleanMsg !== this.lastSentText.message;
 
       if (hasText && isSettled && hasChanged) {

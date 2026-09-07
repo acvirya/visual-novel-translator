@@ -39,6 +39,8 @@ export {
   getActiveStylePresetId,
   getActiveStyleInstructions,
   buildCompleteSystemPrompt,
+  getDefaultLiveSystemPrompt,
+  getDefaultBatchSystemPrompt,
   DEFAULT_LIVE_SYSTEM_PROMPT,
   DEFAULT_BATCH_SYSTEM_PROMPT,
   formatStructuredDialogueInput,
@@ -80,12 +82,6 @@ export interface OpenRouterTestResult {
 
 export const OPENROUTER_STORAGE_KEYS = {
   CACHED_MODELS: "vn_cached_openrouter_models",
-  USER_STYLE_PRESETS: "vn_user_style_presets_v1",
-  ACTIVE_STYLE_PRESET_ID: "vn_active_style_preset_id",
-  ACTIVE_STYLE_INSTRUCTIONS: "vn_active_style_instructions",
-  GLOSSARY_ENTRIES: "vn_glossary_entries_v1",
-  SOURCE_LANG: "vn_source_lang",
-  TARGET_LANG: "vn_target_lang",
 } as const;
 
 let cachedModels: OpenRouterModel[] | null = null;

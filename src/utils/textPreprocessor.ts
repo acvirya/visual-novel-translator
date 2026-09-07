@@ -78,6 +78,19 @@ export function isStepApplicableForSource(
 }
 
 /**
+ * Detects potentially dangerous regex patterns vulnerable to Catastrophic Backtracking / ReDoS (M10)
+ * e.g. nested quantifiers like (a+)+, ([0-9]+)*, (a|b+)+, (.*)*
+ */
+export function isPotentiallyVulnerableRegex(pattern: string): boolean {
+  if (!pattern) return false;
+  // Guard against nested quantifiers e.g. (a+)+, (a*)*, ([a-z]+)+
+  const nestedQuantifiers = /\([^()]*(?:[+*]|\{\d+,?\d*\})[^()]*\)(?:[+*]|\{\d+,?\d*\})/;
+  // Guard against repeated groups with alternation like (a|a)+ or (a|b+)+
+  const alternationRepetition = /\((?:[^()|]+(?:\|[^()|]+)+)\)(?:[+*]|\{\d+,?\d*\})/;
+  return nestedQuantifiers.test(pattern) || alternationRepetition.test(pattern);
+}
+
+/**
  * Execute a single preprocessing step on input text
  */
 export function applyPreprocessingStep(text: string, step: PreprocessingStep): string {
@@ -223,9 +236,9 @@ export function applyPreprocessingStep(text: string, step: PreprocessingStep): s
       if (pattern && pattern.length <= 250) {
         try {
           if (opts.isRegex) {
-            // Guard against common catastrophic backtracking patterns like (a+)+ or ([a-z]+)+
-            const hasCatastrophicPattern = /\([^()]+\+[()]+\+|\([^()]+\*[()]+\*/.test(pattern);
-            if (!hasCatastrophicPattern) {
+            // Guard against common catastrophic backtracking / ReDoS patterns (M10)
+            const isVulnerable = isPotentiallyVulnerableRegex(pattern);
+            if (!isVulnerable) {
               const flags = opts.ignoreCase ? "gi" : "g";
               const regex = new RegExp(pattern, flags);
               result = result.replace(regex, replacement);
@@ -281,6 +294,15 @@ export function executePipelineWithTrace(
 }
 
 let cachedCustomRules: PreprocessingStep[] | null = null;
+let customRulesProvider: (() => PreprocessingStep[] | undefined) | null = null;
+
+/**
+ * Register dynamic provider for active preprocessing pipeline (e.g. from SettingsManager) (M17)
+ */
+export function registerCustomRulesProvider(provider: () => PreprocessingStep[] | undefined): void {
+  customRulesProvider = provider;
+  cachedCustomRules = null;
+}
 
 /**
  * Invalidate cached custom rules (called when settings or custom rules are modified)
@@ -290,28 +312,27 @@ export function invalidateCustomRulesCache(): void {
 }
 
 /**
- * Retrieve active custom preprocessing rules from in-memory cache (or initial localStorage load)
+ * Retrieve active custom preprocessing rules from in-memory cache or registered settings provider (M17)
  */
 export function getCustomPreprocessingRules(): PreprocessingStep[] {
   if (cachedCustomRules !== null) {
     return cachedCustomRules;
   }
-  try {
-    // 1. Check canonical universal settings first
-    if (typeof localStorage !== "undefined") {
-      const rawSettings = localStorage.getItem("vn_translator_universal_settings_v2");
-      if (rawSettings) {
-        const parsed = JSON.parse(rawSettings);
-        const pipeline = parsed?.textPreprocessing?.pipeline;
-        if (Array.isArray(pipeline)) {
-          cachedCustomRules = pipeline.filter(
-            (r: PreprocessingStep) => r && r.isEnabled && (r.type === "custom_regex" || r.isCustom)
-          );
-          return cachedCustomRules;
-        }
-      }
 
-      // 2. Fallback to legacy keys
+  try {
+    // 1. Preferred: Read from registered settings provider
+    if (customRulesProvider) {
+      const pipeline = customRulesProvider();
+      if (Array.isArray(pipeline)) {
+        cachedCustomRules = pipeline.filter(
+          (r: PreprocessingStep) => r && r.isEnabled && (r.type === "custom_regex" || r.isCustom)
+        );
+        return cachedCustomRules;
+      }
+    }
+
+    // 2. Safe fallback if provider not yet attached
+    if (typeof localStorage !== "undefined") {
       const customRulesJson =
         localStorage.getItem("vn_custom_replacement_rules") ||
         localStorage.getItem("vn_preprocessing_pipeline");
@@ -447,16 +468,25 @@ export function cleanSpeakerName(rawSpeaker: string): string {
     result = "";
   }
 
-  if (speakerCleanCache.size >= MAX_SPEAKER_CACHE) {
-    let count = 0;
-    for (const key of speakerCleanCache.keys()) {
-      speakerCleanCache.delete(key);
-      if (++count >= 50) break;
+  if (rawSpeaker.length <= 80) {
+    if (speakerCleanCache.size >= MAX_SPEAKER_CACHE) {
+      let count = 0;
+      for (const key of speakerCleanCache.keys()) {
+        speakerCleanCache.delete(key);
+        if (++count >= 50) break;
+      }
     }
+    speakerCleanCache.set(rawSpeaker, result);
   }
-  speakerCleanCache.set(rawSpeaker, result);
 
   return result;
+}
+
+/**
+ * Clear the speaker name normalizer cache
+ */
+export function clearSpeakerCleanCache(): void {
+  speakerCleanCache.clear();
 }
 
 /**

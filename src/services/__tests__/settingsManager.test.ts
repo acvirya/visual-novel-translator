@@ -54,7 +54,7 @@ describe("SettingsManager & Single Source of Truth", () => {
     expect(batch.concurrency).toBe(4);
   });
 
-  it("manages LLM providers through LlmProviderRegistry uniformly", () => {
+  it("manages LLM providers through LlmProviderRegistry uniformly with secure storage", async () => {
     const customConfig = {
       id: "deepseek",
       apiKey: "sk-test-deepseek-12345",
@@ -71,7 +71,7 @@ describe("SettingsManager & Single Source of Truth", () => {
       ],
     };
 
-    LlmProviderRegistry.saveProviderConfig(customConfig);
+    await settingsManager.saveLlmProvider(customConfig);
 
     const loaded = LlmProviderRegistry.getProviderConfig("deepseek");
     expect(loaded.apiKey).toBe("sk-test-deepseek-12345");
@@ -83,15 +83,17 @@ describe("SettingsManager & Single Source of Truth", () => {
     const fromMgr = settingsManager.getLlmProvider("deepseek");
     expect(fromMgr.apiKey).toBe("sk-test-deepseek-12345");
 
-    // Verify localStorage has encrypted key (not plain text)
+    // Flush any debounced saves
+    settingsManager.flush();
+
+    // Verify localStorage NEVER stores secrets (apiKey is purged/empty in storage)
     const raw = localStorage.getItem("vn_translator_universal_settings_v2");
     expect(raw).toBeDefined();
     const parsed = JSON.parse(raw!);
-    expect(parsed.llmProviders.deepseek.apiKey).toMatch(/^enc:v1:/);
-    expect(parsed.llmProviders.deepseek.apiKey).not.toBe("sk-test-deepseek-12345");
+    expect(parsed.llmProviders.deepseek.apiKey).toBe("");
   });
 
-  it("transparently decrypts legacy plain text keys and encrypts on subsequent save", () => {
+  it("transparently migrates legacy stored keys to secure storage and clears them from localStorage", async () => {
     // Simulate legacy storage with plain text API key
     const legacySettings = {
       llmProviders: {
@@ -100,16 +102,17 @@ describe("SettingsManager & Single Source of Truth", () => {
     };
     localStorage.setItem("vn_translator_universal_settings_v2", JSON.stringify(legacySettings));
 
-    // Reload settingsManager from localStorage
+    // Reload settingsManager from localStorage and wait for secure storage init
     settingsManager.reloadFromStorage();
+    await settingsManager.initSecureStorage();
 
-    // Verify it was decrypted into memory
+    // Verify it was migrated into memory
     expect(settingsManager.getOpenRouterApiKey()).toBe("sk-or-v1-legacy-plain-key-123");
 
-    // After updating anything, verify it gets saved in encrypted form
-    settingsManager.updateGeneral({ sourceLang: "ja" });
+    // Flush and verify localStorage no longer contains the secret
+    settingsManager.flush();
     const raw = localStorage.getItem("vn_translator_universal_settings_v2");
     const parsed = JSON.parse(raw!);
-    expect(parsed.llmProviders.openrouter.apiKey).toMatch(/^enc:v1:/);
+    expect(parsed.llmProviders.openrouter.apiKey).toBe("");
   });
 });

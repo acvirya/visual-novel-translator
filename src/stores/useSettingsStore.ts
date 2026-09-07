@@ -9,6 +9,7 @@ import {
   LogSettings,
   settingsManager,
 } from "../services/settingsManager";
+import { StoredProviderConfig } from "../services/providers/llmProviderRegistry";
 import { BatchSettings } from "../types";
 
 export interface SettingsStoreState {
@@ -20,19 +21,33 @@ export interface SettingsStoreState {
   updateTextPreprocessing: (tp: Partial<TextPreprocessingSettings>) => void;
   updateLogs: (logs: Partial<LogSettings>) => void;
   updateBatch: (batch: Partial<BatchSettings>) => void;
+  updateLlmProvider: (config: StoredProviderConfig) => Promise<void>;
+  setLlmApiKey: (providerId: string, apiKey: string) => Promise<void>;
   resetSettings: (category?: keyof AppSettings) => void;
 }
 
 let isSubscribed = false;
+let unsubscribeSettingsManager: (() => void) | null = null;
 
-export const useSettingsStore = create<SettingsStoreState>((set) => {
-  // Single idempotent subscription: settingsManager.notifyListeners() will automatically update this store
+export function setupSettingsStoreSubscription(set: (state: Partial<SettingsStoreState>) => void) {
   if (!isSubscribed) {
     isSubscribed = true;
-    settingsManager.subscribe((newSettings) => {
+    unsubscribeSettingsManager = settingsManager.subscribe((newSettings) => {
       set({ settings: newSettings });
     });
   }
+}
+
+export function cleanupSettingsStoreSubscription() {
+  if (unsubscribeSettingsManager) {
+    unsubscribeSettingsManager();
+    unsubscribeSettingsManager = null;
+    isSubscribed = false;
+  }
+}
+
+export const useSettingsStore = create<SettingsStoreState>((set) => {
+  setupSettingsStoreSubscription(set);
 
   return {
     settings: settingsManager.getSettings(),
@@ -56,6 +71,12 @@ export const useSettingsStore = create<SettingsStoreState>((set) => {
     },
     updateBatch: (partial) => {
       settingsManager.updateBatch(partial);
+    },
+    updateLlmProvider: async (config) => {
+      await settingsManager.saveLlmProvider(config);
+    },
+    setLlmApiKey: async (providerId, apiKey) => {
+      await settingsManager.setLlmApiKey(providerId, apiKey);
     },
     resetSettings: (category) => {
       settingsManager.resetSettings(category);

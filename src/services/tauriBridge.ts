@@ -212,4 +212,14 @@ export const TauriBridge = {
 
   openFileInDefaultApp: (path: string): Promise<void> =>
     invoke("open_file_in_default_app", { path }),
+
+  // OS-Level Secure Key Storage
+  getSecureKey: (providerId: string): Promise<string | null> =>
+    invoke<string | null>("get_secure_key", { providerId }),
+
+  setSecureKey: (providerId: string, keyVal: string): Promise<void> =>
+    invoke("set_secure_key", { providerId, keyVal }),
+
+  deleteSecureKey: (providerId: string): Promise<void> =>
+    invoke("delete_secure_key", { providerId }),
 };

@@ -2,15 +2,19 @@ import React, { useState, useEffect } from "react";
 import { Trash2, Search, Filter, Terminal } from "lucide-react";
 import { logger, AppLogEntry } from "../../services/loggerService";
 
+import { settingsManager } from "../../services/settingsManager";
+
 export const LogsView: React.FC = () => {
   const [logs, setLogs] = useState<AppLogEntry[]>(() => logger.getLogs());
   const [filterLevel, setFilterLevel] = useState<string>(() => {
-    return localStorage.getItem("vn_logs_filter_level") || "ALL";
+    const saved = settingsManager.getLogs().filterLevel;
+    return saved === "all" ? "ALL" : (saved?.toUpperCase() || "ALL");
   });
   const [search, setSearch] = useState<string>("");
 
   useEffect(() => {
-    localStorage.setItem("vn_logs_filter_level", filterLevel);
+    const mapped = (filterLevel.toLowerCase() === "all" ? "all" : filterLevel.toLowerCase()) as "all" | "info" | "warn" | "error";
+    settingsManager.updateLogs({ filterLevel: mapped });
   }, [filterLevel]);
 
   // Subscribe to real-time logs from loggerService

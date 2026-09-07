@@ -1,25 +1,13 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { TauriBridge } from "../../services/tauriBridge";
 import {
   Play,
-  Plus,
-  Trash2,
-  FolderOpen,
   FileCode,
   Square,
   Sliders,
-  Sparkles,
-  Search,
-  CheckCircle2,
-  Clock,
-  RefreshCw,
-  Activity,
   SlidersHorizontal,
   ExternalLink,
-  ChevronLeft,
-  ChevronRight,
   AlertTriangle,
-  Coins,
   Brain,
 } from "lucide-react";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
@@ -44,8 +32,11 @@ import {
 } from "../../services/batchTranslateService";
 import { useBatchStore } from "../../stores/useBatchStore";
 import { useUIStore } from "../../stores/useUIStore";
-import { BatchStreamBanner } from "./BatchStreamBanner";
+import { BatchStatsBadges } from "./batch/BatchStatsBadges";
+import { BatchQueuedFilesTable } from "./batch/BatchQueuedFilesTable";
+import { BatchPreviewTable } from "./batch/BatchPreviewTable";
 import { ReasoningEffort } from "../../types";
+import { settingsManager } from "../../services/settingsManager";
 
 export interface BatchTranslateViewProps {
   onOpenPreprocessingSettings?: () => void;
@@ -74,14 +65,10 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   const activeTab = useUIStore((state) => state.batchSubTab);
   const setActiveTab = useUIStore((state) => state.setBatchSubTab);
 
-  // Settings State
-  const [selectedEngine, setSelectedEngine] = useState<string>(() => {
-    return localStorage.getItem("vn_batch_selected_model") || "openai/gpt-4o-mini";
-  });
-  const [selectedProviders, setSelectedProviders] = useState<string[]>(() => {
-    const initModel = localStorage.getItem("vn_batch_selected_model") || "openai/gpt-4o-mini";
-    return getSelectedModelProviders(initModel);
-  });
+  // Settings State from Centralized settingsManager
+  const initialBatch = settingsManager.getBatch();
+  const [selectedEngine, setSelectedEngine] = useState<string>(() => initialBatch.modelId || "openai/gpt-4o-mini");
+  const [selectedProviders, setSelectedProviders] = useState<string[]>(() => getSelectedModelProviders(initialBatch.modelId || "openai/gpt-4o-mini"));
   const [modelEndpoints, setModelEndpoints] = useState<OpenRouterEndpoint[]>([]);
 
   useEffect(() => {
@@ -106,80 +93,52 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     return getModelReasoningCapabilities(selectedEngine);
   }, [selectedEngine]);
 
-  const [linesPerBatch, setLinesPerBatch] = useState<number>(() => {
-    const val = parseInt(localStorage.getItem("vn_batch_lines_per_batch") || "10", 10);
-    return isNaN(val) || val < 1 ? 10 : val;
-  });
-  const [linesPerBatchInput, setLinesPerBatchInput] = useState<string>(String(linesPerBatch));
+  const [linesPerBatch, setLinesPerBatch] = useState<number>(() => initialBatch.linesPerBatch || 10);
+  const [linesPerBatchInput, setLinesPerBatchInput] = useState<string>(String(initialBatch.linesPerBatch || 10));
 
-  const [maxBatchContext, setMaxBatchContext] = useState<number>(() => {
-    const raw = localStorage.getItem("vn_batch_max_batch_context") ?? localStorage.getItem("vn_batch_max_context_lines");
-    const val = raw !== null ? parseInt(raw, 10) : 2;
-    return isNaN(val) || val < 0 ? 2 : val;
-  });
-  const [maxBatchContextInput, setMaxBatchContextInput] = useState<string>(String(maxBatchContext));
+  const [maxBatchContext, setMaxBatchContext] = useState<number>(() => initialBatch.maxBatchContext ?? 2);
+  const [maxBatchContextInput, setMaxBatchContextInput] = useState<string>(String(initialBatch.maxBatchContext ?? 2));
 
-  const [retainBatchContext, setRetainBatchContext] = useState<number>(() => {
-    const raw = localStorage.getItem("vn_batch_retain_batch_context") ?? localStorage.getItem("vn_batch_retain_context_lines");
-    const val = raw !== null ? parseInt(raw, 10) : 1;
-    return isNaN(val) || val < 0 ? 1 : val;
-  });
-  const [retainBatchContextInput, setRetainBatchContextInput] = useState<string>(String(retainBatchContext));
+  const [retainBatchContext, setRetainBatchContext] = useState<number>(() => initialBatch.retainBatchContext ?? 1);
+  const [retainBatchContextInput, setRetainBatchContextInput] = useState<string>(String(initialBatch.retainBatchContext ?? 1));
 
-  const [concurrency, setConcurrency] = useState<number>(() => {
-    const val = parseInt(localStorage.getItem("vn_batch_concurrency") || "2", 10);
-    return isNaN(val) || val < 1 ? 2 : val;
-  });
-  const [concurrencyInput, setConcurrencyInput] = useState<string>(String(concurrency));
+  const [concurrency, setConcurrency] = useState<number>(() => initialBatch.concurrency || 2);
+  const [concurrencyInput, setConcurrencyInput] = useState<string>(String(initialBatch.concurrency || 2));
 
-  const [delayMs, setDelayMs] = useState<number>(() => {
-    const val = parseInt(localStorage.getItem("vn_batch_delay_ms") || "300", 10);
-    return isNaN(val) || val < 0 ? 300 : val;
-  });
-  const [delayMsInput, setDelayMsInput] = useState<string>(String(delayMs));
+  const [delayMs, setDelayMs] = useState<number>(() => initialBatch.delayMs ?? 300);
+  const [delayMsInput, setDelayMsInput] = useState<string>(String(initialBatch.delayMs ?? 300));
 
-  const [timeoutMinutes, setTimeoutMinutes] = useState<number>(() => {
-    const val = parseInt(localStorage.getItem("vn_batch_timeout_minutes") || "10", 10);
-    return isNaN(val) || val < 1 ? 10 : val;
-  });
-  const [timeoutMinutesInput, setTimeoutMinutesInput] = useState<string>(String(timeoutMinutes));
+  const [timeoutMinutes, setTimeoutMinutes] = useState<number>(() => initialBatch.timeoutMinutes || 10);
+  const [timeoutMinutesInput, setTimeoutMinutesInput] = useState<string>(String(initialBatch.timeoutMinutes || 10));
 
-  const [maxBackoffSeconds, setMaxBackoffSeconds] = useState<number>(() => {
-    const val = parseInt(localStorage.getItem("vn_batch_max_backoff_seconds") || "30", 10);
-    return isNaN(val) || val < 1 ? 30 : val;
-  });
-  const [maxBackoffSecondsInput, setMaxBackoffSecondsInput] = useState<string>(String(maxBackoffSeconds));
+  const [maxBackoffSeconds, setMaxBackoffSeconds] = useState<number>(() => initialBatch.maxBackoffSeconds ?? 30);
+  const [maxBackoffSecondsInput, setMaxBackoffSecondsInput] = useState<string>(String(initialBatch.maxBackoffSeconds ?? 30));
 
-  const [autoContinue, setAutoContinue] = useState<boolean>(() => {
-    return localStorage.getItem("vn_batch_auto_continue") !== "false";
-  });
-  const [translateExplicitOnly, setTranslateExplicitOnly] = useState<boolean>(() => {
-    return localStorage.getItem("vn_batch_translate_explicit_only") === "true";
-  });
-  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(() => {
-    return (localStorage.getItem("vn_batch_reasoning_effort") as any) || "default";
-  });
-  const [outputDir, setOutputDir] = useState<string>(() => {
-    return localStorage.getItem("vn_batch_output_dir") || "";
-  });
-  const [fileSuffix, setFileSuffix] = useState<string>("_translated");
+  const [autoContinue, setAutoContinue] = useState<boolean>(() => initialBatch.autoContinueUntilCompleted ?? true);
+  const [translateExplicitOnly, setTranslateExplicitOnly] = useState<boolean>(() => initialBatch.translateExplicitOnly ?? false);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(() => initialBatch.reasoningEffort || "default");
+  const [outputDir, setOutputDir] = useState<string>(() => initialBatch.outputDir || "");
+  const [fileSuffix, setFileSuffix] = useState<string>(() => initialBatch.fileSuffix || "_translated");
 
-  // Sync settings to localStorage
+  // Sync settings to Centralized settingsManager
   useEffect(() => {
-    localStorage.setItem("vn_batch_selected_model", selectedEngine);
     setSelectedProviders(getSelectedModelProviders(selectedEngine));
-    localStorage.setItem("vn_batch_lines_per_batch", String(linesPerBatch));
-    localStorage.setItem("vn_batch_max_batch_context", String(maxBatchContext));
-    localStorage.setItem("vn_batch_retain_batch_context", String(retainBatchContext));
-    localStorage.setItem("vn_batch_concurrency", String(concurrency));
-    localStorage.setItem("vn_batch_delay_ms", String(delayMs));
-    localStorage.setItem("vn_batch_timeout_minutes", String(timeoutMinutes));
-    localStorage.setItem("vn_batch_max_backoff_seconds", String(maxBackoffSeconds));
-    localStorage.setItem("vn_batch_auto_continue", String(autoContinue));
-    localStorage.setItem("vn_batch_translate_explicit_only", String(translateExplicitOnly));
-    localStorage.setItem("vn_batch_reasoning_effort", reasoningEffort);
-    localStorage.setItem("vn_batch_output_dir", outputDir);
-  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, maxBackoffSeconds, autoContinue, translateExplicitOnly, reasoningEffort, outputDir]);
+    settingsManager.updateBatch({
+      modelId: selectedEngine,
+      linesPerBatch,
+      maxBatchContext,
+      retainBatchContext,
+      concurrency,
+      delayMs,
+      timeoutMinutes,
+      maxBackoffSeconds,
+      autoContinueUntilCompleted: autoContinue,
+      translateExplicitOnly,
+      reasoningEffort,
+      outputDir,
+      fileSuffix,
+    });
+  }, [selectedEngine, linesPerBatch, maxBatchContext, retainBatchContext, concurrency, delayMs, timeoutMinutes, maxBackoffSeconds, autoContinue, translateExplicitOnly, reasoningEffort, outputDir, fileSuffix]);
 
   // Auto-select first file if none selected
   useEffect(() => {
@@ -199,10 +158,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     return () => unsubscribe();
   }, []);
 
-  const totalLines = queuedFiles.reduce((acc, f) => acc + f.totalLines, 0);
-  const completedLines = queuedFiles.reduce((acc, f) => acc + f.items.filter((it) => isGenuinelyTranslated(it)).length, 0);
-  const explicitLines = queuedFiles.reduce((acc, f) => acc + f.items.filter((it) => isExplicitTagged(it)).length, 0);
-  const progressPercent = totalLines > 0 ? Math.min(100, Math.round((completedLines / totalLines) * 100)) : 0;
 
   // Check if there are remaining lines available to translate based on active mode
   const hasTranslatableLines = useMemo(() => {
@@ -220,59 +175,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     return queuedFiles.find((f) => f.id === selectedFileId) || queuedFiles[0] || null;
   }, [queuedFiles, selectedFileId]);
 
-  // Filtered rows for active file
-  const displayedItems = useMemo(() => {
-    if (!activeFile) return [];
-    let list = activeFile.items;
-
-    if (statusFilter === "completed") {
-      list = list.filter((it) => isGenuinelyTranslated(it) && !isExplicitTagged(it));
-    } else if (statusFilter === "untranslated") {
-      list = list.filter((it) => !isGenuinelyTranslated(it));
-    } else if (statusFilter === "explicit") {
-      list = list.filter((it) => isExplicitTagged(it));
-    }
-
-    if (searchFilter.trim()) {
-      const q = searchFilter.toLowerCase();
-      list = list.filter(
-        (it) =>
-          (it.originalSpeaker && it.originalSpeaker.toLowerCase().includes(q)) ||
-          (it.translatedSpeaker && it.translatedSpeaker.toLowerCase().includes(q)) ||
-          it.originalMessage.toLowerCase().includes(q) ||
-          (it.translatedMessage && it.translatedMessage.toLowerCase().includes(q)) ||
-          String(it.id).includes(q)
-      );
-    }
-
-    return list;
-  }, [activeFile, statusFilter, searchFilter]);
-
-  const PAGE_SIZE = 100;
-  const [currentPage, setCurrentPage] = useState(1);
-  const isFirstPageMount = useRef(true);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [selectedFileId, statusFilter, searchFilter]);
-
-  // Auto-scroll to top when page changes
-  useEffect(() => {
-    if (isFirstPageMount.current) {
-      isFirstPageMount.current = false;
-      return;
-    }
-    const mainContainer = document.querySelector(".view-container");
-    if (mainContainer) {
-      mainContainer.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  }, [currentPage]);
-
-  const totalPages = Math.max(1, Math.ceil(displayedItems.length / PAGE_SIZE));
-  const pagedItems = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return displayedItems.slice(start, start + PAGE_SIZE);
-  }, [displayedItems, currentPage]);
 
   const handleAddFiles = async () => {
     try {
@@ -502,11 +404,9 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 setSelectedEngine(id);
                 const e = eff || "default";
                 setReasoningEffort(e);
-                localStorage.setItem("vn_batch_reasoning_effort", e);
               }}
               onSelectReasoningEffort={(eff) => {
                 setReasoningEffort(eff);
-                localStorage.setItem("vn_batch_reasoning_effort", eff);
               }}
               disabled={isRunning}
               width="240px"
@@ -574,59 +474,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
           </div>
         </div>
 
-        {/* Right Side: Model Pricing Badge & Incremental Session Statistics Badge */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-          {/* Model Pricing Badge (Input / Output / Cache per 1M tokens) */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              backgroundColor: "var(--bg-app)",
-              padding: "4px 10px",
-              borderRadius: "20px",
-              border: "1px solid var(--border-subtle)",
-              fontSize: "11px",
-              flexWrap: "wrap",
-            }}
-            title="Model Pricing per 1 Million tokens (Input, Output, and Prompt Cache) based on selected endpoints"
-          >
-            <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
-              <Coins size={12} color="var(--accent-primary)" /> Pricing / 1M:
-            </span>
-            <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{pricingSummary.input}</strong></span>
-            <span style={{ color: "var(--border-subtle)" }}>•</span>
-            <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{pricingSummary.output}</strong></span>
-            <span style={{ color: "var(--border-subtle)" }}>•</span>
-            <span>Cache: <strong style={{ color: "var(--accent-success)" }}>{pricingSummary.cache}</strong></span>
-          </div>
-
-          {/* Session Usage Badge */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              backgroundColor: "var(--bg-app)",
-              padding: "4px 10px",
-              borderRadius: "20px",
-              border: "1px solid var(--border-subtle)",
-              fontSize: "11px",
-              flexWrap: "wrap",
-            }}
-          >
-            <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
-              <Activity size={12} color="var(--accent-primary)" /> Session Tokens:
-            </span>
-            <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{sessionStats.promptTokens.toLocaleString()}</strong></span>
-            <span style={{ color: "var(--border-subtle)" }}>•</span>
-            <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{sessionStats.completionTokens.toLocaleString()}</strong></span>
-            <span style={{ color: "var(--border-subtle)" }}>•</span>
-            <span>Cached: <strong style={{ color: "var(--accent-success)" }}>{sessionStats.cachedTokens.toLocaleString()}</strong></span>
-            <span style={{ color: "var(--border-subtle)" }}>•</span>
-            <span>Cost: <strong style={{ color: "#38ef7d" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong></span>
-          </div>
-        </div>
+        <BatchStatsBadges pricingSummary={pricingSummary} sessionStats={sessionStats} />
       </div>
 
       {/* ========================================================================= */}
@@ -637,232 +485,17 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
         /* MODE A: BATCH SETTINGS & PARAMETERS                                       */
         /* ========================================================================= */
         <div style={{ display: "flex", flexDirection: "column", gap: "12px", width: "100%" }}>
-          {/* Card 1: Queued Files Manager in Settings */}
-          <div
-            style={{
-              backgroundColor: "var(--bg-surface)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-md)",
-              padding: "14px 16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "10px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <FolderOpen size={16} style={{ color: "var(--accent-cyan)" }} />
-                <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
-                  Queued Files ({queuedFiles.length})
-                </span>
-                {queuedFiles.length > 0 && (
-                  <span style={{ fontSize: "11.5px", color: "var(--text-muted)", marginLeft: "4px", display: "inline-flex", alignItems: "center", gap: "5px", flexWrap: "wrap" }}>
-                    • Total: <strong style={{ color: "var(--accent-success)" }}>{completedLines}</strong> / {totalLines} lines ({progressPercent}%)
-                    {explicitLines > 0 && (
-                      <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "3px" }}>
-                        • ⚠️ {explicitLines} Censored / Explicit
-                      </span>
-                    )}
-                  </span>
-                )}
-              </div>
+          <BatchQueuedFilesTable
+            queuedFiles={queuedFiles}
+            selectedFileId={selectedFileId}
+            isRunning={isRunning}
+            onSelectFileId={setSelectedFileId}
+            onAddFiles={handleAddFiles}
+            onScanDiskProgress={handleScanDiskProgress}
+            onClearQueue={handleClearQueue}
+            onRemoveFile={handleRemoveFile}
+          />
 
-              {/* Action Buttons: Add, Scan Disk, Clear */}
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <button
-                  type="button"
-                  onClick={handleAddFiles}
-                  disabled={isRunning}
-                  className="btn-primary"
-                  style={{ padding: "5px 10px", fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "5px" }}
-                >
-                  <Plus size={13} />
-                  <span>Add Scripts</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleScanDiskProgress}
-                  disabled={isRunning || queuedFiles.length === 0}
-                  className="btn-secondary"
-                  style={{ padding: "5px 10px", fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "5px" }}
-                  title="Rescan output folder to check for already translated lines and update completion status"
-                >
-                  <RefreshCw size={13} />
-                  <span>Scan Disk</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleClearQueue}
-                  disabled={isRunning || queuedFiles.length === 0}
-                  className="btn-secondary"
-                  style={{ padding: "5px 10px", fontSize: "11.5px", display: "inline-flex", alignItems: "center", gap: "5px", color: "var(--accent-danger)" }}
-                >
-                  <Trash2 size={13} />
-                  <span>Clear All</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Table of Queued Files */}
-            {queuedFiles.length === 0 ? (
-              <div
-                style={{
-                  border: "1px dashed var(--border-subtle)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "18px",
-                  textAlign: "center",
-                  color: "var(--text-muted)",
-                  fontSize: "12px",
-                  backgroundColor: "var(--bg-app)",
-                }}
-              >
-                No files loaded yet. Click <strong>"Add Scripts"</strong> to import JSONL, JSON, KS, CSV, or TXT script files.
-              </div>
-            ) : (
-              <div
-                style={{
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-sm)",
-                  overflow: "hidden",
-                  backgroundColor: "var(--bg-app)",
-                  width: "100%",
-                }}
-              >
-                {/* 1. Stationary Header Row (Never touched by scrollbar) */}
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 120px 130px 36px",
-                    padding: "8px 12px",
-                    backgroundColor: "var(--bg-surface-elevated)",
-                    borderBottom: "1px solid var(--border-subtle)",
-                    color: "var(--text-secondary)",
-                    fontSize: "11px",
-                    fontWeight: 700,
-                  }}
-                >
-                  <div>File</div>
-                  <div>Progress</div>
-                  <div>Status</div>
-                  <div style={{ textAlign: "center" }}></div>
-                </div>
-
-                {/* 2. Scrollable Body (Scrollbar strictly contained inside rows) */}
-                <div
-                  style={{
-                    maxHeight: "200px",
-                    overflowY: "auto",
-                    display: "flex",
-                    flexDirection: "column",
-                  }}
-                >
-                  {queuedFiles.map((file, idx) => {
-                    const fDone = file.completedLines ?? file.items.filter((it) => isGenuinelyTranslated(it)).length;
-                    const fExp = file.explicitLines ?? file.items.filter((it) => isExplicitTagged(it)).length;
-                    const isFinished = (fDone + fExp >= file.totalLines && file.totalLines > 0) || file.status === "completed";
-                    const isSelected = file.id === selectedFileId;
-
-                    // Status Badge Calculation
-                    let statusNode: React.ReactNode;
-                    if (file.status === "processing") {
-                      statusNode = (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(56, 189, 248, 0.12)", color: "var(--accent-cyan)", border: "1px solid rgba(56, 189, 248, 0.3)" }}>
-                          <Activity size={11} className="animate-spin" /> translating
-                        </span>
-                      );
-                    } else if (isFinished) {
-                      if (fExp > 0) {
-                        statusNode = (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(244, 63, 94, 0.12)", color: "#fb7185", border: "1px solid rgba(244, 63, 94, 0.3)" }}>
-                            <AlertTriangle size={11} /> {fExp} explicit
-                          </span>
-                        );
-                      } else {
-                        statusNode = (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 700, backgroundColor: "rgba(34, 197, 94, 0.12)", color: "var(--accent-success)", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
-                            <CheckCircle2 size={11} /> completed
-                          </span>
-                        );
-                      }
-                    } else if (isRunning) {
-                      statusNode = (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(234, 179, 8, 0.1)", color: "var(--accent-gold)", border: "1px solid rgba(234, 179, 8, 0.25)" }}>
-                          <Clock size={11} /> queued
-                        </span>
-                      );
-                    } else if (file.status === "error") {
-                      statusNode = (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "rgba(239, 68, 68, 0.12)", color: "var(--accent-danger)", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
-                          error
-                        </span>
-                      );
-                    } else {
-                      statusNode = (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, backgroundColor: "var(--bg-surface-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
-                          pending
-                        </span>
-                      );
-                    }
-
-                    return (
-                      <div
-                        key={file.id}
-                        onClick={() => setSelectedFileId(file.id)}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "1fr 120px 130px 36px",
-                          padding: "6px 12px",
-                          alignItems: "center",
-                          borderBottom: idx < queuedFiles.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none",
-                          backgroundColor: isSelected ? "rgba(78, 115, 223, 0.12)" : "transparent",
-                          cursor: "pointer",
-                          transition: "background-color 0.15s ease",
-                          fontSize: "12px",
-                        }}
-                      >
-                        {/* 1. File Name */}
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden", minWidth: 0 }}>
-                          <FileCode size={14} style={{ color: isSelected ? "var(--accent-primary)" : isFinished ? "var(--accent-success)" : "var(--accent-cyan)", flexShrink: 0 }} />
-                          <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: isSelected ? "var(--accent-primary)" : "var(--text-primary)", fontWeight: 600 }} title={file.path}>
-                            {file.name}
-                          </span>
-                        </div>
-
-                        {/* 2. Progress */}
-                        <div style={{ whiteSpace: "nowrap", fontWeight: 600, color: "var(--text-primary)", fontSize: "11.5px" }}>
-                          {fDone}/{file.totalLines}
-                        </div>
-
-                        {/* 3. Status */}
-                        <div style={{ whiteSpace: "nowrap" }}>
-                          {statusNode}
-                        </div>
-
-                        {/* 4. Action */}
-                        <div style={{ textAlign: "center" }}>
-                          {!isRunning && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRemoveFile(file.id);
-                              }}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "2px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
-                              title="Remove file"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
 
           {/* Card 3: Batch & Context Parameters */}
           <div
@@ -1052,7 +685,6 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   onChange={(e) => {
                     const val = e.target.value as ReasoningEffort;
                     setReasoningEffort(val);
-                    localStorage.setItem("vn_batch_reasoning_effort", val);
                   }}
                   style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600, backgroundColor: "var(--bg-surface-elevated)" }}
                 >
@@ -1244,312 +876,20 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
         /* ========================================================================= */
         /* MODE B: SCRIPT TRANSLATION PREVIEW (100% Dynamic Table View)               */
         /* ========================================================================= */
-        <div
-          style={{
-            backgroundColor: "var(--bg-surface)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-md)",
-            padding: "12px 14px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "10px",
-            width: "100%",
-          }}
-        >
-          {/* Top Compact Control & File Ribbon for Preview */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px", flexShrink: 0 }}>
-            {/* Left: Active File Picker & Actions */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <FileCode size={16} style={{ color: "var(--accent-cyan)" }} />
-                <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--text-primary)" }}>
-                  File:
-                </span>
-                {queuedFiles.length > 0 ? (
-                  <select
-                    className="input-field"
-                    value={activeFile?.id || ""}
-                    onChange={(e) => setSelectedFileId(e.target.value)}
-                    style={{ fontSize: "12px", padding: "5px 28px 5px 10px", minWidth: "180px", maxWidth: "340px", fontWeight: 600 }}
-                  >
-                    {queuedFiles.map((f) => {
-                      const fExp = f.items.filter((it) => isExplicitTagged(it)).length;
-                      return (
-                        <option key={f.id} value={f.id}>
-                          {f.name} {f.status === "completed" ? (fExp > 0 ? "⚠️ (Completed)" : "✓ (Completed)") : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
-                ) : (
-                  <span style={{ fontSize: "12px", color: "var(--text-muted)", fontStyle: "italic" }}>
-                    No files loaded
-                  </span>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={handleAddFiles}
-                disabled={isRunning}
-                className="btn-primary"
-                style={{ padding: "4px 10px", fontSize: "11.5px" }}
-              >
-                <Plus size={12} />
-                <span>Add Files</span>
-              </button>
-
-              {queuedFiles.length > 0 && !isRunning && (
-                <button
-                  type="button"
-                  onClick={handleScanDiskProgress}
-                  className="btn-secondary"
-                  style={{ padding: "4px 8px", fontSize: "11.5px" }}
-                  title="Scan output folder to hydrate already translated lines"
-                >
-                  <RefreshCw size={12} />
-                  <span>Scan</span>
-                </button>
-              )}
-
-              {activeFile && (
-                <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "4px", display: "inline-flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
-                  <span>({activeFile.items.filter((it) => isGenuinelyTranslated(it)).length}/{activeFile.totalLines} lines translated)</span>
-                  {activeFile.items.some((it) => isExplicitTagged(it)) && (
-                    <span style={{ color: "#fb7185", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "2px", marginLeft: "4px" }}>
-                      <AlertTriangle size={11} /> {activeFile.items.filter((it) => isExplicitTagged(it)).length} explicit
-                    </span>
-                  )}
-                </span>
-              )}
-            </div>
-
-            {/* Right: Search Input, Status Filter & Progress Indicators */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-              <div style={{ position: "relative" }}>
-                <input
-                  type="text"
-                  placeholder="Search dialogue..."
-                  className="input-field"
-                  value={searchFilter}
-                  onChange={(e) => setSearchFilter(e.target.value)}
-                  style={{ width: "190px", fontSize: "11.5px", padding: "4px 8px 4px 24px" }}
-                />
-                <Search size={12} style={{ position: "absolute", left: "7px", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
-              </div>
-
-              <select
-                className="input-field"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as any)}
-                style={{ fontSize: "11.5px", padding: "5px 28px 5px 10px", minWidth: "140px" }}
-              >
-                <option value="all">All Lines</option>
-                <option value="completed">Translated Only</option>
-                <option value="untranslated">Untranslated Only</option>
-                <option value="explicit">Explicit Flagged Only</option>
-              </select>
-
-              {progressData && progressData.currentBatch > 0 && (
-                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                  Batch: <strong style={{ color: "var(--accent-cyan)" }}>{progressData.currentBatch}/{progressData.totalBatches}</strong>
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Real-time Streaming Feedback Box (Scoped to Active File in Preview Tab) */}
-          <BatchStreamBanner fileId={activeFile?.id} />
-
-          {/* Table Container */}
-          <div
-            style={{
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              backgroundColor: "var(--bg-app)",
-              width: "100%",
-              overflowX: "auto",
-            }}
-          >
-            {!activeFile || activeFile.items.length === 0 ? (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  height: "100%",
-                  color: "var(--text-muted)",
-                  padding: "50px 0",
-                  gap: "8px",
-                }}
-              >
-                <Sparkles size={34} style={{ opacity: 0.3 }} />
-                <span>No script files loaded. Click Add Files above to start.</span>
-              </div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
-                <thead>
-                  <tr style={{ backgroundColor: "var(--bg-surface-elevated)", borderBottom: "1px solid var(--border-subtle)", color: "var(--text-secondary)", textAlign: "left", position: "sticky", top: 0, zIndex: 2 }}>
-                    <th style={{ padding: "8px 10px", width: "55px" }}>#</th>
-                    <th style={{ padding: "8px 10px", width: "140px" }}>Speaker</th>
-                    <th style={{ padding: "8px 10px", width: "42%" }}>Original Dialogue (JP)</th>
-                    <th style={{ padding: "8px 10px" }}>Translated Output</th>
-                    <th style={{ padding: "8px 10px", width: "80px", textAlign: "center" }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedItems.map((item) => {
-                    const isTranslated = isGenuinelyTranslated(item);
-                    return (
-                      <tr
-                        key={`line_${item.id}`}
-                        style={{
-                          borderBottom: "1px solid rgba(255,255,255,0.03)",
-                          backgroundColor: isTranslated ? "rgba(16, 185, 129, 0.02)" : "transparent",
-                          transition: "background-color 0.2s ease",
-                        }}
-                      >
-                        <td style={{ padding: "8px 10px", color: "var(--text-muted)", fontWeight: 500 }}>
-                          {item.id}
-                        </td>
-                        <td style={{ padding: "8px 10px" }}>
-                          {item.originalSpeaker ? (
-                            <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-                              <span style={{ fontFamily: "var(--font-jp)", color: "var(--accent-gold)", fontWeight: 600 }}>
-                                {item.originalSpeaker}
-                              </span>
-                              {item.translatedSpeaker && (
-                                <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>
-                                  {item.translatedSpeaker}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "11px" }}>Narration</span>
-                          )}
-                        </td>
-                        <td style={{ padding: "8px 10px", fontFamily: "var(--font-jp)", color: "var(--text-jp)", lineHeight: 1.5 }}>
-                          {item.originalMessage}
-                        </td>
-                        <td style={{ padding: "8px 10px", lineHeight: 1.5 }}>
-                          {isTranslated ? (
-                            item.translatedMessage && item.translatedMessage.includes("[EXPLICIT CONTENT]") ? (
-                              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                                <span
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: "4px",
-                                    width: "fit-content",
-                                    backgroundColor: "rgba(244, 63, 94, 0.12)",
-                                    color: "#fb7185",
-                                    border: "1px solid rgba(244, 63, 94, 0.3)",
-                                    borderRadius: "3px",
-                                    padding: "1px 6px",
-                                    fontSize: "10.5px",
-                                    fontWeight: 700,
-                                  }}
-                                >
-                                  <AlertTriangle size={11} /> Explicit / Safety Skipped
-                                </span>
-                                <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "12px" }}>
-                                  {item.originalMessage}
-                                </span>
-                              </div>
-                            ) : (
-                              <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
-                                {item.translatedMessage}
-                              </span>
-                            )
-                          ) : (
-                            <span style={{ color: "var(--text-muted)", fontStyle: "italic", opacity: 0.5 }}>
-                              Pending translation...
-                            </span>
-                          )}
-                        </td>
-                        <td style={{ padding: "8px 10px", textAlign: "center" }}>
-                          {isTranslated ? (
-                            item.translatedMessage && item.translatedMessage.includes("[EXPLICIT CONTENT]") ? (
-                              <span style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "10px", color: "#fb7185", fontWeight: 700 }} title="Skipped due to LLM content safety policy">
-                                <AlertTriangle size={12} />
-                                <span>Explicit</span>
-                              </span>
-                            ) : (
-                              <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--accent-success)", fontWeight: 600 }}>
-                                <CheckCircle2 size={13} />
-                                <span>Done</span>
-                              </span>
-                            )
-                          ) : isRunning && activeFile.status === "processing" ? (
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--accent-cyan)" }}>
-                              <Clock size={13} />
-                              <span>Queue</span>
-                            </span>
-                          ) : (
-                            <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
-                              —
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          {/* Pagination Footer */}
-          {activeFile && displayedItems.length > PAGE_SIZE && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "6px 12px",
-                backgroundColor: "var(--bg-surface)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-sm)",
-                fontSize: "11.5px",
-                color: "var(--text-secondary)",
-                flexShrink: 0,
-              }}
-            >
-              <span>
-                Showing <strong>{(currentPage - 1) * PAGE_SIZE + 1}</strong> - <strong>{Math.min(currentPage * PAGE_SIZE, displayedItems.length)}</strong> of <strong>{displayedItems.length}</strong> lines
-              </span>
-
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                  className="btn-secondary"
-                  style={{ padding: "3px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "2px" }}
-                >
-                  <ChevronLeft size={13} />
-                  <span>Prev</span>
-                </button>
-
-                <span style={{ fontWeight: 600, padding: "0 6px" }}>
-                  Page {currentPage} of {totalPages}
-                </span>
-
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                  className="btn-secondary"
-                  style={{ padding: "3px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "2px" }}
-                >
-                  <span>Next</span>
-                  <ChevronRight size={13} />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <BatchPreviewTable
+          queuedFiles={queuedFiles}
+          selectedFileId={selectedFileId}
+          activeFile={activeFile || undefined}
+          isRunning={isRunning}
+          searchFilter={searchFilter}
+          statusFilter={statusFilter}
+          progressData={progressData}
+          onSelectFileId={setSelectedFileId}
+          onAddFiles={handleAddFiles}
+          onScanDiskProgress={handleScanDiskProgress}
+          onSearchChange={setSearchFilter}
+          onStatusFilterChange={setStatusFilter}
+        />
       )}
     </div>
   );

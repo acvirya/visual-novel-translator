@@ -23,50 +23,6 @@ const tabTitles: Record<NavigationTab, { title: string; subtitle: string }> = {
     title: "Settings & AI Configuration",
     subtitle: "AI language models, text preprocessing master pipeline, hotkeys, and system logs",
   },
-  "live-translate": {
-    title: "Live Translate",
-    subtitle: "Real-time hooked dialogue stream & automatic translation",
-  },
-  "manual-translate": {
-    title: "Manual Translate",
-    subtitle: "Translate custom Japanese text or scripts interactively",
-  },
-  "glossary-manager": {
-    title: "Glossary Manager",
-    subtitle: "Manage character names, honorifics, and custom term mappings",
-  },
-  "script-manager": {
-    title: "Script Manager",
-    subtitle: "Manage pre-translated script databases (.jsonl) and N-gram matching criteria",
-  },
-  "logs": {
-    title: "System Logs",
-    subtitle: "Event history, OCR outputs, and translation engine logs",
-  },
-  "textractor": {
-    title: "Textractor Hooking",
-    subtitle: "Process attacher, thread selector, and clean regex filters",
-  },
-  "ocr": {
-    title: "Windows OCR (OneOCR)",
-    subtitle: "Screen capture region, interval scanner, and image filter settings",
-  },
-  "overlay-settings": {
-    title: "Overlay Settings",
-    subtitle: "In-game transparent subtitle box, auto-expansion, and monitor positioning",
-  },
-  "text-preprocessing": {
-    title: "Text Preprocessing",
-    subtitle: "Centralized sequential pipeline for cleaning raw dialogue text",
-  },
-  "general-settings": {
-    title: "General Settings",
-    subtitle: "Hotkeys, application behaviors, and window settings",
-  },
-  "translation-providers": {
-    title: "Translation Providers",
-    subtitle: "OpenRouter LLM API and Free Online MT configurations",
-  },
 };
 
 export const Header: React.FC<HeaderProps> = ({ currentTab }) => {

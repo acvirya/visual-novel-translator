@@ -12,12 +12,9 @@ import {
   getAllStylePresets,
   getActiveStylePresetId,
   getActiveStyleInstructions,
-  buildCompleteSystemPrompt,
-  getLanguageDisplayName,
   getSelectedModelProviders,
   setSelectedModelProviders,
   getModelReasoningCapabilities,
-  formatReasoningEffortLabel,
   getModelPreferredReasoningEffort,
   setModelPreferredReasoningEffort,
 } from "../../services/openRouterService";
@@ -28,18 +25,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Globe,
-  RotateCcw,
-  Layers,
-  Radio,
   ArrowUp,
   ArrowDown,
-  Sliders,
-  Plus,
-  Trash2,
   Eye,
   EyeOff,
-  Check,
-  Brain,
   Server,
   ExternalLink,
   Cpu,
@@ -55,8 +44,10 @@ import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
 import { useToast } from "../common/ToastProvider";
 import { useTranslationStore } from "../../stores/useTranslationStore";
 import { settingsManager } from "../../services/settingsManager";
-import { Modal } from "../common/Modal";
 import { ReasoningEffort } from "../../types";
+import { ReasoningSettingsCard } from "./providers/ReasoningSettingsCard";
+import { StylePresetsCard } from "./providers/StylePresetsCard";
+import { FreeMtCard } from "./providers/FreeMtCard";
 
 export const TranslationProvidersView: React.FC = () => {
   const toast = useToast();
@@ -77,10 +68,10 @@ export const TranslationProvidersView: React.FC = () => {
   const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(false);
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
-    return localStorage.getItem("vn_selected_model") || "mt:google-translate";
+    return settingsManager.getSelectedModel();
   });
   const [selectedProviders, setSelectedProviders] = useState<string[]>(() => {
-    const initModel = localStorage.getItem("vn_selected_model") || "mt:google-translate";
+    const initModel = settingsManager.getSelectedModel();
     return getSelectedModelProviders(initModel);
   });
 
@@ -122,25 +113,15 @@ export const TranslationProvidersView: React.FC = () => {
   const [activePresetId, setActivePresetId] = useState<string>(() => getActiveStylePresetId());
   const [styleInstructions, setStyleInstructions] = useState<string>(() => getActiveStyleInstructions());
 
-  // Custom Preset Modal State
-  const [showAddModal, setShowAddModal] = useState<boolean>(false);
-  const [customName, setCustomName] = useState<string>("");
-  const [customDesc, setCustomDesc] = useState<string>("");
-  const [customInst, setCustomInst] = useState<string>("");
-
-  // Prompt Full Preview State
-  const [showFullPreview, setShowFullPreview] = useState<boolean>(false);
-  const [previewMode, setPreviewMode] = useState<"live" | "batch">("live");
-
   // Free MT Endpoints
   const [useGoogleTranslate, setUseGoogleTranslate] = useState<boolean>(true);
   const [useDeepLFree, setUseDeepLFree] = useState<boolean>(true);
 
   const [sourceLang, setSourceLang] = useState<string>(() => {
-    return localStorage.getItem("vn_source_lang") || "ja";
+    return settingsManager.getSourceLang();
   });
   const [targetLang, setTargetLang] = useState<string>(() => {
-    return localStorage.getItem("vn_target_lang") || "en";
+    return settingsManager.getTargetLang();
   });
 
   // Auto-fetch OpenRouter models on load if verified
@@ -162,7 +143,7 @@ export const TranslationProvidersView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("vn_selected_model", selectedModelId);
+    settingsManager.updateTranslation({ liveModel: selectedModelId, activeProviderId: selectedModelId });
     useTranslationStore.getState().setSelectedProvider(selectedModelId);
     setSelectedProviders(getSelectedModelProviders(selectedModelId));
 
@@ -177,8 +158,6 @@ export const TranslationProvidersView: React.FC = () => {
   }, [activePresetId, styleInstructions]);
 
   useEffect(() => {
-    localStorage.setItem("vn_source_lang", sourceLang);
-    localStorage.setItem("vn_target_lang", targetLang);
     settingsManager.updateGeneral({ sourceLang, targetLang });
   }, [sourceLang, targetLang]);
 
@@ -290,33 +269,6 @@ export const TranslationProvidersView: React.FC = () => {
     }
   };
 
-  // Handle Create Custom Preset
-  const handleSaveCustom = () => {
-    if (!customName.trim() || !customInst.trim()) {
-      toast.warning("Preset Name and Instructions are required.", "Missing Information");
-      return;
-    }
-
-    const newPreset: PromptStylePreset = {
-      id: `custom_style_${Date.now()}`,
-      name: customName.trim(),
-      description: customDesc.trim() || "User-defined custom translation style",
-      instructions: customInst.trim(),
-      isBuiltIn: false,
-    };
-
-    const updated = [...userPresets, newPreset];
-    setUserPresets(updated);
-    saveUserStylePresets(updated);
-    setActivePresetId(newPreset.id);
-    setStyleInstructions(newPreset.instructions);
-    setShowAddModal(false);
-    setCustomName("");
-    setCustomDesc("");
-    setCustomInst("");
-    toast.success(`Custom style preset "${newPreset.name}" created and activated!`, "Preset Created");
-  };
-
   // Handle Delete Custom Preset
   const handleDeleteCustomPreset = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -344,14 +296,6 @@ export const TranslationProvidersView: React.FC = () => {
   );
 
   const pricingFormatted = formatModelPricing(selectedModel.pricing);
-
-  const assembledPrompt = buildCompleteSystemPrompt({
-    mode: previewMode,
-    sourceLang,
-    targetLang,
-    styleInstructions,
-    includeGlossary: true,
-  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%" }}>
@@ -966,463 +910,64 @@ export const TranslationProvidersView: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Reasoning Tokens & Thinking Budget (OpenRouter) */}
-      {!selectedModelId.startsWith("mt:") && (
-        <div className="card" style={{ margin: 0 }}>
-          <div className="card-header">
-            <div>
-              <span className="card-title">
-                <Brain size={16} style={{ color: "var(--accent-purple, #a855f7)" }} /> 3. Preferred Reasoning & Thinking Tokens
-              </span>
-              <span className="card-subtitle">
-                Configure preferred reasoning effort, token budget, and thinking trace visibility per model
-              </span>
-            </div>
-          </div>
+      <ReasoningSettingsCard
+        selectedModelId={selectedModelId}
+        modelName={selectedModel.name || selectedModelId}
+        reasoningCapabilities={reasoningCapabilities}
+        reasoningEffort={reasoningEffort}
+        onChangeReasoningEffort={(effort) => {
+          setReasoningEffort(effort);
+          if (selectedModelId) {
+            setModelPreferredReasoningEffort(selectedModelId, effort);
+          }
+        }}
+        reasoningMaxTokens={reasoningMaxTokens}
+        reasoningMaxTokensInput={reasoningMaxTokensInput}
+        onChangeMaxTokens={(inputVal, tokens) => {
+          setReasoningMaxTokensInput(inputVal);
+          setReasoningMaxTokens(tokens);
+        }}
+        excludeReasoning={excludeReasoning}
+        onChangeExcludeReasoning={setExcludeReasoning}
+      />
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-            {/* Status Indicator Banner */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                backgroundColor: reasoningCapabilities.isSupported ? "rgba(168, 85, 247, 0.08)" : "var(--bg-app)",
-                padding: "10px 14px",
-                borderRadius: "var(--radius-sm)",
-                border: reasoningCapabilities.isSupported ? "1px solid rgba(168, 85, 247, 0.3)" : "1px solid var(--border-subtle)",
-                fontSize: "12px",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Brain size={15} color={reasoningCapabilities.isSupported ? "var(--accent-purple, #a855f7)" : "var(--text-muted)"} />
-                <span style={{ fontWeight: 600, color: reasoningCapabilities.isSupported ? "var(--text-primary)" : "var(--text-secondary)" }}>
-                  {reasoningCapabilities.isSupported
-                    ? `Thinking-Capable Model: "${selectedModel.name || selectedModelId}"`
-                    : `Standard Model: "${selectedModel.name || selectedModelId}"`}
-                </span>
-              </div>
-              <span style={{ fontSize: "11px", color: reasoningCapabilities.isSupported ? "var(--accent-purple, #a855f7)" : "var(--text-muted)", fontWeight: 500 }}>
-                {!reasoningCapabilities.isSupported
-                  ? "Direct translation (Reasoning not supported by this model)"
-                  : reasoningCapabilities.isMandatory
-                  ? "⚠️ Mandatory Reasoning"
-                  : reasoningCapabilities.mode === "efforts_list"
-                  ? `✓ Supported Levels: ${reasoningCapabilities.supportedEfforts.join(", ")}`
-                  : "✓ Binary Reasoning Toggle"}
-              </span>
-            </div>
 
-            {/* Reasoning Grid: Effort + Custom Max Tokens */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-              {/* Reasoning Effort */}
-              <div>
-                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
-                  Preferred Reasoning Effort / Mode:
-                </label>
-                <select
-                  className="input-field"
-                  value={
-                    !reasoningCapabilities.isSupported
-                      ? "none"
-                      : reasoningCapabilities.mode === "toggle_only"
-                      ? (reasoningEffort === "none" ? "none" : reasoningEffort === "custom" ? "custom" : "default")
-                      : (reasoningCapabilities.supportedEfforts.includes(reasoningEffort) || reasoningEffort === "none" || reasoningEffort === "default" || reasoningEffort === "custom" ? reasoningEffort : "default")
-                  }
-                  disabled={!reasoningCapabilities.isSupported}
-                  onChange={(e) => {
-                    const val = e.target.value as ReasoningEffort;
-                    setReasoningEffort(val);
-                    if (selectedModelId) {
-                      setModelPreferredReasoningEffort(selectedModelId, val);
-                    }
-                  }}
-                  style={{ width: "100%", fontSize: "12px", padding: "7px 10px", fontWeight: 600, backgroundColor: "var(--bg-surface-elevated)" }}
-                >
-                  {!reasoningCapabilities.isSupported ? (
-                    <option value="none">Not Supported by Model</option>
-                  ) : reasoningCapabilities.mode === "efforts_list" ? (
-                    <>
-                      <option value="default">
-                        Default{reasoningCapabilities.defaultEffort ? `: ${formatReasoningEffortLabel(reasoningCapabilities.defaultEffort)}` : ""}
-                      </option>
-                      {!reasoningCapabilities.isMandatory && <option value="none">Off</option>}
-                      {reasoningCapabilities.supportedEfforts.map((eff) => (
-                        <option key={eff} value={eff}>
-                          {formatReasoningEffortLabel(eff)}
-                        </option>
-                      ))}
-                      {reasoningCapabilities.supportsMaxTokens && <option value="custom">Custom Token Budget</option>}
-                    </>
-                  ) : (
-                    <>
-                      <option value="default">Enabled (Active)</option>
-                      {!reasoningCapabilities.isMandatory && <option value="none">Off</option>}
-                      {reasoningCapabilities.supportsMaxTokens && <option value="custom">Custom Token Budget</option>}
-                    </>
-                  )}
-                </select>
-                <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "4px" }}>
-                  {!reasoningCapabilities.isSupported
-                    ? "Parameters will be automatically skipped for this standard model."
-                    : "Preferred thinking level is saved specifically for this model. 'Default' uses OpenRouter's model default."}
-                </span>
-              </div>
+      <StylePresetsCard
+        allPresets={allPresets}
+        activePresetId={activePresetId}
+        styleInstructions={styleInstructions}
+        sourceLang={sourceLang}
+        targetLang={targetLang}
+        onSelectPreset={handleSelectPreset}
+        onResetPreset={handleResetPreset}
+        onChangeStyleInstructions={(val) => {
+          setStyleInstructions(val);
+          localStorage.setItem("vn_active_style_instructions", val);
+        }}
+        onCreateCustomPreset={(name, desc, inst) => {
+          const newPreset: PromptStylePreset = {
+            id: `custom_style_${Date.now()}`,
+            name,
+            description: desc || "User-defined custom translation style",
+            instructions: inst,
+            isBuiltIn: false,
+          };
+          const updated = [...userPresets, newPreset];
+          setUserPresets(updated);
+          saveUserStylePresets(updated);
+          setActivePresetId(newPreset.id);
+          setStyleInstructions(newPreset.instructions);
+          toast.success(`Custom style preset "${newPreset.name}" created and activated!`, "Preset Created");
+        }}
+        onDeleteCustomPreset={handleDeleteCustomPreset}
+      />
 
-              {/* Custom Max Reasoning Tokens Budget */}
-              <div>
-                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
-                  Max Reasoning Tokens Budget ({reasoningMaxTokens > 0 ? `${reasoningMaxTokens} tokens` : "Unset / Dynamic"}):
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={512}
-                  placeholder={reasoningCapabilities.supportsMaxTokens ? "e.g. 2048 (0 = auto)" : "Optional token budget limit"}
-                  className="input-field"
-                  disabled={!reasoningCapabilities.isSupported}
-                  value={reasoningMaxTokensInput}
-                  onChange={(e) => {
-                    setReasoningMaxTokensInput(e.target.value);
-                    const parsed = parseInt(e.target.value, 10);
-                    setReasoningMaxTokens(isNaN(parsed) || parsed < 0 ? 0 : parsed);
-                  }}
-                  style={{ width: "100%", fontSize: "12px", padding: "7px 10px", fontWeight: 600 }}
-                />
-                <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "4px" }}>
-                  {reasoningCapabilities.supportsMaxTokens
-                    ? "✓ Explicit max_tokens budget supported natively by this model (e.g. Claude 3.7 Sonnet)."
-                    : "Token limit ceiling for reasoning steps (if accepted upstream)."}
-                </span>
-              </div>
-            </div>
-
-            {/* Exclude Reasoning from Output Checkbox */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                backgroundColor: "var(--bg-app)",
-                padding: "10px 14px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)" }}>
-                  Exclude Reasoning Traces from Output (`exclude: true`)
-                </span>
-                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                  Keeps game translation output pure by hiding chain-of-thought tokens from the final dialog text.
-                </span>
-              </div>
-
-              <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={excludeReasoning}
-                  onChange={(e) => setExcludeReasoning(e.target.checked)}
-                  style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: "var(--accent-primary)" }}
-                />
-              </label>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. Translation Style & Tone Presets (Modular Prompting) */}
-      <div className="card" style={{ margin: 0 }}>
-        <div className="card-header">
-          <div>
-            <span className="card-title">
-              <Sliders size={16} /> 4. Translation Style & Tone Presets
-            </span>
-            <span className="card-subtitle">
-              Adjust character personality and translation tone without worrying about JSON schemas or language tags
-            </span>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <button
-              onClick={() => {
-                setCustomInst(styleInstructions);
-                setShowAddModal(true);
-              }}
-              className="btn-secondary"
-              style={{ fontSize: "11.5px", padding: "4px 10px", display: "flex", alignItems: "center", gap: "5px" }}
-            >
-              <Plus size={13} />
-              <span>Add Custom Style</span>
-            </button>
-
-            <button
-              onClick={handleResetPreset}
-              className="btn-secondary"
-              style={{ fontSize: "11.5px", padding: "4px 8px" }}
-              title="Reset active style to preset default instructions"
-            >
-              <RotateCcw size={13} />
-              <span>Reset Style</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Preset Selector Cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px", marginBottom: "14px" }}>
-          {allPresets.map((preset) => {
-            const isSelected = activePresetId === preset.id;
-            return (
-              <div
-                key={preset.id}
-                onClick={() => handleSelectPreset(preset)}
-                style={{
-                  backgroundColor: isSelected ? "rgba(88, 166, 255, 0.1)" : "var(--bg-app)",
-                  border: `1.5px solid ${isSelected ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-                  borderRadius: "var(--radius-sm)",
-                  padding: "10px 12px",
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "4px",
-                  position: "relative",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontWeight: 600, fontSize: "12.5px", color: isSelected ? "var(--accent-primary)" : "var(--text-primary)" }}>
-                    {preset.name}
-                  </span>
-                  {!preset.isBuiltIn && (
-                    <button
-                      onClick={(e) => handleDeleteCustomPreset(preset.id, e)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "var(--accent-red)",
-                        cursor: "pointer",
-                        padding: "2px",
-                        opacity: 0.7,
-                      }}
-                      title="Delete custom preset"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </div>
-                <span style={{ fontSize: "11px", color: "var(--text-muted)", lineHeight: "1.35" }}>
-                  {preset.description}
-                </span>
-                {isSelected && (
-                  <div style={{ marginTop: "4px", display: "flex", alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--accent-primary)", fontWeight: 600 }}>
-                    <Check size={12} /> Active Style
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Interactive Style Instructions Editor */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <label style={{ fontSize: "12px", fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
-              <Sparkles size={14} color="var(--accent-primary)" />
-              Active Translation Style Guidelines (Part 2):
-            </label>
-            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-              {styleInstructions.length} characters
-            </span>
-          </div>
-
-          <textarea
-            rows={4}
-            value={styleInstructions}
-            onChange={(e) => {
-              setStyleInstructions(e.target.value);
-              localStorage.setItem("vn_active_style_instructions", e.target.value);
-            }}
-            style={{
-              width: "100%",
-              fontSize: "12px",
-              lineHeight: "1.5",
-              resize: "vertical",
-              fontFamily: "inherit",
-              backgroundColor: "var(--bg-app)",
-              borderColor: "var(--border-subtle)",
-            }}
-            placeholder="Type custom instructions for translation style, personality, honorifics, or tone..."
-          />
-
-          <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
-            💡 <strong>Automatic Modular Assembly</strong>: Source language (<code>{getLanguageDisplayName(sourceLang)}</code>), target language (<code>{getLanguageDisplayName(targetLang)}</code>), character glossary, and strict JSON output schemas are assembled automatically by the system.
-          </span>
-        </div>
-
-        {/* Collapsible Full Assembled Prompt Preview */}
-        <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
-          <div
-            onClick={() => setShowFullPreview(!showFullPreview)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              cursor: "pointer",
-              userSelect: "none",
-            }}
-          >
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
-              {showFullPreview ? <EyeOff size={14} /> : <Eye size={14} />}
-              {showFullPreview ? "Hide" : "Inspect"} Full Assembled System Prompt (Parts 1–4)
-            </span>
-
-            {showFullPreview && (
-              <div style={{ display: "flex", gap: "6px" }} onClick={(e) => e.stopPropagation()}>
-                <button
-                  onClick={() => setPreviewMode("live")}
-                  className={`btn-${previewMode === "live" ? "primary" : "secondary"}`}
-                  style={{ padding: "2px 8px", fontSize: "10.5px" }}
-                >
-                  <Radio size={11} /> Live Mode
-                </button>
-                <button
-                  onClick={() => setPreviewMode("batch")}
-                  className={`btn-${previewMode === "batch" ? "primary" : "secondary"}`}
-                  style={{ padding: "2px 8px", fontSize: "10.5px" }}
-                >
-                  <Layers size={11} /> Batch Mode
-                </button>
-              </div>
-            )}
-          </div>
-
-          {showFullPreview && (
-            <div
-              style={{
-                marginTop: "10px",
-                backgroundColor: "var(--bg-app)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-sm)",
-                padding: "12px",
-                fontSize: "11.5px",
-                fontFamily: "monospace",
-                whiteSpace: "pre-wrap",
-                color: "var(--text-primary)",
-                maxHeight: "260px",
-                overflowY: "auto",
-                lineHeight: "1.45",
-              }}
-            >
-              {assembledPrompt}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 5. Free Online Machine Translation (MT) */}
-      <div className="card" style={{ margin: 0 }}>
-        <div className="card-header">
-          <div>
-            <span className="card-title">
-              <Globe size={16} /> 5. Free Online MT (Zero API Cost Fallback)
-            </span>
-            <span className="card-subtitle">
-              Fast web translation services used as backup when API credits expire
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={useGoogleTranslate}
-              onChange={(e) => setUseGoogleTranslate(e.target.checked)}
-              style={{ transform: "scale(1.15)" }}
-            />
-            <div>
-              <span style={{ fontWeight: 600, fontSize: "13px" }}>Google Translate (Free Web Endpoint)</span>
-              <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "block" }}>
-                High-speed translation engine for live gameplay streaming with minimal latency.
-              </span>
-            </div>
-          </label>
-
-          <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={useDeepLFree}
-              onChange={(e) => setUseDeepLFree(e.target.checked)}
-              style={{ transform: "scale(1.15)" }}
-            />
-            <div>
-              <span style={{ fontWeight: 600, fontSize: "13px" }}>DeepL Web Scraper Endpoint</span>
-              <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "block" }}>
-                Natural Japanese nuance translation fallback.
-              </span>
-            </div>
-          </label>
-        </div>
-      </div>
-
-      {/* Modal: Add Custom Style Preset */}
-      {showAddModal && (
-        <Modal
-          title="Create Custom Translation Style Preset"
-          isOpen={showAddModal}
-          onClose={() => setShowAddModal(false)}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px", minWidth: "380px" }}>
-            <div>
-              <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
-                Preset Name:
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Indonesian Visual Novel Gaul, Cyberpunk Lore..."
-                value={customName}
-                onChange={(e) => setCustomName(e.target.value)}
-                style={{ width: "100%" }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
-                Short Description:
-              </label>
-              <input
-                type="text"
-                placeholder="Brief summary of when to use this style..."
-                value={customDesc}
-                onChange={(e) => setCustomDesc(e.target.value)}
-                style={{ width: "100%" }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
-                Style Instructions (Part 2):
-              </label>
-              <textarea
-                rows={5}
-                placeholder="Translate with natural colloquial flow, preserving slang..."
-                value={customInst}
-                onChange={(e) => setCustomInst(e.target.value)}
-                style={{ width: "100%", fontSize: "12px", lineHeight: "1.45", resize: "vertical" }}
-              />
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" }}>
-              <button onClick={() => setShowAddModal(false)} className="btn-secondary">
-                Cancel
-              </button>
-              <button onClick={handleSaveCustom} className="btn-primary">
-                Save & Activate Preset
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <FreeMtCard
+        useGoogleTranslate={useGoogleTranslate}
+        useDeepLFree={useDeepLFree}
+        onToggleGoogleTranslate={setUseGoogleTranslate}
+        onToggleDeepLFree={setUseDeepLFree}
+      />
     </div>
   );
 };

@@ -3,6 +3,8 @@
  * Captures real-time system, network, and translation logs across the desktop app.
  */
 
+import { TauriBridge } from "./tauriBridge";
+
 export interface AppLogEntry {
   id: string;
   time: string;
@@ -62,6 +64,21 @@ class LoggerService {
 
     this.logs = [entry, ...this.logs].slice(0, this.maxLogs);
     this.notify();
+
+    // Persist critical logs (WARN/ERROR) to disk via TauriBridge (M8)
+    if (typeof window !== "undefined" && (level === "ERROR" || level === "WARN")) {
+      try {
+        const line =
+          JSON.stringify({
+            isoTime: new Date().toISOString(),
+            ...entry,
+            details: details ? (typeof details === "string" ? details : JSON.stringify(details)) : undefined,
+          }) + "\n";
+        TauriBridge.appendDebugLog("app_system_logs.jsonl", line).catch(() => {});
+      } catch {
+        // Non-blocking disk persist fallback
+      }
+    }
   }
 
   public debug(source: string, message: string, details?: any) {
@@ -83,6 +100,11 @@ class LoggerService {
   public clear() {
     this.logs = [];
     this.notify();
+  }
+
+  public dispose() {
+    this.listeners.clear();
+    this.logs = [];
   }
 
   public getLogs(): AppLogEntry[] {

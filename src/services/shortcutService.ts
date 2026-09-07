@@ -1,15 +1,18 @@
-import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
+import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { settingsManager } from "./settingsManager";
 import { translationManager } from "./translationManager";
 import { ocrService } from "./ocrService";
 import { logger } from "./loggerService";
 import { TauriBridge } from "./tauriBridge";
 import { executePreprocessingPipeline, cleanSpeakerName } from "../utils/textPreprocessor";
+import { ManagedService } from "./appContainer";
 
-class ShortcutService {
+class ShortcutService implements ManagedService {
+  public readonly id = "shortcutService";
   private isInitialized = false;
   private isOverlayClickThrough = true;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private registeredShortcuts = new Set<string>();
   private lastRegisteredKeys = { lockKey: "", pauseKey: "", ocrKey: "", snippingKey: "" };
 
   public async init() {
@@ -59,7 +62,15 @@ class ShortcutService {
 
   public async reloadShortcuts() {
     try {
-      await unregisterAll();
+      // Unregister previously registered shortcuts individually to avoid clearing global shortcuts owned by other components
+      for (const key of this.registeredShortcuts) {
+        try {
+          await unregister(key);
+        } catch {
+          // ignore if already unregistered
+        }
+      }
+      this.registeredShortcuts.clear();
 
       const general = settingsManager.getGeneral();
       const lockKey = general.hotkeyLockOverlay?.trim() || "";
@@ -74,14 +85,20 @@ class ShortcutService {
         try {
           await register(lockKey, async (event) => {
             if (event.state === "Pressed") {
-              this.isOverlayClickThrough = !this.isOverlayClickThrough;
-              await TauriBridge.setOverlayClickThrough(this.isOverlayClickThrough);
-              logger.info(
-                "Shortcuts",
-                `Hotkey [${lockKey}] pressed: Overlay click-through set to ${this.isOverlayClickThrough}`
-              );
+              const nextState = !this.isOverlayClickThrough;
+              try {
+                await TauriBridge.setOverlayClickThrough(nextState);
+                this.isOverlayClickThrough = nextState;
+                logger.info(
+                  "Shortcuts",
+                  `Hotkey [${lockKey}] pressed: Overlay click-through set to ${this.isOverlayClickThrough}`
+                );
+              } catch (bridgeErr) {
+                logger.error("Shortcuts", `Failed to set overlay click-through via TauriBridge: ${bridgeErr}`);
+              }
             }
           });
+          this.registeredShortcuts.add(lockKey);
           logger.info("Shortcuts", `Registered global shortcut for Overlay Lock: ${lockKey}`);
         } catch (e) {
           logger.warn("Shortcuts", `Could not register lock shortcut '${lockKey}': ${e}`);
@@ -101,6 +118,7 @@ class ShortcutService {
               );
             }
           });
+          this.registeredShortcuts.add(pauseKey);
           logger.info("Shortcuts", `Registered global shortcut for Pause/Resume: ${pauseKey}`);
         } catch (e) {
           logger.warn("Shortcuts", `Could not register pause shortcut '${pauseKey}': ${e}`);
@@ -127,7 +145,7 @@ class ShortcutService {
                   const cleanSpk = res.speaker ? cleanSpeakerName(executePreprocessingPipeline(res.speaker, "ocr")) : "";
 
                   if (cleanMsg) {
-                    translationManager.translate({
+                    await translationManager.translate({
                       speaker: cleanSpk || undefined,
                       message: cleanMsg,
                       sourceType: "ocr",
@@ -139,6 +157,7 @@ class ShortcutService {
               }
             }
           });
+          this.registeredShortcuts.add(ocrKey);
           logger.info("Shortcuts", `Registered global shortcut for OCR Scan: ${ocrKey}`);
         } catch (e) {
           logger.warn("Shortcuts", `Could not register OCR shortcut '${ocrKey}': ${e}`);
@@ -158,6 +177,7 @@ class ShortcutService {
               }
             }
           });
+          this.registeredShortcuts.add(snippingKey);
           logger.info("Shortcuts", `Registered global shortcut for OCR Snipping: ${snippingKey}`);
         } catch (e) {
           logger.warn("Shortcuts", `Could not register Snipping shortcut '${snippingKey}': ${e}`);
@@ -173,11 +193,14 @@ class ShortcutService {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
-    try {
-      await unregisterAll();
-    } catch (err) {
-      logger.debug("Shortcuts", `Error while unregistering shortcuts during dispose: ${err}`);
+    for (const key of this.registeredShortcuts) {
+      try {
+        await unregister(key);
+      } catch (err) {
+        logger.debug("Shortcuts", `Error while unregistering '${key}': ${err}`);
+      }
     }
+    this.registeredShortcuts.clear();
     this.isInitialized = false;
   }
 

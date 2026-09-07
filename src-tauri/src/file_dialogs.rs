@@ -159,7 +159,13 @@ pub fn append_debug_log(file_name: String, content: String) -> Result<(), String
         .open(&final_path)
         .map_err(|e| format!("Failed to open log file {:?}: {}", final_path, e))?;
 
-    file.write_all(content.as_bytes())
+    let payload = if content.ends_with('\n') {
+        content
+    } else {
+        format!("{}\n", content)
+    };
+
+    file.write_all(payload.as_bytes())
         .map_err(|e| format!("Failed to write to log file: {}", e))?;
 
     Ok(())

@@ -43,7 +43,9 @@ class OverlayChannel {
         this.handleIncoming(tauriEvent.payload);
       }).then((unlisten) => {
         this.tauriUnlistenFn = unlisten;
-      }).catch(() => {});
+      }).catch((err) => {
+        logger.warn("OverlayChannel", `Failed to register Tauri native listener for vn-overlay-event: ${err}`);
+      });
     }
   }
 
@@ -85,10 +87,12 @@ class OverlayChannel {
     // 3. Persist config via SettingsManager
     if (event.type === "CONFIG_UPDATE") {
       settingsManager.updateOverlay({
-        config: { ...event.config, isEnabled: false },
+        config: { ...event.config },
       });
     }
   }
+
+  public readonly id = "overlayChannel";
 
   public subscribe(callback: (event: OverlayEvent) => void) {
     this.listeners.add(callback);
@@ -100,9 +104,13 @@ class OverlayChannel {
   public getSavedConfig(): OverlayConfig | null {
     const s = settingsManager.getOverlay();
     if (s?.config) {
-      return { ...s.config, isEnabled: false };
+      return { ...s.config };
     }
     return null;
+  }
+
+  public dispose() {
+    this.destroy();
   }
 
   public destroy() {

@@ -343,8 +343,22 @@ CRITICAL: Every item inside "translations" MUST include the matching numeric "id
   return `${part1}${part2}${part3}${part4}`;
 }
 
-export const DEFAULT_LIVE_SYSTEM_PROMPT = buildCompleteSystemPrompt({ mode: "live" });
-export const DEFAULT_BATCH_SYSTEM_PROMPT = buildCompleteSystemPrompt({ mode: "batch" });
+/**
+ * Lazy getter for default live system prompt to ensure current settings and glossary are incorporated (M4)
+ */
+export function getDefaultLiveSystemPrompt(): string {
+  return buildCompleteSystemPrompt({ mode: "live" });
+}
+
+/**
+ * Lazy getter for default batch system prompt to ensure current settings and glossary are incorporated (M4)
+ */
+export function getDefaultBatchSystemPrompt(): string {
+  return buildCompleteSystemPrompt({ mode: "batch" });
+}
+
+export const DEFAULT_LIVE_SYSTEM_PROMPT = getDefaultLiveSystemPrompt();
+export const DEFAULT_BATCH_SYSTEM_PROMPT = getDefaultBatchSystemPrompt();
 
 /**
  * Formats dialogue inputs into structured JSON for LLM requests

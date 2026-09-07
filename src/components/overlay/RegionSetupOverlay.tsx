@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { OcrRegion, OcrRegionRole, MonitorInfo } from "../../types";
 import { OcrService } from "../../services/ocrService";
 import { TauriBridge } from "../../services/tauriBridge";
+import { settingsManager } from "../../services/settingsManager";
 import { Check, X, Trash2, MessageSquare, User, Crosshair } from "lucide-react";
 
 export const RegionSetupOverlay: React.FC = () => {
@@ -10,9 +11,9 @@ export const RegionSetupOverlay: React.FC = () => {
 
   const [regions, setRegions] = useState<OcrRegion[]>(() => {
     try {
-      const saved = localStorage.getItem("vn_ocr_regions");
-      if (saved) {
-        return JSON.parse(saved);
+      const saved = settingsManager.getOcr().regions;
+      if (saved && saved.length > 0) {
+        return saved;
       }
     } catch (e) {
       console.warn("Failed to load saved OCR regions:", e);
@@ -84,9 +85,9 @@ export const RegionSetupOverlay: React.FC = () => {
   const reloadSavedRegions = async () => {
     const mon = await loadWindowMonitor();
     try {
-      const saved = localStorage.getItem("vn_ocr_regions");
-      if (saved) {
-        const parsed: OcrRegion[] = JSON.parse(saved);
+      const saved = settingsManager.getOcr().regions;
+      if (saved && saved.length > 0) {
+        const parsed: OcrRegion[] = saved;
         if (Array.isArray(parsed) && parsed.length > 0) {
           const scale = mon.scale_factor || window.devicePixelRatio || 1.0;
           const monX = mon.x || 0;
@@ -98,29 +99,23 @@ export const RegionSetupOverlay: React.FC = () => {
               const logicalY = Math.round((r.physicalY - monY) / scale);
               const logicalW = Math.round(r.physicalWidth / scale);
               const logicalH = Math.round(r.physicalHeight / scale);
-              if (logicalX >= 0 && logicalY >= 0 && logicalW > 10 && logicalH > 10) {
-                return {
-                  ...r,
-                  x: logicalX,
-                  y: logicalY,
-                  width: logicalW,
-                  height: logicalH,
-                };
-              }
+              return {
+                ...r,
+                x: logicalX,
+                y: logicalY,
+                width: logicalW,
+                height: logicalH,
+              };
             }
             return r;
           });
 
           setRegions(aligned);
           initialRegionsRef.current = JSON.parse(JSON.stringify(aligned));
-          if (aligned.length > 0) {
-            setSelectedRegionId(aligned[0].id);
-          }
-          return;
         }
       }
     } catch (e) {
-      console.warn("Failed to reload OCR regions:", e);
+      console.warn("Failed to reload saved OCR regions:", e);
     }
   };
 
@@ -178,7 +173,7 @@ export const RegionSetupOverlay: React.FC = () => {
   const handleSaveAndClose = async () => {
     try {
       const regionsWithPhysical = computeRegionsWithPhysical(regions);
-      localStorage.setItem("vn_ocr_regions", JSON.stringify(regionsWithPhysical));
+      settingsManager.updateOcr({ regions: regionsWithPhysical });
       const channel = new BroadcastChannel("vn_ocr_channel");
       channel.postMessage({ type: "REGIONS_UPDATED", regions: regionsWithPhysical });
       channel.close();

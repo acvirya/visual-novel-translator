@@ -9,6 +9,23 @@ import { TauriBridge } from "./tauriBridge";
 import { extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 import { settingsManager } from "./settingsManager";
 
+export const FREE_MT_PROVIDERS = {
+  GOOGLE: "mt:google-translate",
+  DEEPL: "mt:deepl-free",
+} as const;
+
+export function isGoogleTranslate(providerId: string): boolean {
+  return providerId === FREE_MT_PROVIDERS.GOOGLE || providerId === "google";
+}
+
+export function isDeepLFree(providerId: string): boolean {
+  return providerId === FREE_MT_PROVIDERS.DEEPL || providerId === "deepl";
+}
+
+export function isFreeMtProvider(providerId: string): boolean {
+  return isGoogleTranslate(providerId) || isDeepLFree(providerId);
+}
+
 export interface FreeMtTranslateOptions {
   speaker?: string;
   message: string;
@@ -42,13 +59,13 @@ export interface FormattedPayloadResult {
  */
 export function formatSpeakerMessage(speaker: string | undefined, message: string): FormattedPayloadResult {
   let cleanMsg = message.trim();
-  let cleanSpk = speaker?.trim().replace(/^[【\[［<〈〔]|[\】\]］>〉〕]$/g, "").trim();
+  let cleanSpk = speaker?.trim().replace(/^[【\[［<〈〔]+|[】\]］>〉〕]+$/g, "").trim();
 
   // If speaker was not explicitly passed, or if message itself contains speaker at front or back
   if (!cleanSpk) {
     const extracted = extractSpeakerAndDialogue(cleanMsg);
     if (extracted.speaker) {
-      cleanSpk = extracted.speaker.replace(/^[【\[［<〈〔]|[\】\]］>〉〕]$/g, "").trim();
+      cleanSpk = extracted.speaker.replace(/^[【\[［<〈〔]+|[】\]］>〉〕]+$/g, "").trim();
       cleanMsg = extracted.message.trim();
     }
   }

@@ -6,6 +6,7 @@ import { cleanSpeakerName, executePreprocessingPipeline, extractSpeakerAndDialog
 import { translationManager } from "./translationManager";
 import { logger } from "./loggerService";
 import { overlayChannel } from "../utils/overlayChannel";
+import type { ManagedService } from "./appContainer";
 
 export interface EngineHookPreset {
   name: string;
@@ -195,6 +196,23 @@ export class TextractorService {
   private static lastDispatchedTime = 0;
 
   /**
+   * Reset all multi-thread coordinator buffers and timing
+   */
+  public static resetState() {
+    if (this.syncTimer) {
+      clearTimeout(this.syncTimer);
+      this.syncTimer = null;
+    }
+    this.syncFirstThreadRole = null;
+    this.syncStartTime = 0;
+    this.bufferedSpeaker = "";
+    this.bufferedDialogue = "";
+    this.globalDialogueSeq = 0;
+    this.lastDispatchedText = { speaker: "", message: "" };
+    this.lastDispatchedTime = 0;
+  }
+
+  /**
    * Initialize global textractor listener stream
    */
   public static async initListener() {
@@ -208,19 +226,18 @@ export class TextractorService {
         useTextractorStore.getState().setIsHooked(false);
         useTextractorStore.getState().setAttachedPid(null);
       });
+      logger.info("Textractor", "Textractor event listeners successfully registered.");
     } catch (err) {
-      console.warn("Failed to register Textractor global event listener:", err);
+      logger.error("Textractor", `Failed to register Textractor global event listener: ${err}`);
+      throw err;
     }
   }
 
   /**
-   * Cleanup event listeners
+   * Cleanup event listeners and coordinator state
    */
   public static cleanupListener() {
-    if (this.syncTimer) {
-      clearTimeout(this.syncTimer);
-      this.syncTimer = null;
-    }
+    this.resetState();
     if (this.unlistenFn) {
       this.unlistenFn();
       this.unlistenFn = null;
@@ -229,6 +246,7 @@ export class TextractorService {
       this.unlistenTermFn();
       this.unlistenTermFn = null;
     }
+    logger.info("Textractor", "Textractor listeners and coordinator buffers cleaned up.");
   }
 
   /**
@@ -241,7 +259,7 @@ export class TextractorService {
       useTextractorStore.getState().setProcesses(procs);
       return procs;
     } catch (error) {
-      console.warn("Failed to list target processes:", error);
+      logger.warn("Textractor", `Failed to list target processes: ${error}`);
       return [];
     } finally {
       useTextractorStore.getState().setIsLoadingProcesses(false);
@@ -256,11 +274,16 @@ export class TextractorService {
     store.setIsAttaching(true);
     store.setHookError(null);
 
-    await this.initListener();
-    this.globalDialogueSeq = 0;
-    this.lastDispatchedText = { speaker: "", message: "" };
-    this.bufferedSpeaker = "";
-    this.bufferedDialogue = "";
+    try {
+      await this.initListener();
+    } catch (err) {
+      const errStr = `Failed to initialize event listeners: ${err}`;
+      store.setHookError(errStr);
+      store.setIsAttaching(false);
+      return { success: false, error: errStr };
+    }
+
+    this.resetState();
     overlayChannel.send({ type: "RESET_SEQUENCE" });
 
     try {
@@ -352,12 +375,9 @@ export class TextractorService {
     const rawText = msg.text || "";
 
     // 1. Register or update thread in master thread list
-    store.setThreads((prevThreads) => {
-      const nextThreads = new Map(prevThreads);
-      const existing = nextThreads.get(handle);
-
+    store.upsertThread(handle, (existing) => {
       if (existing) {
-        nextThreads.set(handle, {
+        return {
           ...existing,
           totalLines: existing.totalLines + (rawText ? 1 : 0),
           lastText: rawText || existing.lastText,
@@ -366,36 +386,34 @@ export class TextractorService {
           hookCode: existing.hookCode || msg.hook_code || "",
           address: existing.address || msg.address || "",
           isActive: true,
-        });
-      } else {
-        nextThreads.set(handle, {
-          id: handle,
-          name: msg.name || `Thread 0x${handle.toString(16).toUpperCase()}`,
-          hookCode: msg.hook_code || "",
-          address: msg.address || "",
-          totalLines: rawText ? 1 : 0,
-          lastText: rawText,
-          lastTimestamp: msg.timestamp,
-          isActive: true,
-          role: "ignored",
-        });
+        };
       }
-      return nextThreads;
+      return {
+        id: handle,
+        name: msg.name || `Thread 0x${handle.toString(16).toUpperCase()}`,
+        hookCode: msg.hook_code || "",
+        address: msg.address || "",
+        totalLines: rawText ? 1 : 0,
+        lastText: rawText,
+        lastTimestamp: msg.timestamp,
+        isActive: true,
+        role: "ignored",
+      };
     });
 
     if (rawText.trim()) {
       // Surface Textractor Console warnings to UI
-      if (msg.name === "Console" && (rawText.toLowerCase().includes("mismatch") || rawText.toLowerCase().includes("fail") || rawText.toLowerCase().includes("error") || rawText.toLowerCase().includes("denied"))) {
+      if (
+        msg.name === "Console" &&
+        (rawText.toLowerCase().includes("mismatch") ||
+          rawText.toLowerCase().includes("fail") ||
+          rawText.toLowerCase().includes("error") ||
+          rawText.toLowerCase().includes("denied"))
+      ) {
         store.setHookError(rawText);
       }
 
-      store.setThreadLogs((prevLogs) => {
-        const nextLogs = new Map(prevLogs);
-        const list = nextLogs.get(handle) || [];
-        const updated = [msg, ...list].slice(0, store.maxLogLines);
-        nextLogs.set(handle, updated);
-        return nextLogs;
-      });
+      store.appendThreadLog(handle, msg);
     }
 
     if (!rawText.trim()) return;
@@ -707,3 +725,13 @@ export class TextractorService {
 }
 
 export const textractorService = TextractorService;
+
+export const textractorManagedService: ManagedService = {
+  id: "textractorService",
+  init: async () => {
+    // Initialized on attach or prewarmed
+  },
+  dispose: async () => {
+    await TextractorService.dispose();
+  },
+};

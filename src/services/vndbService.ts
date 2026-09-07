@@ -31,12 +31,42 @@ export interface VndbCharacterResult {
 }
 
 class VndbService {
-  private readonly KANA_API = "https://api.vndb.org/kana";
+  private static readonly KANA_API = "https://api.vndb.org/kana";
+
+  private static async fetchWithRateLimit(endpoint: string, body: any, maxRetries = 2): Promise<any> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const res = await fetch(`${this.KANA_API}${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (res.ok) {
+        return await res.json();
+      }
+
+      if (res.status === 429) {
+        if (attempt < maxRetries) {
+          const retryHeader = res.headers.get("Retry-After");
+          const waitSec = retryHeader ? parseFloat(retryHeader) : 2;
+          const waitMs = Math.max(1500, Math.min(6000, (isNaN(waitSec) ? 2 : waitSec) * 1000));
+          logger.warn("VNDB", `Rate limited (HTTP 429). Retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})...`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+        throw new Error("VNDB API rate limit reached. Please wait a few seconds before searching again.");
+      }
+
+      throw new Error(`VNDB API HTTP ${res.status}: ${await res.text()}`);
+    }
+  }
 
   /**
-   * Search for Visual Novels by title or direct VNDB ID (e.g. "v17" or "Clannad")
+   * Search visual novels by title query or direct VNDB ID (e.g. "v17")
    */
-  public async searchVn(query: string): Promise<VndbSearchResult[]> {
+  public static async searchVisualNovels(query: string): Promise<VndbSearchResult[]> {
     const q = query.trim();
     if (!q) return [];
 
@@ -49,26 +79,12 @@ class VndbService {
     logger.info("VNDB", `Searching visual novels with query: "${q}"`);
 
     try {
-      const res = await fetch(`${this.KANA_API}/vn`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          filters,
-          fields: "id, title, alttitle, released, image.url",
-          results: 10,
-        }),
+      const data = await this.fetchWithRateLimit("/vn", {
+        filters,
+        fields: "id, title, alttitle, released, image.url",
+        results: 10,
       });
 
-      if (!res.ok) {
-        if (res.status === 429) {
-          throw new Error("VNDB API rate limit reached. Please wait a few seconds before searching again.");
-        }
-        throw new Error(`VNDB API HTTP ${res.status}: ${await res.text()}`);
-      }
-
-      const data = await res.json();
       if (!data.results || !Array.isArray(data.results)) {
         return [];
       }
@@ -81,42 +97,35 @@ class VndbService {
         imageUrl: r.image?.url || undefined,
       }));
     } catch (err: any) {
-      logger.error("VNDB", `Failed to search VN: ${err?.message || err}`);
+      logger.error("VNDB", `Search failed: ${err.message}`);
       throw err;
     }
   }
 
   /**
-   * Fetch all characters associated with a Visual Novel ID
+   * Fetch characters for a specific VN ID (e.g. "v17") with personality traits
    */
-  public async fetchCharacters(
+  public static async fetchCharactersForVn(
     vnId: string,
-    filterOptions: VndbTraitFilterOptions = DEFAULT_VNDB_TRAIT_FILTERS
+    filterOptions?: Partial<VndbTraitFilterOptions>
   ): Promise<VndbCharacterResult[]> {
-    const cleanId = vnId.trim().toLowerCase().match(/v\d+/)?.[0] || vnId.trim().toLowerCase();
-    logger.info("VNDB", `Fetching characters for Visual Novel ID: ${cleanId}`);
+    const cleanId = vnId.trim().toLowerCase().replace(/^.*vndb\.org\//, "");
+    if (!cleanId) return [];
+
+    const effectiveFilters: VndbTraitFilterOptions = {
+      ...DEFAULT_VNDB_TRAIT_FILTERS,
+      ...filterOptions,
+    };
+
+    logger.info("VNDB", `Fetching characters for VN ID: "${cleanId}"`);
 
     try {
-      const res = await fetch(`${this.KANA_API}/character`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          filters: ["vn", "=", ["id", "=", cleanId]],
-          fields: "id, name, original, aliases, sex, vns.role, vns.id, traits.id, traits.name, traits.group_id, traits.group_name, traits.spoiler",
-          results: 100,
-        }),
+      const data = await this.fetchWithRateLimit("/character", {
+        filters: ["vn", "=", ["id", "=", cleanId]],
+        fields: "id, name, original, aliases, sex, vns.role, vns.id, traits.id, traits.name, traits.group_id, traits.group_name, traits.spoiler",
+        results: 100,
       });
 
-      if (!res.ok) {
-        if (res.status === 429) {
-          throw new Error("VNDB API rate limit reached. Please wait a few seconds before searching again.");
-        }
-        throw new Error(`VNDB API HTTP ${res.status}: ${await res.text()}`);
-      }
-
-      const data = await res.json();
       if (!data.results || !Array.isArray(data.results)) {
         return [];
       }
@@ -149,7 +158,7 @@ class VndbService {
 
         // Extract filtered personality traits
         const rawTraits = Array.isArray(c.traits) ? c.traits : [];
-        const personalityTraits = filterPersonalityTraits(rawTraits, filterOptions);
+        const personalityTraits = filterPersonalityTraits(rawTraits, effectiveFilters);
 
         // Pack role, gender & filtered personality together into the character's Notes field
         const notes = formatCharacterNotes(vnRole, genderLabel, personalityTraits);
@@ -171,6 +180,17 @@ class VndbService {
       logger.error("VNDB", `Failed to fetch characters for ${vnId}: ${err?.message || err}`);
       throw err;
     }
+  }
+
+  public async searchVn(query: string): Promise<VndbSearchResult[]> {
+    return VndbService.searchVisualNovels(query);
+  }
+
+  public async fetchCharacters(
+    vnId: string,
+    filterOptions?: Partial<VndbTraitFilterOptions>
+  ): Promise<VndbCharacterResult[]> {
+    return VndbService.fetchCharactersForVn(vnId, filterOptions);
   }
 }
 

@@ -7,10 +7,10 @@ import {
   ReasoningEffort,
   BatchSettings,
 } from "../types";
-import { DEFAULT_PREPROCESSING_PIPELINE, invalidateCustomRulesCache } from "../utils/textPreprocessor";
+import { DEFAULT_PREPROCESSING_PIPELINE, invalidateCustomRulesCache, registerCustomRulesProvider } from "../utils/textPreprocessor";
 import { OVERLAY_PRESETS, TemplatePreset } from "../utils/overlayTemplateEngine";
 import { StoredProviderConfig } from "./providers/llmProviderRegistry";
-import { encryptSensitive, decryptSensitive } from "../utils/securityUtils";
+import { SecureStorageService } from "./secureStorageService";
 
 export interface GeneralSettings {
   sourceLang: string;
@@ -23,21 +23,6 @@ export interface GeneralSettings {
   hotkeyTogglePause: string;
   hotkeyOcrScan: string;
   hotkeyOcrSnipping: string;
-}
-
-export interface TranslationProviderConfig {
-  id: string;
-  name: string;
-  type: string;
-  apiKey?: string;
-  baseUrl?: string;
-  selectedModel?: string;
-  temperature?: number;
-  systemPrompt?: string;
-  isEnabled: boolean;
-  reasoningEffort?: ReasoningEffort;
-  reasoningMaxTokens?: number;
-  excludeReasoning?: boolean;
 }
 
 export interface TranslationSettings {
@@ -53,7 +38,7 @@ export interface TranslationSettings {
   reasoningMaxTokens: number;
   excludeReasoning: boolean;
   temperature?: number;
-  providers: Record<string, TranslationProviderConfig>;
+  starredModelIds?: string[];
 }
 
 export interface GlossarySettings {
@@ -76,6 +61,12 @@ export interface TextractorSettings {
   threadBufferSize: number;
   autoAttachProcessName?: string;
   enableAutoAttach: boolean;
+  maxLogLines?: number;
+  ignoreDuplicateLines?: boolean;
+  charDeduplicationCount?: number;
+  loopDeduplication?: boolean;
+  stutterReduction?: boolean;
+  autoForwardToOverlay?: boolean;
 }
 
 export interface OcrSettings {
@@ -136,6 +127,7 @@ export const DEFAULT_LLM_PROVIDERS: Record<string, StoredProviderConfig> = {
   zai: { id: "zai", apiKey: "", baseUrl: "https://api.z.ai/api/coding/paas/v4" },
   "github-copilot": { id: "github-copilot", apiKey: "", baseUrl: "https://api.individual.githubcopilot.com" },
   "google-vertex": { id: "google-vertex", apiKey: "", baseUrl: "https://aiplatform.googleapis.com/v1" },
+  deepl: { id: "deepl", apiKey: "", baseUrl: "https://api-free.deepl.com/v2" },
   custom: { id: "custom", apiKey: "", baseUrl: "http://localhost:11434/v1" },
 };
 
@@ -179,51 +171,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     reasoningMaxTokens: 0,
     excludeReasoning: false,
     temperature: 0.3,
-    providers: {
-      openai: {
-        id: "openai",
-        name: "OpenAI",
-        type: "openai",
-        apiKey: "",
-        selectedModel: "gpt-4o-mini",
-        temperature: 0.3,
-        isEnabled: true,
-      },
-      deepl: {
-        id: "deepl",
-        name: "DeepL Translate",
-        type: "deepl",
-        apiKey: "",
-        isEnabled: true,
-      },
-      claude: {
-        id: "claude",
-        name: "Anthropic Claude",
-        type: "claude",
-        apiKey: "",
-        selectedModel: "claude-3-5-haiku-20241022",
-        temperature: 0.3,
-        isEnabled: false,
-      },
-      gemini: {
-        id: "gemini",
-        name: "Google Gemini",
-        type: "gemini",
-        apiKey: "",
-        selectedModel: "gemini-1.5-flash",
-        temperature: 0.3,
-        isEnabled: false,
-      },
-      ollama: {
-        id: "ollama",
-        name: "Ollama (Local LLM)",
-        type: "ollama",
-        baseUrl: "http://localhost:11434",
-        selectedModel: "qwen2.5:7b",
-        temperature: 0.3,
-        isEnabled: false,
-      },
-    },
   },
   glossary: {
     terms: [],
@@ -243,6 +190,12 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     threadBufferSize: 100,
     autoAttachProcessName: "",
     enableAutoAttach: false,
+    maxLogLines: 200,
+    ignoreDuplicateLines: true,
+    charDeduplicationCount: 3,
+    loopDeduplication: true,
+    stutterReduction: true,
+    autoForwardToOverlay: false,
   },
   ocr: {
     customPath: "",
@@ -328,9 +281,42 @@ const STORAGE_KEY = "vn_translator_universal_settings_v2";
 class SettingsManager {
   private cache: AppSettings;
   private listeners: Set<(settings: AppSettings) => void> = new Set();
+  private saveDebounceTimer: any = null;
+  private isSecureStorageInitialized = false;
 
   constructor() {
     this.cache = this.loadFromStorage();
+    registerCustomRulesProvider(() => this.cache.textPreprocessing?.pipeline);
+    this.initSecureStorage().catch((err) => {
+      console.warn("[SettingsManager] Failed initial secure keys load:", err);
+    });
+  }
+
+  public async initSecureStorage(): Promise<void> {
+    if (!this.cache.llmProviders) {
+      this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
+    }
+    let hasChanges = false;
+    for (const pid of Object.keys(this.cache.llmProviders)) {
+      try {
+        const secureKey = await SecureStorageService.getApiKey(pid);
+        if (secureKey) {
+          this.cache.llmProviders[pid].apiKey = secureKey;
+          hasChanges = true;
+        }
+      } catch (err) {
+        console.warn(`[SettingsManager] Could not load secure key for ${pid}:`, err);
+      }
+    }
+    this.isSecureStorageInitialized = true;
+    if (hasChanges) {
+      this.saveToStorage(true);
+      this.notifyListeners();
+    }
+  }
+
+  public isSecureStorageReady(): boolean {
+    return this.isSecureStorageInitialized;
   }
 
   private clone<T>(val: T): T {
@@ -359,21 +345,6 @@ class SettingsManager {
         loaded.overlay.config.isEnabled = false;
       }
 
-      // Decrypt sensitive API keys if encrypted
-      if (loaded.llmProviders) {
-        for (const pid of Object.keys(loaded.llmProviders)) {
-          if (loaded.llmProviders[pid]?.apiKey) {
-            loaded.llmProviders[pid].apiKey = decryptSensitive(loaded.llmProviders[pid].apiKey);
-          }
-        }
-      }
-      if (loaded.translation?.providers?.openrouter?.apiKey) {
-        loaded.translation.providers.openrouter.apiKey = decryptSensitive(loaded.translation.providers.openrouter.apiKey);
-      }
-      if (loaded.translation?.providers?.deepl?.apiKey) {
-        loaded.translation.providers.deepl.apiKey = decryptSensitive(loaded.translation.providers.deepl.apiKey);
-      }
-
       return loaded;
     } catch (e) {
       console.warn("Failed to parse settings from localStorage:", e);
@@ -381,33 +352,49 @@ class SettingsManager {
     return this.clone(DEFAULT_APP_SETTINGS);
   }
 
-  private saveToStorage() {
-    if (typeof localStorage !== "undefined") {
-      try {
-        const cacheToPersist = this.clone(this.cache);
-        if (cacheToPersist.overlay?.config) {
-          cacheToPersist.overlay.config.isEnabled = false;
-        }
-        // Encrypt sensitive API keys before writing to localStorage
-        if (cacheToPersist.llmProviders) {
-          for (const pid of Object.keys(cacheToPersist.llmProviders)) {
-            if (cacheToPersist.llmProviders[pid]?.apiKey) {
-              cacheToPersist.llmProviders[pid].apiKey = encryptSensitive(cacheToPersist.llmProviders[pid].apiKey);
-            }
+  private executeSave(): void {
+    if (typeof localStorage === "undefined") return;
+    try {
+      const cacheToPersist = this.clone(this.cache);
+      if (cacheToPersist.overlay?.config) {
+        cacheToPersist.overlay.config.isEnabled = false;
+      }
+      // Never store sensitive API keys in localStorage - all keys are managed via OS Keyring
+      if (cacheToPersist.llmProviders) {
+        for (const pid of Object.keys(cacheToPersist.llmProviders)) {
+          if (cacheToPersist.llmProviders[pid]) {
+            cacheToPersist.llmProviders[pid].apiKey = "";
           }
         }
-        if (cacheToPersist.translation?.providers?.openrouter?.apiKey) {
-          cacheToPersist.translation.providers.openrouter.apiKey = encryptSensitive(cacheToPersist.translation.providers.openrouter.apiKey);
-        }
-        if (cacheToPersist.translation?.providers?.deepl?.apiKey) {
-          cacheToPersist.translation.providers.deepl.apiKey = encryptSensitive(cacheToPersist.translation.providers.deepl.apiKey);
-        }
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheToPersist));
-      } catch (e) {
-        console.error("Failed to save settings to localStorage:", e);
       }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheToPersist));
+    } catch (e) {
+      console.error("Failed to save settings to localStorage:", e);
+    }
+  }
+
+  public saveToStorage(immediate = false): void {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    if (immediate) {
+      this.executeSave();
+    } else {
+      this.saveDebounceTimer = setTimeout(() => {
+        this.saveDebounceTimer = null;
+        this.executeSave();
+      }, 250);
     }
     this.notifyListeners();
+  }
+
+  public flush(): void {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    this.executeSave();
   }
 
   private deepMerge(target: any, source: any): any {
@@ -494,58 +481,62 @@ class SettingsManager {
   }
 
   public getOpenRouterApiKey(): string {
-    return (
-      this.cache.llmProviders?.openrouter?.apiKey ||
-      this.cache.translation?.providers?.openrouter?.apiKey ||
-      ""
-    );
+    return this.cache.llmProviders?.openrouter?.apiKey || "";
   }
 
   public getDeepLApiKey(): string {
-    return (
-      this.cache.translation?.providers?.deepl?.apiKey ||
-      ""
-    );
+    return this.cache.llmProviders?.deepl?.apiKey || "";
   }
 
   public getGeneral(): GeneralSettings {
-    return this.clone(this.cache.general);
+    return { ...this.cache.general };
   }
 
   public getTranslation(): TranslationSettings {
-    return this.clone(this.cache.translation);
+    return { ...this.cache.translation };
   }
 
   public getGlossary(): GlossarySettings {
-    return this.clone(this.cache.glossary);
+    return { ...this.cache.glossary, terms: [...(this.cache.glossary.terms || [])] };
   }
 
   public getScriptManager(): ScriptManagerSettings {
-    return this.clone(this.cache.scriptManager);
+    return { ...this.cache.scriptManager };
   }
 
   public getTextractor(): TextractorSettings {
-    return this.clone(this.cache.textractor);
+    return { ...this.cache.textractor };
   }
 
   public getOcr(): OcrSettings {
-    return this.clone(this.cache.ocr);
+    return {
+      ...this.cache.ocr,
+      regions: this.cache.ocr.regions?.map((r) => ({ ...r })) || [],
+      stability: { ...this.cache.ocr.stability },
+    };
   }
 
   public getOverlay(): OverlaySettings {
-    return this.clone(this.cache.overlay);
+    return {
+      ...this.cache.overlay,
+      config: { ...this.cache.overlay.config },
+      userCustomPresets: [...(this.cache.overlay.userCustomPresets || [])],
+    };
   }
 
   public getTextPreprocessing(): TextPreprocessingSettings {
-    return this.clone(this.cache.textPreprocessing);
+    return {
+      ...this.cache.textPreprocessing,
+      pipeline: this.cache.textPreprocessing.pipeline?.map((p) => ({ ...p, options: { ...p.options } })) || [],
+    };
   }
 
   public getLogs(): LogSettings {
-    return this.clone(this.cache.logs);
+    return { ...this.cache.logs };
   }
 
   public getBatch(): BatchSettings {
-    return this.clone(this.cache.batch || DEFAULT_BATCH_SETTINGS);
+    return { ...(this.cache.batch || DEFAULT_BATCH_SETTINGS) };
   }
 
   public getLlmProviders(): Record<string, StoredProviderConfig> {
@@ -560,11 +551,30 @@ class SettingsManager {
     return { id, apiKey: "", baseUrl: undefined, isVerified: false, customModels: [] };
   }
 
-  public saveLlmProvider(config: StoredProviderConfig) {
+  public async saveLlmProvider(config: StoredProviderConfig): Promise<void> {
     if (!this.cache.llmProviders) {
       this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
     }
     this.cache.llmProviders[config.id] = this.clone(config);
+    if (config.apiKey !== undefined) {
+      await SecureStorageService.setApiKey(config.id, config.apiKey);
+    }
+    this.saveToStorage();
+  }
+
+  public async setLlmApiKey(providerId: string, apiKey: string): Promise<void> {
+    if (!this.cache.llmProviders) {
+      this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
+    }
+    if (!this.cache.llmProviders[providerId]) {
+      this.cache.llmProviders[providerId] = {
+        id: providerId,
+        apiKey: "",
+        baseUrl: undefined,
+      };
+    }
+    this.cache.llmProviders[providerId].apiKey = apiKey;
+    await SecureStorageService.setApiKey(providerId, apiKey);
     this.saveToStorage();
   }
 
@@ -622,17 +632,6 @@ class SettingsManager {
     this.saveToStorage();
   }
 
-  public updateProvider(providerId: string, patch: Partial<TranslationProviderConfig>) {
-    const existing = this.cache.translation.providers[providerId] || {
-      id: providerId,
-      name: providerId,
-      type: providerId,
-      isEnabled: true,
-    };
-    this.cache.translation.providers[providerId] = { ...existing, ...patch };
-    this.saveToStorage();
-  }
-
   public updateGlossary(patch: Partial<GlossarySettings>) {
     this.cache.glossary = { ...this.cache.glossary, ...patch };
     this.saveToStorage();
@@ -681,12 +680,15 @@ class SettingsManager {
       this.cache = this.clone(DEFAULT_APP_SETTINGS);
     }
     invalidateCustomRulesCache();
-    this.saveToStorage();
+    this.saveToStorage(true);
   }
 
   public reloadFromStorage(): void {
     this.cache = this.loadFromStorage();
     invalidateCustomRulesCache();
+    this.initSecureStorage().catch((err) => {
+      console.warn("[SettingsManager] Secure storage reload error:", err);
+    });
     this.notifyListeners();
   }
 

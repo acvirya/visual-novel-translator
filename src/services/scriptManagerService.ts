@@ -458,6 +458,7 @@ class ScriptManagerService {
       ...this.entries[idx],
       ...patch,
     };
+    this.rebuildIndexes();
     this.saveState();
     return true;
   }
@@ -469,6 +470,7 @@ class ScriptManagerService {
     const prevLen = this.entries.length;
     this.entries = this.entries.filter((e) => e.id !== id);
     if (this.entries.length !== prevLen) {
+      this.rebuildIndexes();
       this.saveState();
       return true;
     }
@@ -480,6 +482,7 @@ class ScriptManagerService {
    */
   public clearEntries() {
     this.entries = [];
+    this.rebuildIndexes();
     this.saveState();
   }
 
@@ -679,7 +682,7 @@ class ScriptManagerService {
           if (normItem.includes(normCleanMsg) || normCleanMsg.includes(normItem)) {
             const overlapScore = Math.min(normItem.length, normCleanMsg.length) / Math.max(normItem.length, normCleanMsg.length);
             const spkAdjustment = getSpeakerAdjustment(itemSpk);
-            const finalScore = overlapScore + spkAdjustment;
+            const finalScore = Math.max(0, Math.min(1.0, overlapScore + spkAdjustment));
 
             if (finalScore >= Math.max(effectiveThreshold, 0.85) && finalScore > bestSubstrScore) {
               bestSubstrScore = finalScore;
@@ -727,7 +730,7 @@ class ScriptManagerService {
 
         const levDist = calcLevenshteinDistance(normCleanMsg, normItem);
         const levScore = 1.0 - levDist / 3;
-        const weightedScore = levScore + getSpeakerAdjustment(itemSpk);
+        const weightedScore = Math.max(0, Math.min(1.0, levScore + getSpeakerAdjustment(itemSpk)));
 
         if (weightedScore >= effectiveThreshold && weightedScore > bestScore) {
           bestScore = weightedScore;
@@ -787,7 +790,7 @@ class ScriptManagerService {
 
         const rawScore = (2 * sharedMatches) / (queryTotalBigrams + candidateBigrams);
         const itemSpk = entry._normSpeaker ?? this.normalizeSpeaker(entry.speaker);
-        const weightedScore = rawScore + getSpeakerAdjustment(itemSpk);
+        const weightedScore = Math.max(0, Math.min(1.0, rawScore + getSpeakerAdjustment(itemSpk)));
 
         if (weightedScore >= effectiveThreshold && weightedScore > bestScore) {
           bestScore = weightedScore;

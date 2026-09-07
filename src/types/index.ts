@@ -1,21 +1,8 @@
 export type NavigationTab =
-  // 4 Primary Hubs
   | "live-game"
   | "batch-translate"
   | "knowledge-base"
-  | "settings"
-  // Legacy / Sub-view compatibility aliases
-  | "live-translate"
-  | "manual-translate"
-  | "glossary-manager"
-  | "script-manager"
-  | "logs"
-  | "textractor"
-  | "ocr"
-  | "overlay-settings"
-  | "text-preprocessing"
-  | "general-settings"
-  | "translation-providers";
+  | "settings";
 
 export type PreprocessingType =
   | "furigana_cleaner"

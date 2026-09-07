@@ -182,6 +182,51 @@ pub fn list_target_processes() -> Result<Vec<ProcessInfo>, String> {
     }
 }
 
+/// Generates candidate filesystem paths for TextractorCLI across environment variables and dynamic Windows drives (M18, L8)
+fn get_textractor_candidate_paths(arch_filter: Option<&str>) -> Vec<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    let arches: Vec<&str> = match arch_filter {
+        Some("x64") => vec!["x64"],
+        Some("x86") => vec!["x86"],
+        _ => vec!["x64", "x86"],
+    };
+
+    let mut base_dirs: Vec<String> = Vec::new();
+
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        base_dirs.push(format!("{}\\Textractor", pf));
+    }
+    if let Ok(pfx86) = std::env::var("ProgramFiles(x86)") {
+        base_dirs.push(format!("{}\\Textractor", pfx86));
+    }
+    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+        base_dirs.push(format!("{}\\Programs\\Textractor", local_app));
+        base_dirs.push(format!("{}\\Textractor", local_app));
+    }
+
+    // Inspect logical drive letters dynamically on Windows without hardcoded drive assumptions
+    #[cfg(target_os = "windows")]
+    {
+        for drive_byte in b'C'..=b'Z' {
+            let drive_char = drive_byte as char;
+            let root = format!("{}:\\", drive_char);
+            if Path::new(&root).exists() {
+                base_dirs.push(format!("{}Program Files\\Textractor", root));
+                base_dirs.push(format!("{}Program Files (x86)\\Textractor", root));
+                base_dirs.push(format!("{}Textractor", root));
+            }
+        }
+    }
+
+    for base in base_dirs {
+        for arch in &arches {
+            candidates.push(std::path::PathBuf::from(format!("{}\\{}\\TextractorCLI.exe", base, arch)));
+        }
+    }
+
+    candidates
+}
+
 fn resolve_textractor_exe(requested: &str) -> std::path::PathBuf {
     let req_path = Path::new(requested);
     if req_path.exists() && req_path.is_file() {
@@ -191,29 +236,9 @@ fn resolve_textractor_exe(requested: &str) -> std::path::PathBuf {
     let is_x64 = requested.to_lowercase().contains("x64");
     let arch_dir = if is_x64 { "x64" } else { "x86" };
 
-    let mut candidates: Vec<String> = Vec::new();
-
-    if let Ok(pf) = std::env::var("ProgramFiles") {
-        candidates.push(format!("{}\\Textractor\\{}\\TextractorCLI.exe", pf, arch_dir));
-    }
-    if let Ok(pfx86) = std::env::var("ProgramFiles(x86)") {
-        candidates.push(format!("{}\\Textractor\\{}\\TextractorCLI.exe", pfx86, arch_dir));
-    }
-    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
-        candidates.push(format!("{}\\Programs\\Textractor\\{}\\TextractorCLI.exe", local_app, arch_dir));
-        candidates.push(format!("{}\\Textractor\\{}\\TextractorCLI.exe", local_app, arch_dir));
-    }
-
-    candidates.push(format!("C:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
-    candidates.push(format!("C:\\Program Files (x86)\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
-    candidates.push(format!("C:\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
-    candidates.push(format!("D:\\Program Files\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
-    candidates.push(format!("D:\\Textractor\\{}\\TextractorCLI.exe", arch_dir));
-
-    for c in candidates {
-        let p = Path::new(&c);
-        if p.exists() && p.is_file() {
-            return p.to_path_buf();
+    for candidate in get_textractor_candidate_paths(Some(arch_dir)) {
+        if candidate.exists() && candidate.is_file() {
+            return candidate;
         }
     }
 
@@ -381,7 +406,7 @@ pub fn start_textractor(
 pub fn format_textractor_command(command: &str, active_pid: Option<u32>) -> Result<String, String> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
-        return Err("Perintah atau hook code tidak boleh kosong".to_string());
+        return Err("Command or hook code cannot be empty".to_string());
     }
 
     // Check if command already contains a valid -P<digits> or -p<digits> flag
@@ -394,7 +419,7 @@ pub fn format_textractor_command(command: &str, active_pid: Option<u32>) -> Resu
     } else if let Some(pid) = active_pid {
         Ok(format!("{} -P{}", trimmed, pid))
     } else {
-        Err("Tidak ada proses game yang terhubung (attach ke game terlebih dahulu atau sertakan -P<pid>)".to_string())
+        Err("No active game process attached (attach to a game process first or provide -P<pid>)".to_string())
     }
 }
 
@@ -541,40 +566,11 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
 
 #[tauri::command]
 pub fn find_textractor_installation() -> Option<String> {
-    let mut candidates: Vec<String> = Vec::new();
-
-    if let Ok(pf) = std::env::var("ProgramFiles") {
-        candidates.push(format!("{}\\Textractor\\x64\\TextractorCLI.exe", pf));
-        candidates.push(format!("{}\\Textractor\\x86\\TextractorCLI.exe", pf));
-    }
-    if let Ok(pfx86) = std::env::var("ProgramFiles(x86)") {
-        candidates.push(format!("{}\\Textractor\\x64\\TextractorCLI.exe", pfx86));
-        candidates.push(format!("{}\\Textractor\\x86\\TextractorCLI.exe", pfx86));
-    }
-    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
-        candidates.push(format!("{}\\Programs\\Textractor\\x64\\TextractorCLI.exe", local_app));
-        candidates.push(format!("{}\\Programs\\Textractor\\x86\\TextractorCLI.exe", local_app));
-        candidates.push(format!("{}\\Textractor\\x64\\TextractorCLI.exe", local_app));
-        candidates.push(format!("{}\\Textractor\\x86\\TextractorCLI.exe", local_app));
-    }
-
-    candidates.push(r"C:\Program Files\Textractor\x64\TextractorCLI.exe".to_string());
-    candidates.push(r"C:\Program Files (x86)\Textractor\x64\TextractorCLI.exe".to_string());
-    candidates.push(r"C:\Program Files\Textractor\x86\TextractorCLI.exe".to_string());
-    candidates.push(r"C:\Program Files (x86)\Textractor\x86\TextractorCLI.exe".to_string());
-    candidates.push(r"C:\Textractor\x64\TextractorCLI.exe".to_string());
-    candidates.push(r"C:\Textractor\x86\TextractorCLI.exe".to_string());
-    candidates.push(r"D:\Program Files\Textractor\x64\TextractorCLI.exe".to_string());
-    candidates.push(r"D:\Program Files\Textractor\x86\TextractorCLI.exe".to_string());
-    candidates.push(r"D:\Textractor\x64\TextractorCLI.exe".to_string());
-    candidates.push(r"D:\Textractor\x86\TextractorCLI.exe".to_string());
-
-    for path in &candidates {
-        if Path::new(path).exists() {
-            return Some(path.to_string());
+    for path in get_textractor_candidate_paths(None) {
+        if path.exists() && path.is_file() {
+            return Some(path.to_string_lossy().to_string());
         }
     }
-
     None
 }
 

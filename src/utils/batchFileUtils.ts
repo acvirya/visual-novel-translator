@@ -11,6 +11,7 @@ export interface BatchItem {
   originalMessage: string;
   translatedSpeaker?: string;
   translatedMessage?: string;
+  explicitRetranslated?: boolean;
 }
 
 export interface BatchFileEntry {

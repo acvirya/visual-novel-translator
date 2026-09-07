@@ -15,6 +15,12 @@ import { UnifiedSettingsView } from "./components/views/UnifiedSettingsView";
 // Error Boundary
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 
+import { appContainer } from "./services/appContainer";
+import { translationManager } from "./services/translationManager";
+import { batchTranslateService } from "./services/batchTranslateService";
+import { textractorManagedService } from "./services/textractorService";
+import { overlayChannel } from "./utils/overlayChannel";
+
 export function App() {
   const currentTab = useUIStore((state) => state.currentTab);
   const setCurrentTab = useUIStore((state) => state.setCurrentTab);
@@ -22,7 +28,13 @@ export function App() {
   const setIsSidebarCollapsed = useUIStore((state) => state.setIsSidebarCollapsed);
 
   useEffect(() => {
-    shortcutService.init();
+    // Register and initialize core services in AppContainer (A2, H6, H10)
+    appContainer.register(translationManager);
+    appContainer.register(batchTranslateService);
+    appContainer.register(shortcutService);
+    appContainer.register(overlayChannel);
+    appContainer.register(textractorManagedService);
+    appContainer.init();
 
     // Background refresh models for all verified providers on boot (graceful error handling)
     LlmDispatcherService.refreshAllVerifiedProviders().catch((err) => {
@@ -38,7 +50,7 @@ export function App() {
     window.addEventListener("resize", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
-      shortcutService.destroy().catch(() => {});
+      appContainer.dispose().catch(() => {});
     };
   }, [setIsSidebarCollapsed]);
 
