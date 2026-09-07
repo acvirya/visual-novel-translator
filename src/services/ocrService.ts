@@ -212,12 +212,13 @@ export class OcrService {
           sourceType: "ocr",
         });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!this.isScanningActive || sessionId !== this.scanSessionId) {
         return;
       }
       this.consecutiveErrorCount++;
-      store.setScanError(err?.message || String(err));
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      store.setScanError(errorMessage);
       // Exponential backoff up to 5000ms on repeated errors (H4)
       nextDelay = Math.min(5000, store.scanInterval * Math.pow(1.5, Math.min(this.consecutiveErrorCount, 6)));
     } finally {
@@ -237,8 +238,8 @@ export class OcrService {
       channel.postMessage({ type: "OPEN_SELECTOR", mode });
       channel.close();
       await TauriBridge.openRegionSelectorOverlay(monitorName || null, mode);
-    } catch (err) {
-      console.warn("Failed to open region selector overlay:", err);
+    } catch (err: unknown) {
+      logger.warn("OcrService", "Failed to open region selector overlay:", err);
     }
   }
 
@@ -248,8 +249,8 @@ export class OcrService {
   public static async closeRegionSelector(restoreMain: boolean = true): Promise<void> {
     try {
       await TauriBridge.closeRegionSelectorOverlay(restoreMain);
-    } catch (err) {
-      console.warn("Failed to close region selector overlay:", err);
+    } catch (err: unknown) {
+      logger.warn("OcrService", "Failed to close region selector overlay:", err);
     }
   }
 

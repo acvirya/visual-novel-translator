@@ -9,6 +9,8 @@ export interface OverlayDialogueMessage {
   translatedSpeaker?: string;
   message?: string;
   translatedMessage?: string;
+  isError?: boolean;
+  errorMessage?: string;
 }
 
 export type OverlayEvent =

@@ -213,7 +213,9 @@ export const OneShotOcrOverlay: React.FC = () => {
               sourceType: "ocr",
             });
 
-            const resultText = transRes.success && transRes.translatedMessage ? transRes.translatedMessage : box.rawText;
+            const isSuccess = transRes.success && Boolean(transRes.translatedMessage);
+            const resultText = isSuccess ? transRes.translatedMessage : box.rawText;
+            const errorMsg = !isSuccess ? (transRes.item?.errorMessage || "Translation failed") : null;
 
             setTranslatedBoxes((prev) =>
               prev.map((item) =>
@@ -222,6 +224,7 @@ export const OneShotOcrOverlay: React.FC = () => {
                       ...item,
                       isProcessing: false,
                       translatedText: resultText,
+                      error: errorMsg,
                     }
                   : item
               )

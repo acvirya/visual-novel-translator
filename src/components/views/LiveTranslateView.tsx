@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Coins,
   Activity,
+  AlertTriangle,
 } from "lucide-react";
 import { translationManager, LlmContextSettings } from "../../services/translationManager";
 import { useTranslationStore } from "../../stores/useTranslationStore";
@@ -536,6 +537,28 @@ export const LiveTranslateView: React.FC = () => {
                       </span>
                     )}
 
+                    {/* Error Badge if translation failed */}
+                    {item.isError && (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          backgroundColor: "rgba(239, 68, 68, 0.15)",
+                          color: "#f87171",
+                          border: "1px solid rgba(239, 68, 68, 0.4)",
+                          padding: "2px 8px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                        }}
+                        title={item.errorMessage || "Translation failed"}
+                      >
+                        <AlertTriangle size={11} />
+                        <span>Failed: {item.errorMessage ? (item.errorMessage.length > 55 ? item.errorMessage.slice(0, 52) + "..." : item.errorMessage) : "Error"}</span>
+                      </span>
+                    )}
+
                     {item.durationMs > 0 && (
                       <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
                         {item.durationMs}ms
@@ -578,8 +601,8 @@ export const LiveTranslateView: React.FC = () => {
                 {/* Translated Dialogue Block */}
                 <div
                   style={{
-                    backgroundColor: "var(--bg-surface-elevated)",
-                    borderLeft: "3px solid var(--accent-primary)",
+                    backgroundColor: item.isError ? "rgba(239, 68, 68, 0.08)" : "var(--bg-surface-elevated)",
+                    borderLeft: `3px solid ${item.isError ? "var(--accent-danger, #ef4444)" : "var(--accent-primary)"}`,
                     borderRadius: "0 var(--radius-sm) var(--radius-sm) 0",
                     padding: "10px 14px",
                     display: "flex",

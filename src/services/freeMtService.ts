@@ -8,6 +8,7 @@
 import { TauriBridge } from "./tauriBridge";
 import { extractSpeakerAndDialogue } from "../utils/textPreprocessor";
 import { settingsManager } from "./settingsManager";
+import { logger } from "./loggerService";
 
 export const FREE_MT_PROVIDERS = {
   GOOGLE: "mt:google-translate",
@@ -176,7 +177,7 @@ export async function translateWithNativeRust(
     );
     return { text: result };
   } catch (err: any) {
-    console.warn("Native MT command failed, trying fallback:", err);
+    logger.warn("FreeMtService", "Native MT command failed, trying fallback:", err);
     return { text: "", error: err?.toString() || String(err) };
   }
 }

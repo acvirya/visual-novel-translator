@@ -31,8 +31,10 @@ export interface TextractorState {
   latestMessage: string;
   latestRawMessage: string;
   autoForwardToOverlay: boolean;
+  maxCharsPerPass: number;
 
   // Actions
+  setMaxCharsPerPass: (maxChars: number) => void;
   setExePath: (path: string) => void;
   setArch: (arch: "x86" | "x64") => void;
   setProcesses: (processes: TextractorProcessInfo[]) => void;
@@ -80,6 +82,7 @@ export const useTextractorStore = create<TextractorState>((set) => {
         exePath: ts.executablePath || DEFAULT_TEXTRACTOR_PATH,
         threadSyncWaitMs: ts.flushIntervalMs || 150,
         maxLogLines: ts.threadBufferSize || 100,
+        maxCharsPerPass: ts.maxCharsPerPass ?? 250,
       });
     });
   }
@@ -109,10 +112,15 @@ export const useTextractorStore = create<TextractorState>((set) => {
     loopDeduplication: textractorSettings.loopDeduplication ?? true,
     stutterReduction: textractorSettings.stutterReduction ?? true,
     autoForwardToOverlay: textractorSettings.autoForwardToOverlay ?? true,
+    maxCharsPerPass: textractorSettings.maxCharsPerPass ?? 250,
     latestSpeaker: "",
     latestMessage: "",
     latestRawMessage: "",
 
+    setMaxCharsPerPass: (maxCharsPerPass) => {
+      settingsManager.setTextractorMaxChars(maxCharsPerPass);
+      set({ maxCharsPerPass });
+    },
     setExePath: (exePath) => {
       settingsManager.updateTextractor({ executablePath: exePath });
       set({ exePath });

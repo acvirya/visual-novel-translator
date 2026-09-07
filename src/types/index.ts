@@ -88,6 +88,8 @@ export interface TranslationLogItem {
     source: string; // e.g. "「…別に、何でもないわ。早く教室に行きましょう。」"
     translated: string; // e.g. "\"...It's nothing really. Let's hurry to the classroom.\""
   };
+  isError?: boolean;
+  errorMessage?: string;
 }
 
 export interface GlossaryEntry {

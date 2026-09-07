@@ -67,6 +67,7 @@ export interface TextractorSettings {
   loopDeduplication?: boolean;
   stutterReduction?: boolean;
   autoForwardToOverlay?: boolean;
+  maxCharsPerPass?: number; // Anti-skip burst character limit (default 250)
 }
 
 export interface OcrSettings {
@@ -196,6 +197,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     loopDeduplication: true,
     stutterReduction: true,
     autoForwardToOverlay: false,
+    maxCharsPerPass: 250,
   },
   ocr: {
     customPath: "",
@@ -645,6 +647,14 @@ class SettingsManager {
   public updateTextractor(patch: Partial<TextractorSettings>) {
     this.cache.textractor = { ...this.cache.textractor, ...patch };
     this.saveToStorage();
+  }
+
+  public getTextractorMaxChars(): number {
+    return this.cache.textractor?.maxCharsPerPass ?? this.cache.translation?.maxCharsPerLine ?? 250;
+  }
+
+  public setTextractorMaxChars(val: number) {
+    this.updateTextractor({ maxCharsPerPass: val });
   }
 
   public updateOcr(patch: Partial<OcrSettings>) {

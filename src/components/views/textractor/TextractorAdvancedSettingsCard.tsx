@@ -39,6 +39,8 @@ export const TextractorAdvancedSettingsCard: React.FC = () => {
     setLoopDeduplication,
     stutterReduction,
     setStutterReduction,
+    maxCharsPerPass,
+    setMaxCharsPerPass,
   } = useTextractorStore();
 
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
@@ -392,6 +394,31 @@ export const TextractorAdvancedSettingsCard: React.FC = () => {
                 </label>
                 <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "4px", lineHeight: "1.3" }}>
                   Collapses excessive stutter marks (e.g. あ、、あの → あ、あの, ！！！！ → ！).
+                </span>
+              </div>
+
+              {/* 5. Max Characters per Pass (Anti-Skip Burst Filter) */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", alignItems: "center" }}>
+                  <label style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 500 }}>
+                    Max Characters per Pass (Skip Burst Filter):
+                  </label>
+                  <span style={{ fontSize: "11px", fontWeight: 600, color: maxCharsPerPass > 0 ? "var(--accent-gold)" : "var(--text-muted)" }}>
+                    {maxCharsPerPass > 0 ? `${maxCharsPerPass} chars` : "Disabled (0)"}
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  step={50}
+                  value={maxCharsPerPass}
+                  onChange={(e) => setMaxCharsPerPass(parseInt(e.target.value, 10) || 0)}
+                  placeholder="250 (0 to disable)"
+                  style={{ width: "100%", fontSize: "12px", height: "32px" }}
+                />
+                <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "3px", lineHeight: "1.3" }}>
+                  Discards text clumps exceeding this length when fast-forwarding/skipping VN dialogue. Does not affect OCR.
                 </span>
               </div>
             </div>

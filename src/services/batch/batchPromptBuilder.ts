@@ -3,6 +3,7 @@ import { buildCompleteSystemPrompt, ChatMessage } from "../openRouterService";
 import { executePreprocessingPipeline } from "../../utils/textPreprocessor";
 import { BatchItem, WholeTurnBatch } from "../../utils/batchFileUtils";
 import { settingsManager } from "../settingsManager";
+import { logger } from "../loggerService";
 
 /**
  * Builds the LLM ChatMessage array for a batch translation turn,
@@ -88,7 +89,7 @@ export async function writeBatchDebugLog(params: {
     try {
       await TauriBridge.appendDebugLog(target, logEntry);
     } catch (e) {
-      console.warn(`Failed to write debug log to ${target}:`, e);
+      logger.warn("BatchPromptBuilder", `Failed to write debug log to ${target}:`, e);
     }
   }
 }

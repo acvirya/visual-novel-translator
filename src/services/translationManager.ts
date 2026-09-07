@@ -29,6 +29,7 @@ export interface TranslatePipelineResult {
   translatedMessage: string;
   provider: string;
   durationMs: number;
+  error?: string;
 }
 
 export interface LlmContextSettings {
@@ -146,11 +147,17 @@ class TranslationManager implements ManagedService {
     }
   }
 
+  /**
+   * Returns current maximum characters per line limit.
+   */
   public getMaxCharsPerLine(): number {
     const t = settingsManager.getTranslation();
     return t?.maxCharsPerLine ?? 250;
   }
 
+  /**
+   * Sets maximum characters per line limit and persists it to settings.
+   */
   public setMaxCharsPerLine(val: number) {
     settingsManager.updateTranslation({ maxCharsPerLine: val });
     const settings = {
@@ -160,6 +167,9 @@ class TranslationManager implements ManagedService {
     this.emit({ type: "contextSettings", settings });
   }
 
+  /**
+   * Returns current LLM context buffer settings (capacity, retention, max chars).
+   */
   public getContextSettings(): LlmContextSettings {
     const t = settingsManager.getTranslation();
     const max = t?.maxContextLines ?? 10;
@@ -171,6 +181,9 @@ class TranslationManager implements ManagedService {
     };
   }
 
+  /**
+   * Updates and persists LLM context buffer settings.
+   */
   public setContextSettings(settings: Partial<LlmContextSettings>) {
     const patch: any = {};
     if (settings.maxContextLines !== undefined) patch.maxContextLines = settings.maxContextLines;
@@ -193,6 +206,9 @@ class TranslationManager implements ManagedService {
     this.emit({ type: "contextSettings", settings: this.getContextSettings() });
   }
 
+  /**
+   * Checks if translation is restricted strictly to local Knowledge Base script entries.
+   */
   public getUseScriptOnly(): boolean {
     return settingsManager.getTranslation()?.useScriptOnly ?? false;
   }
@@ -221,22 +237,25 @@ class TranslationManager implements ManagedService {
    */
   public translate(options: TranslatePipelineOptions): Promise<TranslatePipelineResult> {
     const cleanMsg = options.message?.trim() || "";
-    const maxChars = this.getMaxCharsPerLine();
+    const isTextractor = options.sourceType === "textractor";
+    const maxChars = isTextractor ? settingsManager.getTextractorMaxChars() : 0;
 
-    // Fast-forward / Skip clump filter
-    if (maxChars > 0 && cleanMsg.length > maxChars) {
+    // Fast-forward / Skip clump filter (Textractor only)
+    if (isTextractor && maxChars > 0 && cleanMsg.length > maxChars) {
       logger.warn(
         "TranslationManager",
-        `[Skipped Burst] Line length (${cleanMsg.length} chars) exceeded limit of ${maxChars} chars. Discarded.`
+        `[Skipped Burst] Textractor line length (${cleanMsg.length} chars) exceeded limit of ${maxChars} chars. Discarded.`
       );
 
       const discardedItem: TranslationLogItem = {
         id: generateLogId("discard"),
         timestamp: new Date().toLocaleTimeString(),
-        provider: "Discarded (Max Chars)",
+        provider: "Discarded (Textractor Burst)",
+        sourceType: "textractor",
         durationMs: 0,
         name: options.speaker ? { source: options.speaker, translated: options.speaker } : undefined,
-        message: { source: cleanMsg, translated: `[Skipped - Exceeded ${maxChars} chars limit]` },
+        message: { source: cleanMsg, translated: `[Skipped - Exceeded ${maxChars} chars Textractor limit]` },
+        isError: false,
       };
       this.notify(discardedItem);
 
@@ -246,8 +265,8 @@ class TranslationManager implements ManagedService {
         speaker: options.speaker,
         translatedSpeaker: options.speaker,
         message: cleanMsg,
-        translatedMessage: `[Skipped - Exceeded ${maxChars} chars limit]`,
-        provider: "Discarded (Max Chars)",
+        translatedMessage: `[Skipped - Exceeded ${maxChars} chars Textractor limit]`,
+        provider: "Discarded (Textractor Burst)",
         durationMs: 0,
       });
     }
@@ -516,6 +535,7 @@ class TranslationManager implements ManagedService {
     let translatedMessage = cleanMsg;
     let providerLabel = "Google Translate (Free)";
     let isSuccess = false;
+    let translationError: string | undefined = undefined;
 
     // A. Google Translate Free MT
     if (isGoogleTranslate(providerId)) {
@@ -530,6 +550,9 @@ class TranslationManager implements ManagedService {
       isSuccess = res.success;
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
       translatedMessage = res.translatedMessage || cleanMsg;
+      if (!res.success) {
+        translationError = res.error || "Google Translate unavailable (CAPTCHA / Network Block)";
+      }
     }
     // B. DeepL Free MT
     else if (isDeepLFree(providerId)) {
@@ -544,6 +567,9 @@ class TranslationManager implements ManagedService {
       isSuccess = res.success;
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
       translatedMessage = res.translatedMessage || cleanMsg;
+      if (!res.success) {
+        translationError = res.error || "DeepL Free translation failed";
+      }
     }
     // C. LLM Translation with Multi-turn Context, Dynamic Languages, Style Presets & Glossary Injection
     else {
@@ -585,6 +611,7 @@ class TranslationManager implements ManagedService {
           cost: res.cost || 0,
         });
       } else {
+        translationError = res.error || "LLM translation failed";
         logger.error("TranslationManager", `OpenRouter translation returned error: ${res.error}`);
       }
     }
@@ -619,6 +646,8 @@ class TranslationManager implements ManagedService {
       sourceType: options.sourceType,
       durationMs,
       matchedFromScript: false,
+      isError: !isSuccess,
+      errorMessage: !isSuccess ? translationError : undefined,
       name: cleanSpk
         ? {
             source: cleanSpk,
@@ -640,6 +669,8 @@ class TranslationManager implements ManagedService {
         translatedSpeaker,
         message: cleanMsg,
         translatedMessage,
+        isError: !isSuccess,
+        errorMessage: !isSuccess ? translationError : undefined,
       },
     });
 
@@ -655,6 +686,7 @@ class TranslationManager implements ManagedService {
       translatedMessage,
       provider: providerLabel,
       durationMs,
+      error: translationError,
     };
   }
 

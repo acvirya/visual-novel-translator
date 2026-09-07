@@ -7,7 +7,7 @@ import {
 } from "../../utils/overlayChannel";
 import { compileOverlayTemplate, getOverlayAnimationCss } from "../../utils/overlayTemplateEngine";
 import { TauriBridge } from "../../services/tauriBridge";
-import { Check, X, Move } from "lucide-react";
+import { Check, X, Move, AlertTriangle } from "lucide-react";
 
 const DEFAULT_CONFIG: OverlayConfig = {
   isEnabled: true,
@@ -594,6 +594,34 @@ export const OverlayWindow: React.FC = () => {
                       {activeDialogue.translatedSpeaker}
                     </span>
                   )}
+                </div>
+              )}
+
+              {/* Translation Error Badge */}
+              {activeDialogue.isError && (
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    alignSelf: "flex-start",
+                    padding: "3px 8px",
+                    backgroundColor: "rgba(220, 38, 38, 0.28)",
+                    border: "1px solid rgba(239, 68, 68, 0.6)",
+                    borderRadius: "4px",
+                    color: "#fca5a5",
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    lineHeight: 1.2,
+                    backdropFilter: "blur(4px)",
+                    marginBottom: "2px",
+                  }}
+                  title={activeDialogue.errorMessage || "Translation failed"}
+                >
+                  <AlertTriangle size={12} style={{ color: "#ef4444", flexShrink: 0 }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "450px" }}>
+                    {activeDialogue.errorMessage ? `Error: ${activeDialogue.errorMessage}` : "Translation Failed"}
+                  </span>
                 </div>
               )}
 

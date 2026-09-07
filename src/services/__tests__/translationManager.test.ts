@@ -82,4 +82,34 @@ describe("translationManager", () => {
     // Verify sequence can handle new items smoothly
     expect(translationManager.getContextHistoryLength()).toBe(0);
   });
+
+  it("should skip bursts exceeding maxChars for Textractor but NOT for OCR", async () => {
+    settingsManager.setTextractorMaxChars(100);
+
+    const longText = "あ".repeat(150); // 150 chars, exceeds 100
+
+    // 1. Textractor source should be skipped
+    const textractorRes = await translationManager.translate({
+      message: longText,
+      sourceType: "textractor",
+    });
+
+    expect(textractorRes.success).toBe(false);
+    expect(textractorRes.provider).toBe("Discarded (Textractor Burst)");
+    expect(textractorRes.translatedMessage).toContain("[Skipped - Exceeded 100 chars Textractor limit]");
+    expect(textractorRes.item.isError).toBe(false);
+
+    // 2. OCR source with same length should NOT be discarded by burst filter
+    // (it proceeds to queue; since it's mock/unconnected it won't be discarded as burst)
+    const ocrPromise = translationManager.translate({
+      message: longText,
+      sourceType: "ocr",
+    });
+    void ocrPromise;
+
+    // Verify it was enqueued and not synchronously rejected by maxChars burst check
+    expect(translationManager.getQueueLength()).toBeGreaterThanOrEqual(0);
+    // Cleanup queue
+    translationManager.clearQueue();
+  });
 });

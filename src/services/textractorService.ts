@@ -361,7 +361,7 @@ export class TextractorService {
       useTextractorStore.getState().resetTextractor();
       return { success: true };
     } catch (error) {
-      console.warn("Failed to stop Textractor:", error);
+      logger.warn("TextractorService", "Failed to stop Textractor:", error);
       return { success: false };
     }
   }
