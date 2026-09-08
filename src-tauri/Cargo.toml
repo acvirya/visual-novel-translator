@@ -24,7 +24,12 @@ tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
+tokio-util = { version = "0.7", features = ["time"] }
+parking_lot = "0.12"
+dashmap = "6.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
 oneocr-rs = "0.3"
@@ -33,9 +38,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
-    "Win32_Storage_FileSystem"
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading"
 ] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "deflate"] }
 rfd = "0.15"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 keyring = "4.2.0"
+xcap = "0.9"
+sysinfo = "0.39"

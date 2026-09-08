@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -25,18 +27,21 @@ pub struct TextractorMessage {
     pub timestamp: String,
 }
 
+pub struct TextractorSession {
+    pub child: Child,
+    pub stdin: ChildStdin,
+    pub active_pid: Option<u32>,
+    pub cancel_token: CancellationToken,
+}
+
 pub struct TextractorState {
-    pub child: Arc<Mutex<Option<Child>>>,
-    pub stdin: Arc<Mutex<Option<ChildStdin>>>,
-    pub active_pid: Arc<Mutex<Option<u32>>>,
+    pub session: Arc<Mutex<Option<TextractorSession>>>,
 }
 
 impl TextractorState {
     pub fn new() -> Self {
         Self {
-            child: Arc::new(Mutex::new(None)),
-            stdin: Arc::new(Mutex::new(None)),
-            active_pid: Arc::new(Mutex::new(None)),
+            session: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -45,36 +50,16 @@ impl TextractorState {
 mod win32 {
     use super::ProcessInfo;
     use std::collections::HashSet;
-    use std::ffi::c_void;
-
-    type HWND = *mut c_void;
-    type BOOL = i32;
-    type LPARAM = isize;
-    type DWORD = u32;
-    type HANDLE = *mut c_void;
-    type WNDENUMPROC = unsafe extern "system" fn(HWND, LPARAM) -> BOOL;
-
-    const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x1000;
-
-    extern "system" {
-        fn EnumWindows(lpEnumFunc: WNDENUMPROC, lParam: LPARAM) -> BOOL;
-        fn IsWindowVisible(hWnd: HWND) -> BOOL;
-        fn GetWindowTextLengthW(hWnd: HWND) -> i32;
-        fn GetWindowTextW(hWnd: HWND, lpString: *mut u16, nMaxCount: i32) -> i32;
-        fn GetWindowThreadProcessId(hWnd: HWND, lpdwProcessId: *mut DWORD) -> DWORD;
-        fn OpenProcess(dwDesiredAccess: DWORD, bInheritHandle: BOOL, dwProcessId: DWORD) -> HANDLE;
-        fn CloseHandle(hObject: HANDLE) -> BOOL;
-        fn QueryFullProcessImageNameW(
-            hProcess: HANDLE,
-            dwFlags: DWORD,
-            lpExeName: *mut u16,
-            lpdwSize: *mut DWORD,
-        ) -> BOOL;
-    }
+    use sysinfo::{Pid, System};
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+    };
 
     struct EnumContext {
         processes: Vec<ProcessInfo>,
         seen_pids: HashSet<u32>,
+        sys: System,
     }
 
     unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -106,25 +91,16 @@ mod win32 {
             return 1;
         }
 
-        let mut pid: DWORD = 0;
+        let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
         if pid == 0 || ctx.seen_pids.contains(&pid) {
             return 1;
         }
 
-        // Get Process Image Name
+        // Get Process Image Name via sysinfo
         let mut exe_name = String::new();
-        let h_proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if !h_proc.is_null() {
-            let mut name_buf = [0u16; 512];
-            let mut size: DWORD = name_buf.len() as DWORD;
-            if QueryFullProcessImageNameW(h_proc, 0, name_buf.as_mut_ptr(), &mut size) != 0 {
-                let full_path = String::from_utf16_lossy(&name_buf[..size as usize]);
-                if let Some(filename) = std::path::Path::new(&full_path).file_name() {
-                    exe_name = filename.to_string_lossy().to_string();
-                }
-            }
-            CloseHandle(h_proc);
+        if let Some(proc) = ctx.sys.process(Pid::from_u32(pid)) {
+            exe_name = proc.name().to_string_lossy().to_string();
         }
 
         if exe_name.is_empty() {
@@ -151,14 +127,18 @@ mod win32 {
     }
 
     pub fn enumerate_windows() -> Vec<ProcessInfo> {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
         let mut ctx = EnumContext {
             processes: Vec::new(),
             seen_pids: HashSet::new(),
+            sys,
         };
 
         unsafe {
             EnumWindows(
-                enum_windows_callback,
+                Some(enum_windows_callback),
                 &mut ctx as *mut EnumContext as LPARAM,
             );
         }
@@ -308,32 +288,28 @@ pub fn start_textractor(
 
         let stderr = child.stderr.take();
 
-        // Store child & active_pid immediately in state so it is tracked and can be cleaned up
-        {
-            let mut c = state.child.lock().unwrap_or_else(|e| e.into_inner());
-            *c = Some(child);
-        }
-        {
-            let mut p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
-            *p = Some(target_pid);
-        }
-
         // Send initial attach command to stdin (UTF-16LE encoded for Textractor std::wcin)
         let attach_cmd = format!("attach -P{}\r\n", target_pid);
         if let Err(e) = stdin.write_all(&str_to_utf16_bytes(&attach_cmd)) {
-            stop_textractor_internal(&state);
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(format!("Failed to send attach command to Textractor stdin: {}", e));
         }
         if let Err(e) = stdin.flush() {
-            stop_textractor_internal(&state);
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(format!("Failed to flush Textractor stdin: {}", e));
         }
 
-        // Store stdin safely (recovering from poisoned mutex if previous thread panicked)
-        {
-            let mut s = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
-            *s = Some(stdin);
-        }
+        let cancel_token = CancellationToken::new();
+
+        // Store entire unified session atomically under single mutex (Eliminates TOCTOU race conditions)
+        *state.session.lock() = Some(TextractorSession {
+            child,
+            stdin,
+            active_pid: Some(target_pid),
+            cancel_token: cancel_token.clone(),
+        });
 
         // Spawn async reader thread for stderr
         if let Some(err_stream) = stderr {
@@ -344,14 +320,15 @@ pub fn start_textractor(
                     if n == 0 {
                         break;
                     }
-                    eprintln!("[Textractor::Stderr] {}", line.trim());
+                    tracing::warn!("[Textractor::Stderr] {}", line.trim());
                     line.clear();
                 }
             });
         }
 
-        // Spawn async reader thread for stdout (decoding UTF-16LE wide-character stream from Textractor)
+        // Spawn async reader thread for stdout with cooperative cancellation token
         let app_clone = app.clone();
+        let cancel_clone = cancel_token.clone();
         std::thread::spawn(move || {
             use std::io::Read;
             let mut reader = BufReader::new(stdout);
@@ -359,7 +336,7 @@ pub fn start_textractor(
             let mut pair = [0u8; 2];
             const MAX_U16_BUFFER_SIZE: usize = 32_768; // 64KB max line safety bound
 
-            while let Ok(()) = reader.read_exact(&mut pair) {
+            while !cancel_clone.is_cancelled() && reader.read_exact(&mut pair).is_ok() {
                 let code_unit = u16::from_le_bytes(pair);
 
                 // Skip Byte Order Mark (BOM)
@@ -372,7 +349,7 @@ pub fn start_textractor(
                     let line_str = String::from_utf16_lossy(&u16_buf);
                     let trimmed = line_str.trim().trim_matches('\r').trim();
                     if !trimmed.is_empty() {
-                        eprintln!("[Textractor::Stdout] {}", trimmed);
+                        tracing::info!("[Textractor::Stdout] {}", trimmed);
                         if let Some(msg) = parse_textractor_line(trimmed, target_pid) {
                             let _ = app_clone.emit("textractor-text-event", &msg);
                         }
@@ -429,22 +406,17 @@ pub fn send_textractor_command(
     state: tauri::State<'_, TextractorState>,
     command: String,
 ) -> Result<(), String> {
-    let mut stdin_lock = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(ref mut stdin) = *stdin_lock {
-        let active_pid = {
-            let p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
-            *p
-        };
-
-        let final_cmd = format_textractor_command(&command, active_pid)?;
-        eprintln!("[Textractor::SendCommand] Sending stdin command: {}", final_cmd);
+    let mut session_guard = state.session.lock();
+    if let Some(ref mut session) = *session_guard {
+        let final_cmd = format_textractor_command(&command, session.active_pid)?;
+        tracing::info!("[Textractor::SendCommand] Sending stdin command: {}", final_cmd);
 
         let formatted = format!("{}\r\n", final_cmd);
         let utf16_bytes = str_to_utf16_bytes(&formatted);
-        stdin
+        session.stdin
             .write_all(&utf16_bytes)
             .map_err(|e| format!("Failed to write to Textractor stdin: {}", e))?;
-        stdin
+        session.stdin
             .flush()
             .map_err(|e| format!("Failed to flush Textractor stdin: {}", e))?;
         return Ok(());
@@ -459,37 +431,24 @@ pub fn stop_textractor(state: tauri::State<'_, TextractorState>) -> Result<(), S
     Ok(())
 }
 
-
 pub fn stop_textractor_internal(state: &TextractorState) {
-    // 1. Send graceful detach command to target process if active
-    let active_pid = {
-        let mut p = state.active_pid.lock().unwrap_or_else(|e| e.into_inner());
-        p.take()
-    };
+    let session_opt = state.session.lock().take();
+    if let Some(mut session) = session_opt {
+        // 1. Signal cancellation to background reader thread
+        session.cancel_token.cancel();
 
-    if let Some(pid) = active_pid {
-        if let Ok(mut s) = state.stdin.lock() {
-            if let Some(ref mut stdin) = *s {
-                let detach_cmd = format!("detach -P{}\r\n", pid);
-                let _ = stdin.write_all(&str_to_utf16_bytes(&detach_cmd));
-                let _ = stdin.flush();
-            }
+        // 2. Send graceful detach command to target process if active
+        if let Some(pid) = session.active_pid.take() {
+            let detach_cmd = format!("detach -P{}\r\n", pid);
+            let _ = session.stdin.write_all(&str_to_utf16_bytes(&detach_cmd));
+            let _ = session.stdin.flush();
         }
-    }
 
-    // 2. Close stdin handle to signal EOF
-    {
-        let mut s = state.stdin.lock().unwrap_or_else(|e| e.into_inner());
-        *s = None;
-    }
-
-    // 3. Terminate child process
-    {
-        let mut c = state.child.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(mut child) = c.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        // 3. Drop stdin handle to signal EOF, then terminate child process
+        drop(session.stdin);
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+        tracing::info!("[Textractor] Terminated Textractor session cleanly.");
     }
 }
 

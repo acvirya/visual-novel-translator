@@ -9,31 +9,13 @@ export function generateUniqueId(prefix = "entry"): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+import { distance as fastestDistance } from "fastest-levenshtein";
+
 /**
- * Computes exact Levenshtein edit distance between two strings
+ * Computes exact Levenshtein edit distance between two strings using fastest-levenshtein (Myers Bit-Parallel)
  */
 export function calcLevenshteinDistance(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-
-  const row = Array.from({ length: a.length + 1 }, (_, i) => i);
-
-  for (let i = 1; i <= b.length; i++) {
-    let prev = i;
-    for (let j = 1; j <= a.length; j++) {
-      let val: number;
-      if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        val = row[j - 1];
-      } else {
-        val = Math.min(row[j - 1] + 1, prev + 1, row[j] + 1);
-      }
-      row[j - 1] = prev;
-      prev = val;
-    }
-    row[a.length] = prev;
-  }
-  return row[a.length];
+  return fastestDistance(a, b);
 }
 
 import { ScriptEntry } from "../types";

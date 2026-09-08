@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Cursor;
 use image::{imageops::FilterType, DynamicImage, ImageBuffer, Rgba};
 use windows_sys::Win32::{
@@ -56,12 +57,55 @@ impl Drop for GdiCaptureGuard {
     }
 }
 
-/// Capture a screen region via Win32 GDI BitBlt
-pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
-    if width <= 0 || height <= 0 || width > 16_384 || height > 16_384 {
-        return Err(format!("Invalid capture rectangle dimensions ({}x{})", width, height));
+/// Capture a screen region via modern DirectX/Desktop Duplication (xcap)
+#[allow(dead_code)]
+fn capture_screen_rect_xcap(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
+    let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to list monitors: {}", e))?;
+    if monitors.is_empty() {
+        return Err("No active display monitors found".to_string());
     }
 
+    // Find the monitor that contains the top-left coordinate (x, y)
+    let target_monitor = monitors
+        .into_iter()
+        .find(|m| {
+            let mx = m.x().unwrap_or(0);
+            let my = m.y().unwrap_or(0);
+            let mw = m.width().unwrap_or(0) as i32;
+            let mh = m.height().unwrap_or(0) as i32;
+            x >= mx && x < mx + mw && y >= my && y < my + mh
+        })
+        .or_else(|| xcap::Monitor::all().ok()?.into_iter().next())
+        .ok_or_else(|| "Failed to locate target monitor for coordinates".to_string())?;
+
+    let full_image = target_monitor
+        .capture_image()
+        .map_err(|e| format!("xcap monitor capture failed: {}", e))?;
+
+    let mon_x = target_monitor.x().unwrap_or(0);
+    let mon_y = target_monitor.y().unwrap_or(0);
+    let rel_x = (x - mon_x).max(0) as u32;
+    let rel_y = (y - mon_y).max(0) as u32;
+
+    let crop_w = (width as u32).min(full_image.width().saturating_sub(rel_x));
+    let crop_h = (height as u32).min(full_image.height().saturating_sub(rel_y));
+
+    if crop_w == 0 || crop_h == 0 {
+        return Err(format!(
+            "Target capture region is outside monitor boundaries (rel: ({}, {}), size: {}x{}, monitor: {}x{})",
+            rel_x, rel_y, width, height, full_image.width(), full_image.height()
+        ));
+    }
+
+    let cropped = image::imageops::crop_imm(&full_image, rel_x, rel_y, crop_w, crop_h).to_image();
+
+    Ok(CapturedImage {
+        dynamic_image: DynamicImage::ImageRgba8(cropped),
+    })
+}
+
+/// Fallback capture via Win32 GDI BitBlt
+fn capture_screen_rect_gdi(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
     unsafe {
         let h_wnd: HWND = 0 as HWND;
         let h_dc_screen: HDC = GetDC(h_wnd);
@@ -143,6 +187,105 @@ pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
             dynamic_image,
         })
     }
+}
+
+/// Capture a screen region with primary hardware acceleration (xcap) and GDI fallback
+#[allow(dead_code)]
+pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
+    if width <= 0 || height <= 0 || width > 16_384 || height > 16_384 {
+        return Err(format!("Invalid capture rectangle dimensions ({}x{})", width, height));
+    }
+
+    match capture_screen_rect_xcap(x, y, width, height) {
+        Ok(captured) => Ok(captured),
+        Err(e) => {
+            tracing::warn!("[ScreenCapture] xcap capture failed ({}), falling back to Win32 GDI BitBlt", e);
+            capture_screen_rect_gdi(x, y, width, height)
+        }
+    }
+}
+
+/// Single-frame batch screen capture for multiple regions on a strictly single monitor.
+/// Captures the full monitor once via xcap and performs in-memory crops for all regions.
+pub fn capture_monitor_regions(regions: &[CaptureRegion]) -> Result<HashMap<String, CapturedImage>, String> {
+    let mut results = HashMap::new();
+    let valid_regions: Vec<&CaptureRegion> = regions
+        .iter()
+        .filter(|r| {
+            let w = r.physical_width.unwrap_or(r.width);
+            let h = r.physical_height.unwrap_or(r.height);
+            w > 0 && h > 0 && w <= 16_384 && h <= 16_384
+        })
+        .collect();
+
+    if valid_regions.is_empty() {
+        return Ok(results);
+    }
+
+    // Identify target monitor using the first valid region's coordinates
+    let first_r = valid_regions[0];
+    let first_x = first_r.physical_x.unwrap_or(first_r.x);
+    let first_y = first_r.physical_y.unwrap_or(first_r.y);
+
+    let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to list monitors: {}", e))?;
+    let target_monitor = monitors
+        .into_iter()
+        .find(|m| {
+            let mx = m.x().unwrap_or(0);
+            let my = m.y().unwrap_or(0);
+            let mw = m.width().unwrap_or(0) as i32;
+            let mh = m.height().unwrap_or(0) as i32;
+            first_x >= mx && first_x < mx + mw && first_y >= my && first_y < my + mh
+        })
+        .or_else(|| xcap::Monitor::all().ok()?.into_iter().next());
+
+    if let Some(monitor) = target_monitor {
+        if let Ok(full_image) = monitor.capture_image() {
+            let mon_x = monitor.x().unwrap_or(0);
+            let mon_y = monitor.y().unwrap_or(0);
+
+            for r in &valid_regions {
+                let rx = r.physical_x.unwrap_or(r.x);
+                let ry = r.physical_y.unwrap_or(r.y);
+                let rw = r.physical_width.unwrap_or(r.width);
+                let rh = r.physical_height.unwrap_or(r.height);
+
+                let rel_x = (rx - mon_x).max(0) as u32;
+                let rel_y = (ry - mon_y).max(0) as u32;
+                let crop_w = (rw as u32).min(full_image.width().saturating_sub(rel_x));
+                let crop_h = (rh as u32).min(full_image.height().saturating_sub(rel_y));
+
+                if crop_w > 0 && crop_h > 0 {
+                    let cropped = image::imageops::crop_imm(&full_image, rel_x, rel_y, crop_w, crop_h).to_image();
+                    results.insert(
+                        r.id.clone(),
+                        CapturedImage {
+                            dynamic_image: DynamicImage::ImageRgba8(cropped),
+                        },
+                    );
+                }
+            }
+
+            return Ok(results);
+        }
+    }
+
+    // Fallback: GDI BitBlt per region if xcap failed
+    tracing::warn!("[ScreenCapture] Batch xcap monitor capture failed, falling back to individual GDI BitBlt");
+    for r in regions {
+        let rx = r.physical_x.unwrap_or(r.x);
+        let ry = r.physical_y.unwrap_or(r.y);
+        let rw = r.physical_width.unwrap_or(r.width);
+        let rh = r.physical_height.unwrap_or(r.height);
+
+        if rw > 0 && rh > 0 {
+            if let Ok(cap) = capture_screen_rect_gdi(rx, ry, rw, rh) {
+                results.insert(r.id.clone(), cap);
+            }
+        }
+    }
+
+    Ok(results)
 }
 
 /// Convert a DynamicImage to a base64 PNG data URL

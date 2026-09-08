@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::Instant;
-use crate::screen_capture::{capture_screen_rect, resize_image, CaptureRegion};
+use crate::screen_capture::{resize_image, CaptureRegion};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,7 +135,18 @@ fn compute_fast_pixel_hash(img: &image::DynamicImage) -> u64 {
     hasher.finish()
 }
 
-static OCR_SCRATCH_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn cleanup_ocr_slots() {
+    let temp_dir = std::env::temp_dir();
+    let prefix = format!("vn_ocr_slot_{}_", std::process::id());
+    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if fname.starts_with(&prefix) && fname.ends_with(".png") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
 
 fn run_ocr_pipeline_on_image(
     engine: &oneocr_rs::OcrEngine,
@@ -146,24 +157,21 @@ fn run_ocr_pipeline_on_image(
     idx: usize,
     region_name: &str,
 ) -> (String, Vec<DetectedTextLine>) {
-    let seq = OCR_SCRATCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp_file = temp_dir.join(format!("vn_ocr_scratch_{}_{}_{}.png", std::process::id(), seq, idx));
-    if let Err(e) = img.save_with_format(&temp_file, image::ImageFormat::Png) {
-        eprintln!("Warning: Failed to write temporary crop image {}: {}", temp_file.display(), e);
-        let _ = std::fs::remove_file(&temp_file);
+    let slot_file = temp_dir.join(format!("vn_ocr_slot_{}_{}.png", std::process::id(), idx));
+    if let Err(e) = img.save_with_format(&slot_file, image::ImageFormat::Png) {
+        tracing::warn!("Failed to write OCR reusable slot image {}: {}", slot_file.display(), e);
         return (String::new(), Vec::new());
     }
 
-    let ocr_res_opt = match engine.run(temp_file.as_path().into()) {
+    let ocr_res_opt = match engine.run(slot_file.as_path().into()) {
         Ok(res) => Some(res),
         Err(e) => {
-            eprintln!("Warning: OneOCR pipeline failed on region {}: {:?}", region_name, e);
+            tracing::warn!("OneOCR pipeline failed on region {}: {:?}", region_name, e);
             None
         }
     };
 
-    // Immediately remove temporary crop image from disk
-    let _ = std::fs::remove_file(&temp_file);
+    // Reusable in-place slot buffer: do not delete on every cycle to eliminate SSD write/delete churn
 
     if let Some(ocr_res) = ocr_res_opt {
         let mut lines = Vec::new();
@@ -293,7 +301,7 @@ fn resolve_oneocr_files_in_dir(dir: &Path) -> Result<(PathBuf, PathBuf, PathBuf)
 }
 
 fn get_or_init_ocr_engine(custom_path: Option<String>) -> Result<(), String> {
-    let mut engine_guard = OCR_ENGINE_INSTANCE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut engine_guard = OCR_ENGINE_INSTANCE.lock();
     if engine_guard.is_none() {
         let (dll_path, _model_path, _) = find_oneocr_installation(custom_path)?;
         let base_dir = dll_path.parent().unwrap_or_else(|| Path::new("."));
@@ -334,7 +342,15 @@ pub fn scan_screen_regions(
 
     let stab_opt = stability_config.as_ref();
 
-    // 1. Capture screen and prepare images for all regions without holding any lock
+    // 1. Capture screen once for all regions via single-frame monitor capture (strictly confined to selected monitor)
+    let mut captured_map = match crate::screen_capture::capture_monitor_regions(&regions) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("[OneOCR] Single-frame capture failed: {}", e);
+            HashMap::new()
+        }
+    };
+
     struct PreparedRegion {
         idx: usize,
         id: String,
@@ -349,21 +365,9 @@ pub fn scan_screen_regions(
 
     let mut prepared_list = Vec::new();
     for (idx, region) in regions.iter().enumerate() {
-        let x = region.physical_x.unwrap_or(region.x);
-        let y = region.physical_y.unwrap_or(region.y);
-        let w = region.physical_width.unwrap_or(region.width);
-        let h = region.physical_height.unwrap_or(region.height);
-
-        if w <= 0 || h <= 0 {
-            continue;
-        }
-
-        let captured = match capture_screen_rect(x, y, w, h) {
-            Ok(cap) => cap,
-            Err(e) => {
-                eprintln!("Warning: Screen capture failed for region {}: {}", region.name, e);
-                continue;
-            }
+        let captured = match captured_map.remove(&region.id) {
+            Some(cap) => cap,
+            None => continue,
         };
 
         let scaled_img = resize_image(&captured.dynamic_image, scale_percent);
@@ -409,7 +413,7 @@ pub fn scan_screen_regions(
     // 2. Determine OCR actions
     let mut actions: Vec<(PreparedRegion, ScanAction)> = Vec::new();
     if let Some(stab) = stab_opt {
-        let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state_guard = REGION_MOTION_STATES.lock();
         let state_map = state_guard.get_or_insert_with(HashMap::new);
 
         // Evict motion states for regions that no longer exist (prevent static memory leak)
@@ -493,7 +497,7 @@ pub fn scan_screen_regions(
             }
             ScanAction::RunOcr => {
                 let (text, mut lines) = {
-                    let engine_guard = OCR_ENGINE_INSTANCE.lock().unwrap_or_else(|e| e.into_inner());
+                    let engine_guard = OCR_ENGINE_INSTANCE.lock();
                     let engine = &engine_guard.as_ref().unwrap().0;
                     run_ocr_pipeline_on_image(engine, &prep.prepared_img, prep.offset_x, prep.offset_y, temp_dir.as_path(), prep.idx, &prep.name)
                 };
@@ -510,7 +514,7 @@ pub fn scan_screen_regions(
 
     // 4. Update motion state cache ONLY for regions where OCR inference actually executed
     {
-        let mut state_guard = REGION_MOTION_STATES.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state_guard = REGION_MOTION_STATES.lock();
         if let Some(ref mut state_map) = *state_guard {
             for (id, hash, text, _, was_ocr_run) in &results_to_update {
                 if *was_ocr_run {

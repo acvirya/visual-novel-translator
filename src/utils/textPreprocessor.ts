@@ -1,4 +1,28 @@
 import { PreprocessingStep, PreprocessingSource } from "../types";
+import * as wanakana from "wanakana";
+
+export { wanakana };
+
+/**
+ * Check if text contains Japanese characters (Hiragana, Katakana, Kanji, Punctuation)
+ */
+export function isJapaneseText(text: string): boolean {
+  return wanakana.isJapanese(text);
+}
+
+/**
+ * Convert Kana/Romaji text to Katakana
+ */
+export function toKatakana(text: string): string {
+  return wanakana.toKatakana(text);
+}
+
+/**
+ * Convert Kana/Romaji text to Hiragana
+ */
+export function toHiragana(text: string): string {
+  return wanakana.toHiragana(text);
+}
 
 export const DEFAULT_PREPROCESSING_SOURCES: PreprocessingSource[] = ["manual", "textractor", "ocr", "batch"];
 

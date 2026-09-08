@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { extractSpeakerAndDialogue, cleanSpeakerName } from "../textPreprocessor";
+import {
+  extractSpeakerAndDialogue,
+  cleanSpeakerName,
+  isJapaneseText,
+  toKatakana,
+  toHiragana,
+} from "../textPreprocessor";
 import { parseScriptFileContent } from "../scriptFileParser";
 import { parseLlmBatchResponse } from "../batchJsonParser";
 import { calcLevenshteinDistance } from "../../services/scriptManagerService";
@@ -209,6 +215,43 @@ describe("Algorithm Verification Test Harness", () => {
     const parsedLive = parseStructuredDialogueOutput(brokenLiveJson);
     expect(parsedLive.translatedSpeaker).toBe("Bob");
     expect(parsedLive.translatedMessage).toContain("Wait!");
+  });
+
+  it("parses CSV scripts containing quoted dialogue with commas via PapaParse", () => {
+    const csvContent = `Speaker,Japanese,English
+"Tomoya, Jr.","ねえ、行こうよ","Hey, let's go"
+"Nagisa","はい、行きましょう、朋也くん","Yes, let's go, Tomoya-kun"
+"","普通のセリフ","Normal dialogue without speaker"`;
+
+    const parsed = parseScriptFileContent(csvContent);
+    expect(parsed).toHaveLength(3);
+    expect(parsed[0].speaker).toBe("Tomoya, Jr.");
+    expect(parsed[0].message).toBe("ねえ、行こうよ");
+    expect(parsed[0].translatedMessage).toBe("Hey, let's go");
+
+    expect(parsed[1].speaker).toBe("Nagisa");
+    expect(parsed[1].message).toBe("はい、行きましょう、朋也くん");
+    expect(parsed[1].translatedMessage).toBe("Yes, let's go, Tomoya-kun");
+
+    expect(parsed[2].speaker).toBeUndefined();
+    expect(parsed[2].message).toBe("普通のセリフ");
+    expect(parsed[2].translatedMessage).toBe("Normal dialogue without speaker");
+  });
+
+  it("processes Japanese characters and script detection using wanakana", () => {
+    expect(isJapaneseText("こんにちは")).toBe(true);
+    expect(isJapaneseText("Visual Novel")).toBe(false);
+    expect(isJapaneseText("智代「おはよう」")).toBe(true);
+
+    expect(toKatakana("びじゅあるのべる")).toBe("ビジュアルノベル");
+    expect(toHiragana("ビジュアルノベル")).toBe("びじゅあるのべる");
+  });
+
+  it("computes ultra-fast Levenshtein edit distance with fastest-levenshtein", () => {
+    expect(calcLevenshteinDistance("こんにちは", "こんにちは")).toBe(0);
+    expect(calcLevenshteinDistance("こんにちは", "こんばんわ")).toBe(3);
+    expect(calcLevenshteinDistance("坂上 智代", "坂上 智世")).toBe(1);
+    expect(calcLevenshteinDistance("", "テスト")).toBe(3);
   });
 });
 

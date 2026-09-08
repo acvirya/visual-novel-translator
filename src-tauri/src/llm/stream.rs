@@ -1,28 +1,44 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::ipc::Channel;
 use crate::http::{format_reqwest_error, get_http_client};
 use super::types::{OpenRouterCompletionResponse, StreamEvent};
-
+use dashmap::DashMap;
+use tokio_util::sync::CancellationToken;
 use std::sync::OnceLock;
 
-pub static ABORT_STREAM_COUNTER: AtomicU64 = AtomicU64::new(0);
-static CANCELLED_STREAM_IDS: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+static ACTIVE_STREAM_TOKENS: OnceLock<DashMap<String, CancellationToken>> = OnceLock::new();
+static GLOBAL_STREAM_CANCEL_TOKEN: OnceLock<parking_lot::RwLock<CancellationToken>> = OnceLock::new();
 
-pub fn get_cancelled_streams() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    CANCELLED_STREAM_IDS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+pub fn get_stream_tokens() -> &'static DashMap<String, CancellationToken> {
+    ACTIVE_STREAM_TOKENS.get_or_init(DashMap::new)
+}
+
+pub fn get_global_stream_token() -> CancellationToken {
+    let lock = GLOBAL_STREAM_CANCEL_TOKEN.get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
+    lock.read().clone()
 }
 
 #[tauri::command]
 pub fn cancel_all_llm_streams() {
-    ABORT_STREAM_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let lock = GLOBAL_STREAM_CANCEL_TOKEN.get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
+    let mut guard = lock.write();
+    guard.cancel();
+    *guard = CancellationToken::new();
+
+    for item in get_stream_tokens().iter() {
+        item.value().cancel();
+    }
+    get_stream_tokens().clear();
+    tracing::info!("[LLM] Cancelled all active LLM streams");
 }
 
 #[tauri::command]
 pub fn cancel_llm_stream(stream_id: String) {
-    let mut guard = get_cancelled_streams().lock().unwrap_or_else(|e| e.into_inner());
-    guard.insert(stream_id);
+    if let Some((_, token)) = get_stream_tokens().remove(&stream_id) {
+        token.cancel();
+        tracing::info!("[LLM] Cancelled stream {}", stream_id);
+    }
 }
 
 /// Robust check if text is a completed JSON object or array (supports direct JSON and markdown fenced JSON)
@@ -211,8 +227,7 @@ struct StreamIdGuard<'a>(&'a Option<String>);
 impl<'a> Drop for StreamIdGuard<'a> {
     fn drop(&mut self) {
         if let Some(ref sid) = self.0 {
-            let mut guard = get_cancelled_streams().lock().unwrap_or_else(|e| e.into_inner());
-            guard.remove(sid);
+            get_stream_tokens().remove(sid);
         }
     }
 }
@@ -221,12 +236,11 @@ impl<'a> Drop for StreamIdGuard<'a> {
 async fn handle_sse_stream(
     mut resp: reqwest::Response,
     timeout_duration: Duration,
-    start_cancel_count: u64,
-    stream_id: Option<String>,
+    cancel_token: CancellationToken,
+    global_token: CancellationToken,
     on_event: &Channel<StreamEvent>,
     is_anthropic: bool,
 ) -> Result<OpenRouterCompletionResponse, (bool, String)> {
-    let _stream_guard = StreamIdGuard(&stream_id);
     let mut accumulated_content = String::new();
     let mut accumulated_reasoning = String::new();
     let mut prompt_tokens: u32 = 0;
@@ -244,14 +258,8 @@ async fn handle_sse_stream(
     let mut last_error = String::new();
 
     'chunk_loop: loop {
-        if ABORT_STREAM_COUNTER.load(Ordering::SeqCst) != start_cancel_count {
+        if cancel_token.is_cancelled() || global_token.is_cancelled() {
             return Err((false, "Stream aborted by user.".to_string()));
-        }
-        if let Some(ref sid) = stream_id {
-            let guard = get_cancelled_streams().lock().unwrap_or_else(|e| e.into_inner());
-            if guard.contains(sid) {
-                return Err((false, "Stream aborted by user.".to_string()));
-            }
         }
 
         let is_json_done = is_json_completed(&accumulated_content);
@@ -261,22 +269,32 @@ async fn handle_sse_stream(
             timeout_duration
         };
 
-        let chunk_opt = match tokio::time::timeout(next_chunk_timeout, resp.chunk()).await {
-            Ok(Ok(Some(c))) => Some(c),
-            Ok(Ok(None)) => None,
-            Ok(Err(e)) => {
-                last_error = format_reqwest_error("Error reading stream chunk", &e);
-                stream_failed = true;
-                break 'chunk_loop;
+        let chunk_opt = tokio::select! {
+            _ = cancel_token.cancelled() => {
+                return Err((false, "Stream aborted by user.".to_string()));
             }
-            Err(_) => {
-                if is_json_done || content_finished {
-                    let _ = on_event.send(StreamEvent::Status("validating".to_string()));
-                    break 'chunk_loop;
-                } else {
-                    last_error = "Stream connection timed out while waiting for next token".to_string();
-                    stream_failed = true;
-                    break 'chunk_loop;
+            _ = global_token.cancelled() => {
+                return Err((false, "Stream aborted by user.".to_string()));
+            }
+            res = tokio::time::timeout(next_chunk_timeout, resp.chunk()) => {
+                match res {
+                    Ok(Ok(Some(c))) => Some(c),
+                    Ok(Ok(None)) => None,
+                    Ok(Err(e)) => {
+                        last_error = format_reqwest_error("Error reading stream chunk", &e);
+                        stream_failed = true;
+                        break 'chunk_loop;
+                    }
+                    Err(_) => {
+                        if is_json_done || content_finished {
+                            let _ = on_event.send(StreamEvent::Status("validating".to_string()));
+                            break 'chunk_loop;
+                        } else {
+                            last_error = "Stream connection timed out while waiting for next token".to_string();
+                            stream_failed = true;
+                            break 'chunk_loop;
+                        }
+                    }
                 }
             }
         };
@@ -512,7 +530,13 @@ pub async fn openrouter_stream_chat_completion(
     stream_id: Option<String>,
     on_event: Channel<StreamEvent>,
 ) -> Result<OpenRouterCompletionResponse, String> {
+    let cancel_token = CancellationToken::new();
+    if let Some(ref sid) = stream_id {
+        get_stream_tokens().insert(sid.clone(), cancel_token.clone());
+    }
     let _stream_guard = StreamIdGuard(&stream_id);
+    let global_token = get_global_stream_token();
+
     let client = get_http_client().map_err(|e| e.to_string())?;
     let timeout_duration = Duration::from_secs(timeout_seconds.unwrap_or(600));
 
@@ -549,19 +573,12 @@ pub async fn openrouter_stream_chat_completion(
         payload["max_tokens"] = serde_json::json!(tokens);
     }
 
-    let start_cancel_count = ABORT_STREAM_COUNTER.load(Ordering::SeqCst);
     let max_attempts = 3;
     let mut last_error = String::new();
 
     for attempt in 1..=max_attempts {
-        if ABORT_STREAM_COUNTER.load(Ordering::SeqCst) != start_cancel_count {
+        if cancel_token.is_cancelled() || global_token.is_cancelled() {
             return Err("Stream aborted by user.".to_string());
-        }
-        if let Some(ref sid) = stream_id {
-            let guard = get_cancelled_streams().lock().unwrap_or_else(|e| e.into_inner());
-            if guard.contains(sid) {
-                return Err("Stream aborted by user.".to_string());
-            }
         }
 
         let _ = on_event.send(StreamEvent::Status("connecting".to_string()));
@@ -576,15 +593,23 @@ pub async fn openrouter_stream_chat_completion(
             .header("X-Title", "Visual Novel Translator")
             .json(&payload);
 
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                last_error = format_reqwest_error("Failed to connect to OpenRouter streaming API", &e);
-                if attempt < max_attempts {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    continue;
+        let resp = tokio::select! {
+            _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+            _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+            res = req.send() => match res {
+                Ok(r) => r,
+                Err(e) => {
+                    last_error = format_reqwest_error("Failed to connect to OpenRouter streaming API", &e);
+                    if attempt < max_attempts {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                            _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                        }
+                        continue;
+                    }
+                    return Err(last_error);
                 }
-                return Err(last_error);
             }
         };
 
@@ -615,18 +640,26 @@ pub async fn openrouter_stream_chat_completion(
             let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504 || body_text.contains("unreachable") || body_text.contains("temporarily unavailable") || body_text.contains("high demand");
             if is_transient && attempt < max_attempts {
                 last_error = format!("OpenRouter API error (HTTP {}): {}", status, body_text);
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::select! {
+                    _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                    _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                }
                 continue;
             }
             return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
         }
 
-        match handle_sse_stream(resp, timeout_duration, start_cancel_count, stream_id.clone(), &on_event, false).await {
+        match handle_sse_stream(resp, timeout_duration, cancel_token.clone(), global_token.clone(), &on_event, false).await {
             Ok(result) => return Ok(result),
             Err((true, err)) => {
                 last_error = err;
                 if attempt < max_attempts {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                        _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    }
                     continue;
                 }
                 return Err(last_error);
@@ -647,7 +680,13 @@ pub async fn llm_stream_chat_completion(
     stream_id: Option<String>,
     on_event: Channel<StreamEvent>,
 ) -> Result<OpenRouterCompletionResponse, String> {
+    let cancel_token = CancellationToken::new();
+    if let Some(ref sid) = stream_id {
+        get_stream_tokens().insert(sid.clone(), cancel_token.clone());
+    }
     let _stream_guard = StreamIdGuard(&stream_id);
+    let global_token = get_global_stream_token();
+
     let client = get_http_client().map_err(|e| e.to_string())?;
     let timeout_duration = Duration::from_secs(timeout_seconds.unwrap_or(600));
 
@@ -661,19 +700,12 @@ pub async fn llm_stream_chat_completion(
         payload["stream_options"] = serde_json::json!({ "include_usage": true });
     }
 
-    let start_cancel_count = ABORT_STREAM_COUNTER.load(Ordering::SeqCst);
     let max_attempts = 3;
     let mut last_error = String::new();
 
     for attempt in 1..=max_attempts {
-        if ABORT_STREAM_COUNTER.load(Ordering::SeqCst) != start_cancel_count {
+        if cancel_token.is_cancelled() || global_token.is_cancelled() {
             return Err("Stream aborted by user.".to_string());
-        }
-        if let Some(ref sid) = stream_id {
-            let guard = get_cancelled_streams().lock().unwrap_or_else(|e| e.into_inner());
-            if guard.contains(sid) {
-                return Err("Stream aborted by user.".to_string());
-            }
         }
 
         let _ = on_event.send(StreamEvent::Status("connecting".to_string()));
@@ -687,16 +719,23 @@ pub async fn llm_stream_chat_completion(
             req = req.header(k, v);
         }
 
-        let send_res = req.json(&payload).send().await;
-        let resp = match send_res {
-            Ok(r) => r,
-            Err(e) => {
-                last_error = format_reqwest_error(&format!("Failed to connect to LLM streaming API ({})", url), &e);
-                if attempt < max_attempts {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    continue;
+        let resp = tokio::select! {
+            _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+            _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+            res = req.json(&payload).send() => match res {
+                Ok(r) => r,
+                Err(e) => {
+                    last_error = format_reqwest_error(&format!("Failed to connect to LLM streaming API ({})", url), &e);
+                    if attempt < max_attempts {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                            _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                        }
+                        continue;
+                    }
+                    return Err(last_error);
                 }
-                return Err(last_error);
             }
         };
 
@@ -727,18 +766,26 @@ pub async fn llm_stream_chat_completion(
             let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504;
             if is_transient && attempt < max_attempts {
                 last_error = format!("LLM API error (HTTP {}): {}", status, body_text);
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::select! {
+                    _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                    _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
                 continue;
             }
             return Err(format!("LLM API error (HTTP {}): {}", status, body_text));
         }
 
-        match handle_sse_stream(resp, timeout_duration, start_cancel_count, stream_id.clone(), &on_event, is_anthropic).await {
+        match handle_sse_stream(resp, timeout_duration, cancel_token.clone(), global_token.clone(), &on_event, is_anthropic).await {
             Ok(result) => return Ok(result),
             Err((true, err)) => {
                 last_error = err;
                 if attempt < max_attempts {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                        _ = global_token.cancelled() => return Err("Stream aborted by user.".to_string()),
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    }
                     continue;
                 }
                 return Err(last_error);

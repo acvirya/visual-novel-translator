@@ -35,3 +35,4 @@ Thumbs.db
 batch_debug_log.jsonl
 stdin.txt
 *.jsonl.tmp
+analysis.md

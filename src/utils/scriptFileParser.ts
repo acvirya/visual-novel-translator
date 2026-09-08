@@ -1,3 +1,4 @@
+import Papa from "papaparse";
 import { extractSpeakerAndDialogue, cleanSpeakerName } from "./textPreprocessor";
 import { BatchItem } from "../services/batchTranslateService";
 import { ScriptEntry } from "../types";
@@ -117,44 +118,82 @@ export function parseScriptFileContent(rawContent: string): ParsedScriptDialogue
     } catch {}
   }
 
-  // 2. Line-by-line parser for JSONL, plain text, and standard script lines
-  const rawLines = trimmed.split(/\r?\n/);
-  for (let i = 0; i < rawLines.length; i++) {
-    const line = rawLines[i].trim();
-    if (!line) continue;
-
-    // JSON Lines (.jsonl)
-    if (line.startsWith("{") && line.endsWith("}")) {
+  // 2. Check if content is JSON Lines (.jsonl format)
+  const firstLine = trimmed.split(/\r?\n/)[0]?.trim();
+  if (firstLine && firstLine.startsWith("{") && firstLine.endsWith("}")) {
+    const rawLines = trimmed.split(/\r?\n/);
+    let allJson = true;
+    for (const line of rawLines) {
+      const l = line.trim();
+      if (!l) continue;
       try {
-        const obj = JSON.parse(line);
+        const obj = JSON.parse(l);
         items.push(extractFromObject(obj, items.length));
-        continue;
-      } catch {}
+      } catch {
+        allJson = false;
+        break;
+      }
+    }
+    if (allJson && items.length > 0) {
+      return items;
+    }
+    items.length = 0; // reset if not pure JSONL
+  }
+
+  // 3. Robust CSV, TSV, and plain text parsing via PapaParse
+  const parsedCsv = Papa.parse<string[]>(trimmed, {
+    skipEmptyLines: "greedy",
+  });
+
+  if (parsedCsv.data && parsedCsv.data.length > 0) {
+    const rows = parsedCsv.data;
+
+    // Check if the first row is a header row (e.g. ["speaker", "message", "translation"])
+    let startIndex = 0;
+    if (rows.length > 1 && rows[0].length >= 2) {
+      const headerSample = rows[0].map((c: string) => String(c).trim().toLowerCase());
+      const isHeader = headerSample.some((h: string) =>
+        /^(?:id|speaker|character|name|dialogue|message|text|original|translation|translated|translated_message|english|jp|en)$/i.test(
+          h
+        )
+      );
+      if (isHeader) {
+        startIndex = 1;
+      }
     }
 
-    // Tab-delimited (TSV) or CSV line fallback: Japanese \t English
-    if (line.includes("\t")) {
-      const parts = line.split("\t");
-      if (parts.length >= 2) {
-        const ext = extractSpeakerAndDialogue(parts[0].trim());
+    for (let i = startIndex; i < rows.length; i++) {
+      const cols = rows[i].map((c: string) => String(c).trim());
+      if (cols.length === 0 || (cols.length === 1 && !cols[0])) continue;
+
+      if (cols.length >= 3) {
+        // [speaker, message, translation, ...]
+        items.push({
+          id: items.length + 1,
+          speaker: cols[0] ? cleanSpeakerName(cols[0]) : undefined,
+          message: cols[1],
+          translatedMessage: cols[2] || undefined,
+        });
+      } else if (cols.length === 2) {
+        // [japanese (possibly with speaker brackets), translation]
+        const ext = extractSpeakerAndDialogue(cols[0]);
         items.push({
           id: items.length + 1,
           speaker: ext.speaker || undefined,
           message: ext.message,
-          translatedMessage: parts[1].trim(),
+          translatedMessage: cols[1] || undefined,
         });
-        continue;
+      } else {
+        // Single column / plain text script format
+        const ext = extractSpeakerAndDialogue(cols[0]);
+        items.push({
+          id: items.length + 1,
+          speaker: ext.speaker || undefined,
+          message: ext.message,
+          translatedMessage: !ext.message ? "" : undefined,
+        });
       }
     }
-
-    // Plain text or standard script format
-    const ext = extractSpeakerAndDialogue(line);
-    items.push({
-      id: items.length + 1,
-      speaker: ext.speaker || undefined,
-      message: ext.message,
-      translatedMessage: !ext.message ? "" : undefined,
-    });
   }
 
   return items;
