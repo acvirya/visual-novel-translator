@@ -80,8 +80,24 @@ class ShortcutService implements ManagedService {
 
       this.lastRegisteredKeys = { lockKey, pauseKey, ocrKey, snippingKey };
 
+      // SERI-12: Detect and warn on duplicate key assignment
+      const keyUsage = new Map<string, string>();
+      const checkCollision = (name: string, key: string): boolean => {
+        if (!key) return false;
+        const lower = key.toLowerCase();
+        if (keyUsage.has(lower)) {
+          logger.warn(
+            "Shortcuts",
+            `Duplicate shortcut ignored for "${name}": "${key}" is already registered for "${keyUsage.get(lower)}"`
+          );
+          return true; // Collided
+        }
+        keyUsage.set(lower, name);
+        return false;
+      };
+
       // 1. Lock/Unlock Overlay Click-Through
-      if (lockKey) {
+      if (lockKey && !checkCollision("Overlay Lock", lockKey)) {
         try {
           await register(lockKey, async (event) => {
             if (event.state === "Pressed") {
@@ -106,7 +122,7 @@ class ShortcutService implements ManagedService {
       }
 
       // 2. Toggle Live Translation Pause / Resume
-      if (pauseKey) {
+      if (pauseKey && !checkCollision("Pause / Resume", pauseKey)) {
         try {
           await register(pauseKey, (event) => {
             if (event.state === "Pressed") {
@@ -126,7 +142,7 @@ class ShortcutService implements ManagedService {
       }
 
       // 3. Trigger OCR Manual Scan
-      if (ocrKey) {
+      if (ocrKey && !checkCollision("OCR Scan", ocrKey)) {
         try {
           await register(ocrKey, async (event) => {
             if (event.state === "Pressed") {
@@ -165,7 +181,7 @@ class ShortcutService implements ManagedService {
       }
 
       // 4. One-Shot OCR Snipping Translator
-      if (snippingKey) {
+      if (snippingKey && !checkCollision("OCR Snipping", snippingKey)) {
         try {
           await register(snippingKey, async (event) => {
             if (event.state === "Pressed") {

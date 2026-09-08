@@ -1,3 +1,4 @@
+import ky, { HTTPError, TimeoutError } from "ky";
 import { logger } from "./loggerService";
 import {
   VndbTraitFilterOptions,
@@ -34,32 +35,32 @@ class VndbService {
   private static readonly KANA_API = "https://api.vndb.org/kana";
 
   private static async fetchWithRateLimit(endpoint: string, body: any, maxRetries = 2): Promise<any> {
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const res = await fetch(`${this.KANA_API}${endpoint}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (res.ok) {
-        return await res.json();
+    const cleanEndpoint = endpoint.replace(/^\//, "");
+    try {
+      return await ky
+        .post(`${this.KANA_API}/${cleanEndpoint}`, {
+          json: body,
+          timeout: 10000, // SERI-11: 10s deterministic timeout prevents hanging forever
+          retry: {
+            limit: maxRetries,
+            statusCodes: [408, 413, 429, 500, 502, 503, 504],
+            backoffLimit: 6000,
+          },
+        })
+        .json();
+    } catch (err: any) {
+      if (err instanceof TimeoutError) {
+        logger.error("VNDB", `Request to VNDB API timed out after 10s: ${err.message}`);
+        throw new Error("VNDB API request timed out (10s). Please check your internet connection.");
       }
-
-      if (res.status === 429) {
-        if (attempt < maxRetries) {
-          const retryHeader = res.headers.get("Retry-After");
-          const waitSec = retryHeader ? parseFloat(retryHeader) : 2;
-          const waitMs = Math.max(1500, Math.min(6000, (isNaN(waitSec) ? 2 : waitSec) * 1000));
-          logger.warn("VNDB", `Rate limited (HTTP 429). Retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})...`);
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
-          continue;
+      if (err instanceof HTTPError) {
+        if (err.response.status === 429) {
+          throw new Error("VNDB API rate limit reached. Please wait a few seconds before searching again.");
         }
-        throw new Error("VNDB API rate limit reached. Please wait a few seconds before searching again.");
+        const errorText = await err.response.text().catch(() => "");
+        throw new Error(`VNDB API HTTP ${err.response.status}: ${errorText}`);
       }
-
-      throw new Error(`VNDB API HTTP ${res.status}: ${await res.text()}`);
+      throw err;
     }
   }
 

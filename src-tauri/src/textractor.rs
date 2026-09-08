@@ -249,7 +249,19 @@ pub fn start_textractor(
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+        // ARCH-05: Strict backend sanitization of inputs from frontend IPC
+        if target_pid == 0 {
+            return Err("Invalid target process PID (0). Please select a valid active game process.".to_string());
+        }
+
         let resolved_exe = resolve_textractor_exe(&exe_path);
+        if !resolved_exe.exists() || !resolved_exe.is_file() {
+            return Err(format!(
+                "TextractorCLI executable not found at '{:?}'. Please install Textractor or set custom path in settings.",
+                resolved_exe
+            ));
+        }
+
         eprintln!("[Textractor::Start] Target PID: {}, Executable: {:?}", target_pid, resolved_exe);
 
         let mut cmd = Command::new(&resolved_exe);

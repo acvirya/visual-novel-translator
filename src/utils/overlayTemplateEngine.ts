@@ -422,12 +422,12 @@ export function compileOverlayTemplate(
   // 5. Resolve {{#if hasSpeaker}}...{{/if}}
   output = resolveConditionalBlock(output, "hasSpeaker", !!(speakerVal.trim() || transSpeakerVal.trim()));
 
-  // 6. Interpolate Dialogue Variables
+  // 6. Interpolate Dialogue Variables (SERI-09: Function replacer prevents $ special pattern corruption)
   output = output
-    .replace(/\{\{\s*speaker\s*\}\}/gi, escapeHtml(speakerVal))
-    .replace(/\{\{\s*translatedSpeaker\s*\}\}/gi, escapeHtml(transSpeakerVal))
-    .replace(/\{\{\s*message\s*\}\}/gi, escapeHtml(messageVal))
-    .replace(/\{\{\s*translatedMessage\s*\}\}/gi, escapeHtml(transMessageVal));
+    .replace(/\{\{\s*speaker\s*\}\}/gi, () => escapeHtml(speakerVal))
+    .replace(/\{\{\s*translatedSpeaker\s*\}\}/gi, () => escapeHtml(transSpeakerVal))
+    .replace(/\{\{\s*message\s*\}\}/gi, () => escapeHtml(messageVal))
+    .replace(/\{\{\s*translatedMessage\s*\}\}/gi, () => escapeHtml(transMessageVal));
 
   // 7. Interpolate Config Variables & Typography if available
   if (config) {
@@ -435,13 +435,13 @@ export function compileOverlayTemplate(
     const messageSize = config.messageFontSize || config.fontSize;
 
     output = output
-      .replace(/\{\{\s*fontSize\s*\}\}/gi, `${messageSize}px`)
-      .replace(/\{\{\s*speakerFontSize\s*\}\}/gi, `${speakerSize}px`)
-      .replace(/\{\{\s*messageFontSize\s*\}\}/gi, `${messageSize}px`)
-      .replace(/\{\{\s*fontColor\s*\}\}/gi, config.fontColor)
-      .replace(/\{\{\s*outlineColor\s*\}\}/gi, config.outlineColor)
-      .replace(/\{\{\s*backgroundColor\s*\}\}/gi, config.backgroundColor)
-      .replace(/\{\{\s*borderRadius\s*\}\}/gi, `${config.borderRadius}px`);
+      .replace(/\{\{\s*fontSize\s*\}\}/gi, () => `${messageSize}px`)
+      .replace(/\{\{\s*speakerFontSize\s*\}\}/gi, () => `${speakerSize}px`)
+      .replace(/\{\{\s*messageFontSize\s*\}\}/gi, () => `${messageSize}px`)
+      .replace(/\{\{\s*fontColor\s*\}\}/gi, () => config.fontColor)
+      .replace(/\{\{\s*outlineColor\s*\}\}/gi, () => config.outlineColor)
+      .replace(/\{\{\s*backgroundColor\s*\}\}/gi, () => config.backgroundColor)
+      .replace(/\{\{\s*borderRadius\s*\}\}/gi, () => `${config.borderRadius}px`);
   }
 
   return sanitizeOverlayHtml(output);

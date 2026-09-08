@@ -33,6 +33,38 @@ export class LlmDispatcherService {
   /**
    * Test connection to a given provider by querying its authentication / models endpoint
    */
+  private static resolveProviderUrlAndHeaders(
+    providerId: string,
+    baseUrl: string,
+    cleanKey: string
+  ): { url: string; headers: Record<string, string> } {
+    let url = `${baseUrl}/models`;
+    let headers: Record<string, string> = cleanKey ? { Authorization: `Bearer ${cleanKey}` } : {};
+
+    if (providerId === "anthropic") {
+      url = `${baseUrl}/v1/models`;
+      headers = {
+        "x-api-key": cleanKey,
+        "anthropic-version": "2023-06-01",
+      };
+    } else if (providerId === "github-copilot") {
+      headers = {
+        Authorization: `Bearer ${cleanKey}`,
+        "Editor-Version": "vscode/1.107.0",
+        "Copilot-Integration-Id": "vscode-chat",
+        "X-GitHub-Api-Version": "2026-06-01",
+      };
+    } else if (providerId === "google" && !baseUrl.includes("/openai")) {
+      url = `${baseUrl}/models?key=${cleanKey}`;
+      headers = {};
+    }
+
+    return { url, headers };
+  }
+
+  /**
+   * Test connection to an LLM provider and discover available models
+   */
   public static async testProviderConnection(
     providerId: string,
     apiKey: string,
@@ -47,27 +79,7 @@ export class LlmDispatcherService {
     const baseUrl = (customBaseUrl || def.defaultBaseUrl).replace(/\/+$/, "");
 
     try {
-      let url = `${baseUrl}/models`;
-      let headers: Record<string, string> = cleanKey ? { Authorization: `Bearer ${cleanKey}` } : {};
-
-      if (providerId === "anthropic") {
-        url = `${baseUrl}/v1/models`;
-        headers = {
-          "x-api-key": cleanKey,
-          "anthropic-version": "2023-06-01",
-        };
-      } else if (providerId === "github-copilot") {
-        headers = {
-          Authorization: `Bearer ${cleanKey}`,
-          "Editor-Version": "vscode/1.107.0",
-          "Copilot-Integration-Id": "vscode-chat",
-          "X-GitHub-Api-Version": "2026-06-01",
-        };
-      } else if (providerId === "google" && !baseUrl.includes("/openai")) {
-        url = `${baseUrl}/models?key=${cleanKey}`;
-        headers = {};
-      }
-
+      const { url, headers } = this.resolveProviderUrlAndHeaders(providerId, baseUrl, cleanKey);
       const resp = await TauriBridge.testLlmConnection(url, headers);
       const parsed = JSON.parse(resp);
       const count = Array.isArray(parsed.data)
@@ -105,27 +117,7 @@ export class LlmDispatcherService {
     const baseUrl = (customBaseUrl || def.defaultBaseUrl).replace(/\/+$/, "");
 
     try {
-      let url = `${baseUrl}/models`;
-      let headers: Record<string, string> = cleanKey ? { Authorization: `Bearer ${cleanKey}` } : {};
-
-      if (providerId === "anthropic") {
-        url = `${baseUrl}/v1/models`;
-        headers = {
-          "x-api-key": cleanKey,
-          "anthropic-version": "2023-06-01",
-        };
-      } else if (providerId === "github-copilot") {
-        headers = {
-          Authorization: `Bearer ${cleanKey}`,
-          "Editor-Version": "vscode/1.107.0",
-          "Copilot-Integration-Id": "vscode-chat",
-          "X-GitHub-Api-Version": "2026-06-01",
-        };
-      } else if (providerId === "google" && !baseUrl.includes("/openai")) {
-        url = `${baseUrl}/models?key=${cleanKey}`;
-        headers = {};
-      }
-
+      const { url, headers } = this.resolveProviderUrlAndHeaders(providerId, baseUrl, cleanKey);
       const resp = await TauriBridge.testLlmConnection(url, headers);
       const parsed = JSON.parse(resp);
       const rawList = Array.isArray(parsed.data)

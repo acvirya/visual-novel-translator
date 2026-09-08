@@ -18,6 +18,7 @@ export function calcLevenshteinDistance(a: string, b: string): number {
   return fastestDistance(a, b);
 }
 
+import type { ManagedService } from "./appContainer";
 import { ScriptEntry } from "../types";
 export type { ScriptEntry };
 
@@ -29,13 +30,14 @@ export interface ScriptDatabaseState {
   matchThreshold: number;
 }
 
-class ScriptManagerService {
+class ScriptManagerService implements ManagedService {
+  public readonly id = "scriptManagerService";
   private activeFilePath: string | null = null;
   private activeFileName: string | null = null;
   private entries: ScriptEntry[] = [];
   private autoAppend = true;
   private matchThreshold = 0.85;
-  private listeners: ((state: ScriptDatabaseState) => void)[] = [];
+  private listeners: Set<(state: ScriptDatabaseState) => void> = new Set();
   private saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private canonicalIndex: Map<string, ScriptEntry[]> = new Map();
   private messageOnlyIndex: Map<string, ScriptEntry[]> = new Map();
@@ -220,11 +222,33 @@ class ScriptManagerService {
     this.notify();
   }
 
+  /**
+   * Immediately flushes any pending debounced disk write (CRIT-03 & A2 shutdown hook)
+   */
+  public async flushPendingSaves(): Promise<void> {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    if (!this.activeFilePath) return;
+    try {
+      const isJson = this.activeFilePath.toLowerCase().endsWith(".json");
+      const content = this.exportAsContent(isJson);
+      await TauriBridge.saveScriptFile(this.activeFilePath, content);
+    } catch (err) {
+      console.warn("Failed to flush pending script save to disk file:", err);
+    }
+  }
+
+  public async dispose(): Promise<void> {
+    await this.flushPendingSaves();
+  }
+
   public subscribe(callback: (state: ScriptDatabaseState) => void) {
-    this.listeners.push(callback);
+    this.listeners.add(callback);
     callback(this.getState());
     return () => {
-      this.listeners = this.listeners.filter((cb) => cb !== callback);
+      this.listeners.delete(callback);
     };
   }
 
@@ -237,7 +261,7 @@ class ScriptManagerService {
     return {
       activeFilePath: this.activeFilePath,
       activeFileName: this.activeFileName,
-      entries: this.entries,
+      entries: [...this.entries], // CRIT-06: return shallow copy to prevent external mutation
       autoAppend: this.autoAppend,
       matchThreshold: this.matchThreshold,
     };
@@ -506,7 +530,7 @@ class ScriptManagerService {
       message: cleanMsg,
       translated_message: item.translated_message.trim(),
       matchedCount: 1,
-      lastUsed: new Date().toLocaleTimeString(),
+      lastUsed: new Date().toISOString(),
     };
 
     this.entries = [newEntry, ...this.entries];
@@ -522,7 +546,7 @@ class ScriptManagerService {
     const entry = this.entries.find((e) => e.id === entryId);
     if (entry) {
       entry.matchedCount = (entry.matchedCount || 0) + 1;
-      entry.lastUsed = new Date().toLocaleTimeString();
+      entry.lastUsed = new Date().toISOString();
       this.saveState(true);
     }
   }

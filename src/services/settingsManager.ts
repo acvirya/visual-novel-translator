@@ -1,3 +1,5 @@
+import deepmerge from "deepmerge";
+import { z } from "zod";
 import {
   OverlayConfig,
   OcrRegion,
@@ -280,18 +282,45 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 
 const STORAGE_KEY = "vn_translator_universal_settings_v2";
 
-class SettingsManager {
+const AppSettingsSanitizerSchema = z
+  .object({
+    general: z.record(z.string(), z.any()).optional(),
+    translation: z.record(z.string(), z.any()).optional(),
+    glossary: z.record(z.string(), z.any()).optional(),
+    scriptManager: z.record(z.string(), z.any()).optional(),
+    textractor: z.record(z.string(), z.any()).optional(),
+    ocr: z.record(z.string(), z.any()).optional(),
+    overlay: z.record(z.string(), z.any()).optional(),
+    textPreprocessing: z.record(z.string(), z.any()).optional(),
+    logs: z.record(z.string(), z.any()).optional(),
+    batch: z.record(z.string(), z.any()).optional(),
+    llmProviders: z.record(z.string(), z.any()).optional(),
+  })
+import type { ManagedService } from "./appContainer";
+
+class SettingsManager implements ManagedService {
+  public readonly id = "settingsManager";
   private cache: AppSettings;
   private listeners: Set<(settings: AppSettings) => void> = new Set();
-  private saveDebounceTimer: any = null;
+  private saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private isSecureStorageInitialized = false;
+  private readyPromise: Promise<void>;
 
   constructor() {
     this.cache = this.loadFromStorage();
     registerCustomRulesProvider(() => this.cache.textPreprocessing?.pipeline);
-    this.initSecureStorage().catch((err) => {
+    this.readyPromise = this.initSecureStorage().catch((err) => {
       console.warn("[SettingsManager] Failed initial secure keys load:", err);
     });
+  }
+
+  public async ensureReady(): Promise<void> {
+    return this.readyPromise;
+  }
+
+  public async getApiKey(providerId: string): Promise<string> {
+    await this.readyPromise;
+    return this.cache.llmProviders?.[providerId]?.apiKey || "";
   }
 
   public async initSecureStorage(): Promise<void> {
@@ -328,6 +357,25 @@ class SettingsManager {
     return JSON.parse(JSON.stringify(val));
   }
 
+  private mergeSettings(target: AppSettings, source: any): AppSettings {
+    const customArrayMerge = (destinationArray: any[], sourceArray: any[]): any[] => {
+      const hasId = (arr: any[]) => arr.some((item) => item && typeof item === "object" && "id" in item);
+      if (hasId(destinationArray) || hasId(sourceArray)) {
+        const merged = [...sourceArray];
+        const sourceIds = new Set(sourceArray.map((i: any) => i?.id).filter(Boolean));
+        for (const item of destinationArray) {
+          if (item?.id && !sourceIds.has(item.id)) {
+            merged.push(item);
+          }
+        }
+        return merged;
+      }
+      return sourceArray.length > 0 ? sourceArray : destinationArray;
+    };
+
+    return deepmerge(target, source, { arrayMerge: customArrayMerge }) as AppSettings;
+  }
+
   private loadFromStorage(): AppSettings {
     if (typeof window === "undefined" || typeof localStorage === "undefined") {
       return this.clone(DEFAULT_APP_SETTINGS);
@@ -337,7 +385,11 @@ class SettingsManager {
       let loaded: AppSettings;
       if (raw) {
         const parsed = JSON.parse(raw);
-        loaded = this.deepMerge(DEFAULT_APP_SETTINGS, parsed);
+        // TD-11: Validate data structure using Zod before merging
+        const validationResult = AppSettingsSanitizerSchema.safeParse(parsed);
+        const safeData = validationResult.success ? validationResult.data : {};
+        // CRIT-02 & TD-07: Industry-standard deepmerge with smart array preservation
+        loaded = this.mergeSettings(DEFAULT_APP_SETTINGS, safeData);
       } else {
         loaded = this.clone(DEFAULT_APP_SETTINGS);
       }
@@ -399,66 +451,8 @@ class SettingsManager {
     this.executeSave();
   }
 
-  private deepMerge(target: any, source: any): any {
-    const output = Object.assign({}, target);
-    if (this.isObject(target) && this.isObject(source)) {
-      Object.keys(source).forEach((key) => {
-        if (this.isObject(source[key])) {
-          if (!(key in target)) Object.assign(output, { [key]: source[key] });
-          else output[key] = this.deepMerge(target[key], source[key]);
-        } else if (Array.isArray(source[key]) && Array.isArray(target[key])) {
-          if (key === "pipeline") {
-            const sourceSteps = source[key] as PreprocessingStep[];
-            const targetSteps = target[key] as PreprocessingStep[];
-            const merged: PreprocessingStep[] = [];
-            const processedIds = new Set<string>();
-
-            for (const tStep of targetSteps) {
-              const userMatch = sourceSteps.find((s) => s.id === tStep.id);
-              if (userMatch) {
-                merged.push({ ...tStep, isEnabled: userMatch.isEnabled, options: { ...tStep.options, ...userMatch.options } });
-              } else {
-                merged.push({ ...tStep });
-              }
-              processedIds.add(tStep.id);
-            }
-
-            for (const sStep of sourceSteps) {
-              if (!processedIds.has(sStep.id)) {
-                merged.push(sStep);
-                processedIds.add(sStep.id);
-              }
-            }
-            output[key] = merged;
-          } else if (
-            target[key].length > 0 &&
-            typeof target[key][0] === "object" &&
-            target[key][0] &&
-            "id" in target[key][0]
-          ) {
-            const sourceArr = source[key] as any[];
-            const targetArr = target[key] as any[];
-            const merged = [...sourceArr];
-            const sourceIds = new Set(sourceArr.map((it: any) => it?.id).filter(Boolean));
-            for (const tItem of targetArr) {
-              if (tItem?.id && !sourceIds.has(tItem.id)) {
-                merged.push(tItem);
-              }
-            }
-            output[key] = merged;
-          } else {
-            output[key] = source[key];
-          }
-        } else {
-          Object.assign(output, { [key]: source[key] });
-        }
-      });
-    }
-    return output;
-  }
-
-  private isObject(item: any) {
-    return item && typeof item === "object" && !Array.isArray(item);
+  public async dispose(): Promise<void> {
+    this.flush();
   }
 
   private notifyListeners() {

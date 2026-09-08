@@ -112,8 +112,8 @@ export function parseSpeakerMessageTranslation(
     };
   }
 
-  // 1. Match bracketed speaker patterns: 【...】, [...], ［...］, <...>, 〈...〉, 〔...〕
-  const bracketMatch = text.match(/^[【\[［<〈〔]([^【\]］>〉〕\r\n]{1,40})[】\]］>〉〕]\s*[:：]?\s*([\s\S]*)$/);
+  // 1. Match bracketed speaker patterns: 【...】, [...], ［...］, <...>, 〈...〉, 〔...〕 (with Unicode /u flag)
+  const bracketMatch = text.match(/^[【\[［<〈〔]([^【\]］>〉〕\r\n]{1,40})[】\]］>〉〕]\s*[:：]?\s*([\s\S]*)$/u);
   if (bracketMatch) {
     const rawSpeaker = bracketMatch[1].trim();
     const rawMessage = bracketMatch[2].trim();
@@ -125,7 +125,7 @@ export function parseSpeakerMessageTranslation(
   }
 
   // 2. Secondary fallback: check if output starts with a speaker name followed by colon near the beginning (<= 30 chars)
-  const prefixColonMatch = text.match(/^([^:：\r\n]{1,30})[:：]\s*([\s\S]+)$/);
+  const prefixColonMatch = text.match(/^([^:：\r\n]{1,30})[:：]\s*([\s\S]+)$/u);
   if (prefixColonMatch && !/^\d+$/.test(prefixColonMatch[1])) {
     return {
       translatedSpeaker: prefixColonMatch[1].trim(),
@@ -134,7 +134,7 @@ export function parseSpeakerMessageTranslation(
   }
 
   // 3. Suffix speaker fallback in translated text: "Dialogue" - Speaker, "Dialogue" Speaker
-  const suffixDashMatch = text.match(/^([\s\S]+?["”』」\)])\s*(?:――|——|--|-)\s*([^"”『」\r\n]{1,30})$/);
+  const suffixDashMatch = text.match(/^([\s\S]+?["”』」\)])\s*(?:――|——|--|-)\s*([^"”『」\r\n]{1,30})$/u);
   if (suffixDashMatch) {
     return {
       translatedSpeaker: suffixDashMatch[2].trim() || originalSpeaker.trim(),

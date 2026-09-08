@@ -60,7 +60,8 @@ class OverlayChannel {
         ? `dlg_${event.dialogue.id}_${event.dialogue.message}_${event.dialogue.translatedMessage || ""}`
         : `${event.type}_${(event as any).isEditing ?? (event as any).x ?? ""}`;
     const now = Date.now();
-    if (sig === this.lastEventSignature && now - this.lastEventTime < 30) {
+    // SERI-09: 350ms debounce window guarantees dual-broadcast (BroadcastChannel + Tauri IPC) never produces duplicate lines
+    if (sig === this.lastEventSignature && now - this.lastEventTime < 350) {
       return;
     }
     this.lastEventSignature = sig;

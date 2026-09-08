@@ -16,6 +16,8 @@ import { UnifiedSettingsView } from "./components/views/UnifiedSettingsView";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 
 import { appContainer } from "./services/appContainer";
+import { settingsManager } from "./services/settingsManager";
+import { scriptManagerService } from "./services/scriptManagerService";
 import { translationManager } from "./services/translationManager";
 import { batchTranslateService } from "./services/batchTranslateService";
 import { textractorManagedService } from "./services/textractorService";
@@ -28,7 +30,9 @@ export function App() {
   const setIsSidebarCollapsed = useUIStore((state) => state.setIsSidebarCollapsed);
 
   useEffect(() => {
-    // Register and initialize core services in AppContainer (A2, H6, H10)
+    // Register and initialize core services in AppContainer (A2, H6, H10, CRIT-03)
+    appContainer.register(settingsManager);
+    appContainer.register(scriptManagerService);
     appContainer.register(translationManager);
     appContainer.register(batchTranslateService);
     appContainer.register(shortcutService);
