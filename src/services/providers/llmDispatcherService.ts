@@ -308,7 +308,7 @@ export class LlmDispatcherService {
         nativeRes = await TauriBridge.llmStreamChatCompletion({
           url,
           headers,
-          payload_json: JSON.stringify(payload),
+          payloadJson: JSON.stringify(payload),
           timeoutSeconds: options.timeoutSeconds,
           streamId: options.streamId,
           onEvent: channel,
@@ -317,7 +317,7 @@ export class LlmDispatcherService {
         nativeRes = await TauriBridge.llmChatCompletion({
           url,
           headers,
-          payload_json: JSON.stringify(payload),
+          payloadJson: JSON.stringify(payload),
           timeoutSeconds: options.timeoutSeconds,
         });
       }
@@ -390,27 +390,18 @@ export class LlmDispatcherService {
 
       if (exclude || effort === "none") {
         payload.reasoning_effort = "none";
+        delete payload.extra_body;
+      } else if (options.reasoningMaxTokens && options.reasoningMaxTokens > 0) {
+        delete payload.reasoning_effort;
         payload.extra_body = {
           google: {
-            thinking_config: { thinking_budget: 0 },
+            thinking_config: { thinking_budget: options.reasoningMaxTokens },
           },
         };
       } else {
+        delete payload.extra_body;
         const mappedEffort = effort === "max" ? "high" : effort;
         payload.reasoning_effort = mappedEffort;
-
-        let budget = -1; // dynamic default
-        if (options.reasoningMaxTokens && options.reasoningMaxTokens > 0) {
-          budget = options.reasoningMaxTokens;
-        } else if (effort === "low") budget = 1024;
-        else if (effort === "medium") budget = 4096;
-        else if (effort === "high" || effort === "max") budget = 8192;
-
-        payload.extra_body = {
-          google: {
-            thinking_config: { thinking_budget: budget },
-          },
-        };
       }
     }
 
@@ -445,7 +436,7 @@ export class LlmDispatcherService {
         return await TauriBridge.llmStreamChatCompletion({
           url,
           headers,
-          payload_json: JSON.stringify(currentPayload),
+          payloadJson: JSON.stringify(currentPayload),
           timeoutSeconds: options.timeoutSeconds,
           streamId: options.streamId,
           onEvent: channel,
@@ -454,7 +445,7 @@ export class LlmDispatcherService {
         return await TauriBridge.llmChatCompletion({
           url,
           headers,
-          payload_json: JSON.stringify(currentPayload),
+          payloadJson: JSON.stringify(currentPayload),
           timeoutSeconds: options.timeoutSeconds,
         });
       }

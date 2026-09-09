@@ -1,4 +1,11 @@
-import { AppError, RateLimitError, CancellationError, classifyError } from "../errors";
+import {
+  AppError,
+  RateLimitError,
+  CancellationError,
+  LlmParseError,
+  ContentFilterError,
+  classifyError,
+} from "../errors";
 
 export interface RetryPolicyOptions {
   maxRetries?: number;
@@ -30,6 +37,31 @@ export function evaluateRetry(
       attemptInfo: "Cancelled",
       error: classified,
     };
+  }
+
+  // Immediate Skip (0 Retries): If the provider explicitly blocked or refused due to prohibited content or safety filters,
+  // skip immediately without retrying. Retrying prohibited content will never succeed and only wastes tokens and rate limits.
+  if (classified instanceof ContentFilterError) {
+    return {
+      shouldRetry: false,
+      backoffMs: 0,
+      attemptInfo: "Prohibited content / safety refusal (skipped immediately without retry)",
+      error: classified,
+    };
+  }
+
+  // Fast Cut-Loss (1 Retry - Total 2 attempts): If the model failed to output valid JSON or returned an empty response,
+  // allow 1 retry to confirm it wasn't a transient network/truncation glitch.
+  if (classified instanceof LlmParseError) {
+    const MAX_PARSE_RETRIES = 1; // Allows 1 retry (total 2 attempts)
+    if (retryAttempts > MAX_PARSE_RETRIES) {
+      return {
+        shouldRetry: false,
+        backoffMs: 0,
+        attemptInfo: `Cut-loss: Output parsing / model generation failed twice consecutively (${retryAttempts} attempts)`,
+        error: classified,
+      };
+    }
   }
 
   const isInfinite = options.autoContinueUntilCompleted !== false;

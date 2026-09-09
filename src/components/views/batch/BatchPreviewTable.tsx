@@ -134,10 +134,17 @@ export const BatchPreviewTable: React.FC<BatchPreviewTableProps> = ({
               >
                 {queuedFiles.map((f) => {
                   const fExp = f.items.filter((it) => isExplicitTagged(it)).length;
+                  const statusSuffix =
+                    f.status === "processing"
+                      ? "⚡ (Translating...)"
+                      : f.status === "completed"
+                      ? fExp > 0
+                        ? "⚠️ (Completed)"
+                        : "✓ (Completed)"
+                      : "";
                   return (
                     <option key={f.id} value={f.id}>
-                      {f.name}{" "}
-                      {f.status === "completed" ? (fExp > 0 ? "⚠️ (Completed)" : "✓ (Completed)") : ""}
+                      {f.name} {statusSuffix}
                     </option>
                   );
                 })}

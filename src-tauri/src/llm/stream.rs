@@ -96,7 +96,8 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
                 // Check if trailing slice of tag_buffer is a prefix of "</think>"
                 let mut prefix_len = 0;
                 for len in (1..8).rev() {
-                    if tag_buffer.len() >= len && "</think>".starts_with(&tag_buffer[tag_buffer.len() - len..]) {
+                    let start_idx = tag_buffer.len().saturating_sub(len);
+                    if tag_buffer.is_char_boundary(start_idx) && "</think>".starts_with(&tag_buffer[start_idx..]) {
                         prefix_len = len;
                         break;
                     }
@@ -132,7 +133,8 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
                 // Check if trailing slice of tag_buffer is a prefix of "<think>"
                 let mut prefix_len = 0;
                 for len in (1..7).rev() {
-                    if tag_buffer.len() >= len && "<think>".starts_with(&tag_buffer[tag_buffer.len() - len..]) {
+                    let start_idx = tag_buffer.len().saturating_sub(len);
+                    if tag_buffer.is_char_boundary(start_idx) && "<think>".starts_with(&tag_buffer[start_idx..]) {
                         prefix_len = len;
                         break;
                     }
@@ -256,6 +258,7 @@ async fn handle_sse_stream(
     let mut content_finished = false;
     let mut has_usage = false;
     let mut last_error = String::new();
+    let mut last_finish_reason = String::new();
 
     'chunk_loop: loop {
         if cancel_token.is_cancelled() || global_token.is_cancelled() {
@@ -460,9 +463,14 @@ async fn handle_sse_stream(
                                     }
                                 }
 
-                                if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
+                                if let Some(fr) = choice.get("finish_reason")
+                                    .or_else(|| choice.get("stop_reason"))
+                                    .or_else(|| choice.get("delta").and_then(|d| d.get("stop_reason")))
+                                    .or_else(|| parsed.get("delta").and_then(|d| d.get("stop_reason")))
+                                    .and_then(|f| f.as_str()) {
                                     if !fr.is_empty() && fr != "null" {
                                         content_finished = true;
+                                        last_finish_reason = fr.to_string();
                                     }
                                 }
                             }
@@ -507,6 +515,25 @@ async fn handle_sse_stream(
     } else {
         String::new()
     };
+
+    if final_content.is_empty() {
+        let fr_lower = last_finish_reason.to_lowercase();
+        if fr_lower.contains("safety")
+            || fr_lower.contains("filter")
+            || fr_lower.contains("recitation")
+            || fr_lower.contains("refusal")
+            || fr_lower.contains("prohibited")
+            || fr_lower.contains("blocklist")
+        {
+            return Err((
+                false,
+                format!(
+                    "LLM prohibited content / safety filter triggered (stop_reason: '{}'). Provider refused to generate output for this batch.",
+                    last_finish_reason
+                ),
+            ));
+        }
+    }
 
     Ok(OpenRouterCompletionResponse {
         content: final_content,
@@ -871,4 +898,56 @@ mod tests {
         assert!(!in_think_tag);
         assert!(in_content_phase);
     }
+
+    #[test]
+    fn test_process_stream_content_multibyte_utf8_no_panic() {
+        // Multi-byte characters: Japanese quotes '”' '“', ellipsis '…', dashes '—' '―', kanji '里'
+        let chunks = vec![
+            "「こんにちは",
+            "、世界”",
+            "…",
+            "——里",
+            "」<thi",
+            "nk>sedang berpikir…",
+            "</think>{\"halo\": \"dunia—",
+            "selamat pagi”}",
+        ];
+
+        let mut tag_buffer = String::new();
+        let mut in_think_tag = false;
+        let mut in_reasoning_phase = false;
+        let mut in_content_phase = false;
+        let mut accumulated_content = String::new();
+        let mut accumulated_reasoning = String::new();
+        let mut events = Vec::new();
+
+        for chunk in chunks {
+            process_stream_content_chunk_generic(
+                chunk,
+                &mut tag_buffer,
+                &mut in_think_tag,
+                &mut in_reasoning_phase,
+                &mut in_content_phase,
+                &mut accumulated_content,
+                &mut accumulated_reasoning,
+                |ev| events.push(ev),
+            );
+        }
+
+        flush_stream_content_buffer_generic(
+            &mut tag_buffer,
+            in_think_tag,
+            &mut in_content_phase,
+            &mut accumulated_content,
+            &mut accumulated_reasoning,
+            |ev| events.push(ev),
+        );
+
+        assert_eq!(accumulated_reasoning, "sedang berpikir…");
+        assert_eq!(
+            accumulated_content,
+            "「こんにちは、世界”…——里」{\"halo\": \"dunia—selamat pagi”}"
+        );
+    }
 }
+

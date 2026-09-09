@@ -35,6 +35,7 @@ export async function executeBatchLlm(params: {
   allowedOverwriteIds?: Set<number>;
   fileContext?: BatchFileContext;
   abortController: AbortController | null;
+  realToVirtualMap?: Map<number, number>;
 }): Promise<WholeTurnBatch> {
   const {
     items,
@@ -45,6 +46,7 @@ export async function executeBatchLlm(params: {
     allowedOverwriteIds,
     fileContext,
     abortController,
+    realToVirtualMap,
   } = params;
 
   const { providerId, modelId: targetModelId } = LlmProviderRegistry.parseModelId(settings.modelId);
@@ -60,7 +62,7 @@ export async function executeBatchLlm(params: {
     throw new Error(`${providerDef?.name || "LLM"} API Key is missing. Please configure and verify your API key in Translation Providers.`);
   }
 
-  const { messages, rawUserContent } = buildBatchPromptMessages(items, contextHistory);
+  const { messages, rawUserContent } = buildBatchPromptMessages(items, contextHistory, realToVirtualMap);
   const timeoutSeconds = Math.max(60, (settings.timeoutMinutes || 10) * 60);
 
   let content = "";
@@ -301,6 +303,36 @@ export async function executeBatchLlm(params: {
     }
   }
 
+  // Transparent Token & Cost Tracking: Immediately record usage once LLM responded,
+  // ensuring cost is tracked even if subsequent JSON parsing or line verification fails.
+  let hasRecordedUsage = false;
+  const recordTokenUsage = () => {
+    if (hasRecordedUsage) return;
+    hasRecordedUsage = true;
+    if (hasExactUsage) {
+      useBatchStore.getState().addSessionTokens(
+        exactPromptTokens,
+        exactCompletionTokens,
+        exactCachedTokens,
+        exactCost
+      );
+    } else if (content) {
+      const estPromptTokens = Math.round(rawUserContent.length / 3);
+      const estCompletionTokens = Math.round(content.length / 3);
+      const cost = calculateUsageCost(
+        settings.modelId,
+        estPromptTokens,
+        estCompletionTokens,
+        0
+      );
+      useBatchStore.getState().addSessionTokens(estPromptTokens, estCompletionTokens, 0, cost);
+    }
+  };
+
+  if (content || hasExactUsage) {
+    recordTokenUsage();
+  }
+
   if (!content) {
     await writeBatchDebugLog({
       outputDir: settings.outputDir,
@@ -343,7 +375,8 @@ export async function executeBatchLlm(params: {
     );
     validObjects.forEach((p, idx) => {
       if (p.id === undefined && items[idx]) {
-        p.id = items[idx].id;
+        const assignedId = realToVirtualMap ? realToVirtualMap.get(items[idx].id) ?? items[idx].id : items[idx].id;
+        p.id = assignedId;
       }
     });
   }
@@ -355,7 +388,9 @@ export async function executeBatchLlm(params: {
   );
 
   for (const item of items) {
-    const found = parsedMap.get(item.id);
+    // Lookup by assigned virtual ID first, then fallback to real ID
+    const virtualId = realToVirtualMap ? realToVirtualMap.get(item.id) ?? item.id : item.id;
+    const found = parsedMap.get(virtualId) ?? parsedMap.get(item.id);
     if (!found) {
       missingIds.push(item.id);
       continue;
@@ -411,25 +446,8 @@ export async function executeBatchLlm(params: {
     onItemSuccess(item);
   }
 
-  // Token Usage Tracking
-  if (hasExactUsage) {
-    useBatchStore.getState().addSessionTokens(
-      exactPromptTokens,
-      exactCompletionTokens,
-      exactCachedTokens,
-      exactCost
-    );
-  } else {
-    const estPromptTokens = Math.round(rawUserContent.length / 3);
-    const estCompletionTokens = Math.round(content.length / 3);
-    const cost = calculateUsageCost(
-      settings.modelId,
-      estPromptTokens,
-      estCompletionTokens,
-      0
-    );
-    useBatchStore.getState().addSessionTokens(estPromptTokens, estCompletionTokens, 0, cost);
-  }
+  // Ensure token usage is recorded (idempotent fallback)
+  recordTokenUsage();
 
   return {
     userContent: rawUserContent,

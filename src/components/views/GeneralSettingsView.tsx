@@ -4,6 +4,7 @@ import { settingsManager } from "../../services/settingsManager";
 import { useToast } from "../common/ToastProvider";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
+import { HotkeyRecorder } from "../common/HotkeyRecorder";
 import { SUPPORTED_PROVIDERS } from "../../services/providers/llmProviderRegistry";
 
 export const GeneralSettingsView: React.FC = () => {
@@ -231,12 +232,11 @@ export const GeneralSettingsView: React.FC = () => {
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
               One-Shot OCR Snipping Translate (In-Place)
             </label>
-            <input
-              type="text"
+            <HotkeyRecorder
               value={hotkeyOcrSnipping}
-              onChange={(e) => setHotkeyOcrSnipping(e.target.value)}
-              placeholder="e.g. Alt+S"
-              style={{ width: "100%", fontFamily: "var(--font-mono)" }}
+              onChange={setHotkeyOcrSnipping}
+              defaultValue="Alt+S"
+              placeholder="Click to record hotkey (e.g. Alt+S)"
             />
           </div>
 
@@ -244,12 +244,11 @@ export const GeneralSettingsView: React.FC = () => {
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
               Toggle Overlay Lock (Click-Through)
             </label>
-            <input
-              type="text"
+            <HotkeyRecorder
               value={hotkeyLockOverlay}
-              onChange={(e) => setHotkeyLockOverlay(e.target.value)}
-              placeholder="e.g. Alt+L"
-              style={{ width: "100%", fontFamily: "var(--font-mono)" }}
+              onChange={setHotkeyLockOverlay}
+              defaultValue="Alt+L"
+              placeholder="Click to record hotkey (e.g. Alt+L)"
             />
           </div>
 
@@ -257,12 +256,11 @@ export const GeneralSettingsView: React.FC = () => {
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
               Trigger OCR Region Scan (Predefined Box)
             </label>
-            <input
-              type="text"
+            <HotkeyRecorder
               value={hotkeyOcrScan}
-              onChange={(e) => setHotkeyOcrScan(e.target.value)}
-              placeholder="e.g. Alt+O"
-              style={{ width: "100%", fontFamily: "var(--font-mono)" }}
+              onChange={setHotkeyOcrScan}
+              defaultValue="Alt+O"
+              placeholder="Click to record hotkey (e.g. Alt+O)"
             />
           </div>
 
@@ -270,12 +268,11 @@ export const GeneralSettingsView: React.FC = () => {
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
               Pause / Resume Live Stream
             </label>
-            <input
-              type="text"
+            <HotkeyRecorder
               value={hotkeyTogglePause}
-              onChange={(e) => setHotkeyTogglePause(e.target.value)}
-              placeholder="e.g. Alt+P"
-              style={{ width: "100%", fontFamily: "var(--font-mono)" }}
+              onChange={setHotkeyTogglePause}
+              defaultValue="Alt+P"
+              placeholder="Click to record hotkey (e.g. Alt+P)"
             />
           </div>
         </div>

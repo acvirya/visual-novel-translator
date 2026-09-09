@@ -59,6 +59,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
     progressData,
     setProgressData,
     sessionStats,
+    avgBatchDurationMs,
+    estimatedRemainingSeconds,
   } = useBatchStore();
 
   // Mode Switcher: "preview" vs "settings"
@@ -105,8 +107,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   const [concurrency, setConcurrency] = useState<number>(() => initialBatch.concurrency || 2);
   const [concurrencyInput, setConcurrencyInput] = useState<string>(String(initialBatch.concurrency || 2));
 
-  const [delayMs, setDelayMs] = useState<number>(() => initialBatch.delayMs ?? 300);
-  const [delayMsInput, setDelayMsInput] = useState<string>(String(initialBatch.delayMs ?? 300));
+  const [delayMs, setDelayMs] = useState<number>(() => initialBatch.delayMs ?? 1500);
+  const [delayMsInput, setDelayMsInput] = useState<string>(String(initialBatch.delayMs ?? 1500));
 
   const [timeoutMinutes, setTimeoutMinutes] = useState<number>(() => initialBatch.timeoutMinutes || 10);
   const [timeoutMinutesInput, setTimeoutMinutesInput] = useState<string>(String(initialBatch.timeoutMinutes || 10));
@@ -151,7 +153,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   useEffect(() => {
     const unsubscribe = batchTranslateService.subscribe((update) => {
       setProgressData(update);
-      if (update.activeFileId) {
+      // Only auto-select active file if user currently has no file selected
+      if (update.activeFileId && !useBatchStore.getState().selectedFileId) {
         setSelectedFileId(update.activeFileId);
       }
     });
@@ -474,7 +477,13 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
           </div>
         </div>
 
-        <BatchStatsBadges pricingSummary={pricingSummary} sessionStats={sessionStats} />
+        <BatchStatsBadges
+          pricingSummary={pricingSummary}
+          sessionStats={sessionStats}
+          isRunning={isRunning}
+          avgBatchDurationMs={avgBatchDurationMs}
+          estimatedRemainingSeconds={estimatedRemainingSeconds}
+        />
       </div>
 
       {/* ========================================================================= */}
@@ -602,15 +611,15 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 </span>
               </div>
 
-              {/* Delay Between Batches */}
+              {/* Delay Between Requests */}
               <div>
                 <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
-                  Delay Between Batches (ms):
+                  Delay Between Requests (ms):
                 </label>
                 <input
                   type="number"
                   min={0}
-                  step={50}
+                  step={100}
                   className="input-field"
                   value={delayMsInput}
                   disabled={isRunning}
@@ -620,7 +629,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                   style={{ width: "100%", fontSize: "12px", padding: "6px 10px", fontWeight: 600 }}
                 />
                 <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block", marginTop: "2px" }}>
-                  Rate-limit protection pause between chunk requests.
+                  Inter-request pacing delay (1000-3000ms recommended to prevent rate limits).
                 </span>
               </div>
 

@@ -164,20 +164,34 @@ export const TauriBridge = {
   llmChatCompletion: (params: {
     url: string;
     headers: Record<string, string>;
-    payload_json: string;
+    payloadJson?: string;
+    payload_json?: string;
     timeoutSeconds?: number;
   }): Promise<OpenRouterCompletionResponse> =>
-    invoke<OpenRouterCompletionResponse>("llm_chat_completion", params),
+    invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
+      url: params.url,
+      headers: params.headers,
+      payloadJson: params.payloadJson ?? params.payload_json ?? "",
+      timeoutSeconds: params.timeoutSeconds,
+    }),
 
   llmStreamChatCompletion: (params: {
     url: string;
     headers: Record<string, string>;
-    payload_json: string;
+    payloadJson?: string;
+    payload_json?: string;
     timeoutSeconds?: number;
     streamId?: string;
     onEvent: Channel<StreamEvent>;
   }): Promise<OpenRouterCompletionResponse> =>
-    invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", params),
+    invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", {
+      url: params.url,
+      headers: params.headers,
+      payloadJson: params.payloadJson ?? params.payload_json ?? "",
+      timeoutSeconds: params.timeoutSeconds,
+      streamId: params.streamId,
+      onEvent: params.onEvent,
+    }),
 
   testLlmConnection: (url: string, headers: Record<string, string>): Promise<string> =>
     invoke<string>("test_llm_connection", { url, headers }),

@@ -61,7 +61,7 @@ export const SUPPORTED_PROVIDERS: LlmProviderDefinition[] = [
   },
   {
     id: "google",
-    name: "Google Gemini",
+    name: "Google AI Studio (Gemini)",
     category: "commercial",
     protocol: "google",
     defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -180,14 +180,47 @@ export class LlmProviderRegistry {
   }
 
   /**
-   * Return fetched models for a provider ONLY if it is active and verified
+   * Return fetched models for a provider ONLY if it is active and verified.
+   * If customModels has not been fetched from server yet, provides popular curated defaults.
    */
   public static getModelsForProvider(providerId: string): CuratedModelInfo[] {
     const cfg = this.getProviderConfig(providerId);
     if (!cfg.isVerified || !cfg.apiKey || !cfg.apiKey.trim()) {
       return [];
     }
-    return cfg.customModels || [];
+    if (cfg.customModels && cfg.customModels.length > 0) {
+      return cfg.customModels;
+    }
+
+    const DEFAULTS: Record<string, CuratedModelInfo[]> = {
+      google: [
+        { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash", context_length: 1048576, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", context_length: 1048576, pricing: { prompt: "0", completion: "0" }, reasoning: true },
+        { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", context_length: 1048576, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "gemini-1.5-pro", name: "Gemini 1.5 Pro", context_length: 2097152, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "gemini-1.5-flash", name: "Gemini 1.5 Flash", context_length: 1048576, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+      ],
+      deepseek: [
+        { id: "deepseek-chat", name: "DeepSeek V3", context_length: 64000, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "deepseek-reasoner", name: "DeepSeek R1", context_length: 64000, pricing: { prompt: "0", completion: "0" }, reasoning: true },
+      ],
+      anthropic: [
+        { id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet", context_length: 200000, pricing: { prompt: "0", completion: "0" }, reasoning: true },
+        { id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", context_length: 200000, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", context_length: 200000, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+      ],
+      openai: [
+        { id: "gpt-4o-mini", name: "GPT-4o Mini", context_length: 128000, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "gpt-4o", name: "GPT-4o", context_length: 128000, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "o3-mini", name: "o3-mini", context_length: 200000, pricing: { prompt: "0", completion: "0" }, reasoning: true },
+      ],
+      groq: [
+        { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B", context_length: 128000, pricing: { prompt: "0", completion: "0" }, reasoning: false },
+        { id: "deepseek-r1-distill-llama-70b", name: "DeepSeek R1 Distill 70B", context_length: 128000, pricing: { prompt: "0", completion: "0" }, reasoning: true },
+      ],
+    };
+
+    return DEFAULTS[providerId] || [];
   }
 
   public static isProviderVerified(providerId: string): boolean {

@@ -54,7 +54,25 @@ pub fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> R
         None
     };
 
-    let content = content.ok_or_else(|| format!("Empty or unexpected response payload: {}", raw_body))?;
+    let content = content.ok_or_else(|| {
+        let fr = parsed["choices"][0]["finish_reason"]
+            .as_str()
+            .or_else(|| parsed["choices"][0]["stop_reason"].as_str())
+            .or_else(|| parsed["stop_reason"].as_str())
+            .unwrap_or("");
+        let fr_lower = fr.to_lowercase();
+        if fr_lower.contains("safety")
+            || fr_lower.contains("filter")
+            || fr_lower.contains("recitation")
+            || fr_lower.contains("refusal")
+            || fr_lower.contains("prohibited")
+            || fr_lower.contains("blocklist")
+        {
+            format!("LLM prohibited content / safety filter triggered (stop_reason: '{}'). Provider refused to generate output for this batch.", fr)
+        } else {
+            format!("Empty or unexpected response payload: {}", raw_body)
+        }
+    })?;
 
     let prompt_tokens = parsed["usage"]["prompt_tokens"]
         .as_u64()

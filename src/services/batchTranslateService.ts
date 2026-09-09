@@ -48,6 +48,39 @@ class BatchTranslateService implements ManagedService {
   private isRunning = false;
   private abortController: AbortController | null = null;
   private listeners: ((progress: BatchProgressUpdate) => void)[] = [];
+  private lastDispatchTimestamp = 0;
+  private dispatchLock: Promise<void> = Promise.resolve();
+
+  /**
+   * Serialized Pacing Gate:
+   * Enforces a minimum delay (e.g. 1-3 seconds) between ANY batch request sent to the provider.
+   * Prevents parallel workers from bursting simultaneous requests, protecting against rate limits (HTTP 429).
+   */
+  public async acquireDispatchSlot(minDelayMs: number, abortSignal?: AbortSignal): Promise<void> {
+    if (minDelayMs <= 0) return;
+
+    let releaseLock!: () => void;
+    const previousLock = this.dispatchLock;
+    this.dispatchLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    try {
+      await previousLock;
+      if (abortSignal?.aborted) return;
+
+      const now = Date.now();
+      const elapsed = now - this.lastDispatchTimestamp;
+      const waitNeeded = Math.max(0, minDelayMs - elapsed);
+
+      if (waitNeeded > 0) {
+        await cancellableSleep(waitNeeded, abortSignal);
+      }
+      this.lastDispatchTimestamp = Date.now();
+    } finally {
+      releaseLock();
+    }
+  }
 
   public init() {
     // Lifecycle initialization
@@ -109,6 +142,8 @@ class BatchTranslateService implements ManagedService {
     if (this.isRunning) return;
     this.isRunning = true;
     this.abortController = new AbortController();
+    this.lastDispatchTimestamp = 0;
+    this.dispatchLock = Promise.resolve();
     useBatchStore.getState().setIsRunning(true);
     useBatchStore.getState().setIsPaused(false);
 
@@ -238,6 +273,7 @@ class BatchTranslateService implements ManagedService {
                 file,
                 fileIdx !== -1 ? fileIdx : 0,
                 files.length,
+                files,
                 settings,
                 apiKey,
                 (recentLine) => {
@@ -316,6 +352,7 @@ class BatchTranslateService implements ManagedService {
     file: BatchFileEntry,
     fileIndex: number,
     totalFilesCount: number,
+    allFiles: BatchFileEntry[],
     settings: BatchSettings,
     apiKey: string,
     onLineTranslated: (recentLine?: BatchProgressUpdate["recentLine"]) => void,
@@ -388,6 +425,12 @@ class BatchTranslateService implements ManagedService {
       }
     }
 
+    // Initialize continuous virtual monotonic sequence counter
+    let currentVirtualId = 1;
+    if (batchChunks.length > 0 && batchChunks[0].chunkItems.length > 0) {
+      currentVirtualId = batchChunks[0].chunkItems[0].id;
+    }
+
     for (let bIdx = 0; bIdx < batchChunks.length; bIdx++) {
       if (this.abortController?.signal.aborted) return;
 
@@ -397,13 +440,22 @@ class BatchTranslateService implements ManagedService {
         ? new Set(chunkItems.filter((it) => isExplicitTagged(it)).map((it) => it.id))
         : undefined;
 
+      // Continuous Monotonic Sequence: Assign sequential virtual IDs to eliminate LLM hallucinations on skipped lines
+      const realToVirtualMap = new Map<number, number>();
+      chunkItems.forEach((ci) => {
+        realToVirtualMap.set(ci.id, currentVirtualId++);
+      });
+
       let batchSuccess = false;
       let retryAttempts = 0;
+      const batchStartTime = Date.now();
 
       while (!batchSuccess) {
         if (this.abortController?.signal.aborted) break;
 
         try {
+          const pacingDelay = settings.delayMs !== undefined ? settings.delayMs : 1500;
+
           if (isLlm) {
             const isParsingError =
               lastErrorMessage.includes("JSON") ||
@@ -412,6 +464,14 @@ class BatchTranslateService implements ManagedService {
               lastErrorMessage.includes("validation");
 
             const activeContext = retryAttempts >= 2 && isParsingError ? [] : contextHistory;
+
+            // Enforce serialized dispatch pacing to prevent burst requests and rate limits
+            if (pacingDelay > 0) {
+              useBatchStore.getState().setFileStreamingState(file.id, (prev) =>
+                prev ? { ...prev, phase: "cooldown" } : null
+              );
+              await this.acquireDispatchSlot(pacingDelay, this.abortController?.signal);
+            }
 
             const resultTurn = await this.translateBatchLlm(
               chunkItems,
@@ -427,7 +487,8 @@ class BatchTranslateService implements ManagedService {
                 fileName: file.name,
                 batchIndex: bIdx + 1,
                 totalBatches: batchChunks.length,
-              }
+              },
+              realToVirtualMap
             );
 
             contextHistory.push(resultTurn);
@@ -441,6 +502,9 @@ class BatchTranslateService implements ManagedService {
               contextHistory = [];
             }
           } else {
+            if (pacingDelay > 0) {
+              await this.acquireDispatchSlot(pacingDelay, this.abortController?.signal);
+            }
             // Free MT engine fallback
             await executeBatchFreeMt({
               chunkItems,
@@ -457,6 +521,27 @@ class BatchTranslateService implements ManagedService {
 
           batchSuccess = true;
           file.error = undefined;
+
+          // Track completion duration per batch and update live ETA in store based on TOTAL remaining batches
+          const batchDurationMs = Date.now() - batchStartTime;
+          const currentFileRemaining = Math.max(0, batchChunks.length - 1 - bIdx);
+          let totalRemainingBatches = currentFileRemaining;
+          for (const otherFile of allFiles) {
+            if (otherFile.id === file.id) continue;
+            if ((otherFile.status as string) === "completed") continue;
+            const pendingLines = isExplicitMode
+              ? otherFile.items.filter((it) => isExplicitTagged(it)).length
+              : otherFile.items.filter((it) => !isProcessed(it)).length;
+            if (pendingLines > 0) {
+              totalRemainingBatches += Math.ceil(pendingLines / Math.max(1, settings.linesPerBatch));
+            }
+          }
+
+          useBatchStore.getState().recordBatchCompletion(
+            batchDurationMs,
+            totalRemainingBatches,
+            settings.concurrency || 2
+          );
 
           // Immutable update of file items with O(1) lookup map (H7)
           const chunkMap = new Map(chunkItems.map((ci) => [ci.id, ci]));
@@ -538,13 +623,6 @@ class BatchTranslateService implements ManagedService {
         }
         break;
       }
-
-      if (settings.delayMs > 0 && isLlm) {
-        useBatchStore.getState().setFileStreamingState(file.id, (prev) =>
-          prev ? { ...prev, phase: "cooldown" } : null
-        );
-        await cancellableSleep(settings.delayMs, this.abortController?.signal);
-      }
     }
 
     file.completedLines = file.items.filter((it) => isGenuinelyTranslated(it)).length;
@@ -570,7 +648,8 @@ class BatchTranslateService implements ManagedService {
     contextHistory: WholeTurnBatch[],
     onItemSuccess: (item: BatchItem) => void,
     allowedOverwriteIds?: Set<number>,
-    fileContext?: { fileId: string; fileName: string; batchIndex: number; totalBatches: number }
+    fileContext?: { fileId: string; fileName: string; batchIndex: number; totalBatches: number },
+    realToVirtualMap?: Map<number, number>
   ): Promise<WholeTurnBatch> {
     return executeBatchLlm({
       items,
@@ -581,6 +660,7 @@ class BatchTranslateService implements ManagedService {
       allowedOverwriteIds,
       fileContext,
       abortController: this.abortController,
+      realToVirtualMap,
     });
   }
 

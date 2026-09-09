@@ -105,7 +105,7 @@ export const DEFAULT_BATCH_SETTINGS: BatchSettings = {
   concurrency: 2,
   modelId: "openai/gpt-4o-mini",
   temperature: 0.3,
-  delayMs: 300,
+  delayMs: 1500,
   timeoutMinutes: 10,
   maxBackoffSeconds: 30,
   autoContinueUntilCompleted: false,

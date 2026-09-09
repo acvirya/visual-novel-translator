@@ -46,4 +46,13 @@ describe("BatchRetryPolicy (A6 & A5)", () => {
     const res = evaluateRetry(err, 5, { maxRetries: 5, autoContinueUntilCompleted: false });
     expect(res.shouldRetry).toBe(false);
   });
+
+  it("immediately skips on prohibited content or safety refusal without retrying (0 retries)", () => {
+    const safetyErr = new Error("LLM prohibited content / safety filter triggered (stop_reason: 'safety'). Provider refused to generate output for this batch.");
+    const res = evaluateRetry(safetyErr, 1, { maxRetries: 5 });
+    expect(res.shouldRetry).toBe(false);
+    expect(res.backoffMs).toBe(0);
+    expect(res.attemptInfo).toContain("skipped immediately without retry");
+  });
 });
+

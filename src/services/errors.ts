@@ -8,6 +8,7 @@ export type AppErrorCode =
   | "TRANSLATION_ERROR"
   | "RATE_LIMIT_ERROR"
   | "LLM_PARSE_ERROR"
+  | "CONTENT_FILTER_ERROR"
   | "API_KEY_MISSING"
   | "NETWORK_ERROR"
   | "CANCELLATION_ERROR"
@@ -78,6 +79,14 @@ export class CancellationError extends AppError {
   }
 }
 
+export class ContentFilterError extends TranslationError {
+  constructor(message: string, providerId?: string, originalError?: unknown) {
+    super(message, providerId, false, originalError);
+    this.name = "ContentFilterError";
+    (this as any).code = "CONTENT_FILTER_ERROR";
+  }
+}
+
 /**
  * Classifies an unknown error into a typed AppError instance
  */
@@ -104,13 +113,35 @@ export function classifyError(err: unknown, defaultProviderId?: string): AppErro
     const retryAfterMs = match ? parseInt(match[1], 10) * 1000 : undefined;
     return new RateLimitError(msg, defaultProviderId, retryAfterMs, err);
   }
+  // IPC / Tauri command argument errors should not be treated as LLM model output parsing errors
+  if (
+    lower.includes("invalid args") ||
+    lower.includes("missing required key") ||
+    (lower.includes("command ") && lower.includes("missing"))
+  ) {
+    return new TranslationError(msg, defaultProviderId, false, err);
+  }
+  // Prohibited content / safety filter / stop_reason refusal
+  if (
+    lower.includes("safety") ||
+    lower.includes("content_filter") ||
+    lower.includes("content filter") ||
+    lower.includes("prohibited") ||
+    lower.includes("policy violation") ||
+    lower.includes("harm_category") ||
+    lower.includes("blocklist") ||
+    (lower.includes("refusal") && !lower.includes("connection refused"))
+  ) {
+    return new ContentFilterError(msg, defaultProviderId, err);
+  }
 
   if (
     lower.includes("json") ||
     lower.includes("syntaxerror") ||
     lower.includes("schema") ||
     lower.includes("validation") ||
-    lower.includes("failed to parse")
+    lower.includes("failed to parse") ||
+    lower.includes("empty batch response")
   ) {
     return new LlmParseError(msg, undefined, true, defaultProviderId, err);
   }

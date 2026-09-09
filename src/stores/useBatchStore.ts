@@ -16,6 +16,10 @@ export interface BatchState {
   settings: BatchSettings;
   sessionStats: SessionUsageStats;
   streamingFileStates: Record<string, FileStreamingState>;
+  avgBatchDurationMs: number;
+  estimatedRemainingSeconds: number | null;
+  batchesPerMinute: number;
+  completedBatchesCount: number;
 
   // Actions
   setQueuedFiles: (files: BatchFileEntry[] | ((prev: BatchFileEntry[]) => BatchFileEntry[])) => void;
@@ -28,6 +32,7 @@ export interface BatchState {
   setProgressData: (progress: BatchProgressUpdate | null) => void;
   setSettings: (settings: Partial<BatchSettings>) => void;
   addSessionTokens: (promptTokens: number, completionTokens: number, cachedTokens: number, cost: number) => void;
+  recordBatchCompletion: (durationMs: number, remainingBatches: number, concurrency: number) => void;
   setFileStreamingState: (fileId: string, state: FileStreamingState | null | ((prev?: FileStreamingState) => FileStreamingState | null)) => void;
   clearAllStreamingStates: () => void;
 }
@@ -58,6 +63,10 @@ export const useBatchStore = create<BatchState>((set) => {
       totalCost: 0,
     },
     streamingFileStates: {},
+    avgBatchDurationMs: 0,
+    estimatedRemainingSeconds: null,
+    batchesPerMinute: 0,
+    completedBatchesCount: 0,
 
     setQueuedFiles: (filesOrFn) =>
       set((state) => ({
@@ -72,13 +81,47 @@ export const useBatchStore = create<BatchState>((set) => {
     setSelectedFileId: (selectedFileId) => set({ selectedFileId }),
     setSearchFilter: (searchFilter) => set({ searchFilter }),
     setStatusFilter: (statusFilter) => set({ statusFilter }),
-    setIsRunning: (isRunning) => set({ isRunning }),
+    setIsRunning: (isRunning) =>
+      set(() => ({
+        isRunning,
+        // Reset moving average metrics on stopped
+        ...(isRunning
+          ? {}
+          : {
+              completedBatchesCount: 0,
+              avgBatchDurationMs: 0,
+              estimatedRemainingSeconds: null,
+              batchesPerMinute: 0,
+            }),
+      })),
     setIsPaused: (isPaused) => set({ isPaused }),
     setProgressData: (progressData) => set({ progressData }),
     setSettings: (partial) =>
       set((state) => {
         settingsManager.updateBatch(partial);
         return { settings: { ...state.settings, ...partial } };
+      }),
+    recordBatchCompletion: (durationMs, remainingBatches, concurrency) =>
+      set((state) => {
+        const count = state.completedBatchesCount + 1;
+        // Exponential moving average (alpha = 0.3) for smooth, adaptive ETA estimation
+        const prevAvg = state.avgBatchDurationMs > 0 ? state.avgBatchDurationMs : durationMs;
+        const newAvg = prevAvg * 0.7 + durationMs * 0.3;
+        const effectiveConcurrency = Math.max(1, concurrency || 1);
+        const activeWorkers = Math.min(effectiveConcurrency, Math.max(1, remainingBatches));
+        const remainingSeconds =
+          remainingBatches > 0
+            ? Math.round((remainingBatches * newAvg) / (activeWorkers * 1000))
+            : 0;
+        const batchesPerMinute =
+          newAvg > 0 ? Math.round((60000 / newAvg) * effectiveConcurrency * 10) / 10 : 0;
+
+        return {
+          completedBatchesCount: count,
+          avgBatchDurationMs: newAvg,
+          estimatedRemainingSeconds: remainingSeconds,
+          batchesPerMinute,
+        };
       }),
     addSessionTokens: (promptTokens, completionTokens, cachedTokens, cost) =>
       set((state) => ({

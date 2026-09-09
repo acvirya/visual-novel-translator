@@ -12,7 +12,8 @@ import { logger } from "../loggerService";
  */
 export function buildBatchPromptMessages(
   items: BatchItem[],
-  contextHistory: WholeTurnBatch[]
+  contextHistory: WholeTurnBatch[],
+  realToVirtualMap?: Map<number, number>
 ): { messages: ChatMessage[]; rawUserContent: string } {
   const systemPrompt = buildCompleteSystemPrompt({
     mode: "batch",
@@ -27,8 +28,11 @@ export function buildBatchPromptMessages(
       ? executePreprocessingPipeline(it.originalSpeaker, "batch")
       : undefined;
 
+    // Use continuous virtual sequence ID if available to prevent LLM hallucinations on skipped lines
+    const assignedId = realToVirtualMap ? realToVirtualMap.get(it.id) ?? it.id : it.id;
+
     return {
-      id: it.id,
+      id: assignedId,
       speaker: cleanSpk || undefined,
       message: cleanMsg,
     };

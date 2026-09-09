@@ -1,66 +1,94 @@
 import React from "react";
-import { Globe } from "lucide-react";
+import { Globe, CheckCircle2 } from "lucide-react";
 
-interface FreeMtCardProps {
-  useGoogleTranslate: boolean;
-  useDeepLFree: boolean;
-  onToggleGoogleTranslate: (enabled: boolean) => void;
-  onToggleDeepLFree: (enabled: boolean) => void;
-}
-
-export const FreeMtCard: React.FC<FreeMtCardProps> = ({
-  useGoogleTranslate,
-  useDeepLFree,
-  onToggleGoogleTranslate,
-  onToggleDeepLFree,
-}) => {
+export const FreeMtCard: React.FC = () => {
   return (
     <div className="card" style={{ margin: 0 }}>
       <div className="card-header">
         <div>
           <span className="card-title">
-            <Globe size={16} /> 5. Free Online MT (Zero API Cost Fallback)
+            <Globe size={16} /> Free Online MT (Zero API Cost Built-in Engines)
           </span>
           <span className="card-subtitle">
-            Fast web translation services used as backup when API credits expire
+            Always-available high-speed translation services that can be used anytime without requiring API keys or credits
           </span>
         </div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={useGoogleTranslate}
-            onChange={(e) => onToggleGoogleTranslate(e.target.checked)}
-            style={{ transform: "scale(1.15)" }}
-          />
-          <div>
-            <span style={{ fontWeight: 600, fontSize: "13px" }}>
-              Google Translate (Free Web Endpoint)
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "6px",
+            backgroundColor: "var(--bg-app)",
+            padding: "12px 14px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-main)" }}>
+              Google Translate
             </span>
-            <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "block" }}>
-              High-speed translation engine for live gameplay streaming with minimal latency.
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "var(--accent-green, #3fb950)",
+                backgroundColor: "rgba(63, 185, 80, 0.1)",
+                border: "1px solid rgba(63, 185, 80, 0.25)",
+                padding: "2px 8px",
+                borderRadius: "12px",
+              }}
+            >
+              <CheckCircle2 size={11} /> Always Active
             </span>
           </div>
-        </label>
+          <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+            Ultra fast translation engine suitable for rapid visual novel text streaming with minimal latency.
+          </span>
+        </div>
 
-        <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={useDeepLFree}
-            onChange={(e) => onToggleDeepLFree(e.target.checked)}
-            style={{ transform: "scale(1.15)" }}
-          />
-          <div>
-            <span style={{ fontWeight: 600, fontSize: "13px" }}>
-              DeepL Web Scraper Endpoint
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "6px",
+            backgroundColor: "var(--bg-app)",
+            padding: "12px 14px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-main)" }}>
+              DeepL Scraper
             </span>
-            <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "block" }}>
-              Natural Japanese nuance translation fallback.
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "var(--accent-green, #3fb950)",
+                backgroundColor: "rgba(63, 185, 80, 0.1)",
+                border: "1px solid rgba(63, 185, 80, 0.25)",
+                padding: "2px 8px",
+                borderRadius: "12px",
+              }}
+            >
+              <CheckCircle2 size={11} /> Always Active
             </span>
           </div>
-        </label>
+          <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+            High accuracy translation fallback providing natural Japanese sentence structure and context.
+          </span>
+        </div>
       </div>
     </div>
   );
