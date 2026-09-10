@@ -30,7 +30,7 @@
         "shadow": false,
         "visible": false,
         "contentProtected": true,
-        "resizable": false,
+        "resizable": true,
         "skipTaskbar": true
       },
       {
@@ -49,7 +49,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' tauri:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: tauri:; connect-src 'self' https: tauri:;"
     }
   },
   "bundle": {

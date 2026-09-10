@@ -1,4 +1,5 @@
 import deepmerge from "deepmerge";
+import { cloneDeep } from "lodash-es";
 import { z } from "zod";
 import {
   OverlayConfig,
@@ -13,6 +14,8 @@ import { DEFAULT_PREPROCESSING_PIPELINE, invalidateCustomRulesCache, registerCus
 import { OVERLAY_PRESETS, TemplatePreset } from "../utils/overlayTemplateEngine";
 import { StoredProviderConfig } from "./providers/llmProviderRegistry";
 import { SecureStorageService } from "./secureStorageService";
+import { TauriBridge } from "./tauriBridge";
+import type { ManagedService } from "./appContainer";
 
 export interface GeneralSettings {
   sourceLang: string;
@@ -168,7 +171,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     batchModel: "openai/gpt-4o-mini",
     useScriptOnly: false,
     maxContextLines: 10,
-    retainContextLines: 3,
+    retainContextLines: 5,
     maxCharsPerLine: 250,
     reasoningEffort: "default",
     reasoningMaxTokens: 0,
@@ -296,7 +299,7 @@ const AppSettingsSanitizerSchema = z
     batch: z.record(z.string(), z.any()).optional(),
     llmProviders: z.record(z.string(), z.any()).optional(),
   })
-import type { ManagedService } from "./appContainer";
+  .passthrough();
 
 class SettingsManager implements ManagedService {
   public readonly id = "settingsManager";
@@ -328,6 +331,26 @@ class SettingsManager implements ManagedService {
       this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
     }
     let hasChanges = false;
+
+    // 1. Desktop file-based persistence: sync settings from AppData if running in desktop app
+    try {
+      const diskContent = await TauriBridge.loadAppSettings();
+      if (diskContent) {
+        const parsed = JSON.parse(diskContent);
+        const validationResult = AppSettingsSanitizerSchema.safeParse(parsed);
+        if (validationResult.success && validationResult.data) {
+          this.cache = this.mergeSettings(this.cache, validationResult.data);
+          hasChanges = true;
+        }
+      } else {
+        // First run on desktop: seed disk file with initial settings
+        this.persistToDisk(this.cache).catch(() => {});
+      }
+    } catch {
+      // Non-Tauri fallback (e.g. webview preview or headless unit tests)
+    }
+
+    // 2. Load secure API keys from OS Keyring
     for (const pid of Object.keys(this.cache.llmProviders)) {
       try {
         const secureKey = await SecureStorageService.getApiKey(pid);
@@ -351,10 +374,7 @@ class SettingsManager implements ManagedService {
   }
 
   private clone<T>(val: T): T {
-    if (typeof structuredClone === "function") {
-      return structuredClone(val);
-    }
-    return JSON.parse(JSON.stringify(val));
+    return cloneDeep(val);
   }
 
   private mergeSettings(target: AppSettings, source: any): AppSettings {
@@ -422,8 +442,18 @@ class SettingsManager implements ManagedService {
         }
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheToPersist));
+      this.persistToDisk(cacheToPersist).catch(() => {});
     } catch (e) {
       console.error("Failed to save settings to localStorage:", e);
+    }
+  }
+
+  private async persistToDisk(settingsToPersist: AppSettings): Promise<void> {
+    try {
+      const json = JSON.stringify(settingsToPersist, null, 2);
+      await TauriBridge.saveAppSettings(json);
+    } catch {
+      // Silently ignore if running in test / non-Tauri environment
     }
   }
 

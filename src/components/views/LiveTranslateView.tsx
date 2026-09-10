@@ -40,6 +40,7 @@ export const LiveTranslateView: React.FC = () => {
     setSelectedProvider,
     setReasoningEffort,
     setUseScriptOnly,
+    setIsPaused,
     clearLiveLogs,
     resetSessionStats,
   } = useTranslationStore();
@@ -83,7 +84,7 @@ export const LiveTranslateView: React.FC = () => {
   }, [contextSettings.maxContextLines, contextSettings.retainContextLines]);
 
   const handleTogglePause = () => {
-    translationManager.setPaused(!isPaused);
+    setIsPaused(!isPaused);
   };
 
   const handleToggleScriptOnly = (enabled: boolean) => {

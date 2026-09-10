@@ -50,7 +50,7 @@ impl TextractorState {
 mod win32 {
     use super::ProcessInfo;
     use std::collections::HashSet;
-    use sysinfo::{Pid, System};
+    use sysinfo::{Pid, ProcessesToUpdate, System};
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
@@ -127,8 +127,8 @@ mod win32 {
     }
 
     pub fn enumerate_windows() -> Vec<ProcessInfo> {
-        let mut sys = System::new_all();
-        sys.refresh_all();
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
 
         let mut ctx = EnumContext {
             processes: Vec::new(),

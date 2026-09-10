@@ -8,6 +8,7 @@ import { logger } from "./loggerService";
 import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
 import { eventBus } from "./eventBus";
 import { ManagedService } from "./appContainer";
+import { usageLogService, AiUsageStatus } from "./usageLogService";
 
 export interface TranslatePipelineOptions {
   id?: number;
@@ -77,10 +78,8 @@ class TranslationManager implements ManagedService {
   }
 
   public dispose() {
-    this.listeners = [];
-    this.eventListeners = [];
     this.queue = [];
-    this.contextHistory = [];
+    this.isProcessingQueue = false;
   }
 
   public subscribe(callback: (item: TranslationLogItem) => void) {
@@ -614,6 +613,44 @@ class TranslationManager implements ManagedService {
         translationError = res.error || "LLM translation failed";
         logger.error("TranslationManager", `OpenRouter translation returned error: ${res.error}`);
       }
+
+      const durationMs = Date.now() - startTime;
+
+      let usageStatus: AiUsageStatus = "completed";
+      if (!res.success) {
+        const errLower = (res.error || "").toLowerCase();
+        if (errLower.includes("safety") || errLower.includes("filter") || errLower.includes("refusal")) {
+          usageStatus = "safety_refusal";
+        } else if (errLower.includes("rate") || errLower.includes("429")) {
+          usageStatus = "rate_limited";
+        } else if (errLower.includes("timeout") || errLower.includes("timed out")) {
+          usageStatus = "timeout";
+        } else if (errLower.includes("json") || errLower.includes("parse")) {
+          usageStatus = "parsing_error";
+        } else {
+          usageStatus = "error";
+        }
+      }
+
+      usageLogService.recordLog({
+        mode: "live",
+        modelId: providerId,
+        provider: parsedProvider,
+        cost: res.cost || 0,
+        latencyMs: durationMs,
+        promptTokens: res.promptTokens || 0,
+        completionTokens: res.completionTokens || 0,
+        cachedTokens: res.cachedTokens || 0,
+        status: usageStatus,
+        statusMessage: translationError,
+        inputSnippet: cleanSpk ? `[${cleanSpk}] ${cleanMsg}` : cleanMsg,
+        outputSnippet: translatedSpeaker ? `[${translatedSpeaker}] ${translatedMessage}` : translatedMessage,
+        metadata: {
+          sourceType: options.sourceType,
+          sourceLang,
+          targetLang,
+        },
+      });
     }
 
     const durationMs = Date.now() - startTime;

@@ -21,7 +21,11 @@ const tabTitles: Record<NavigationTab, { title: string; subtitle: string }> = {
   },
   "settings": {
     title: "Settings & AI Configuration",
-    subtitle: "AI language models, text preprocessing master pipeline, hotkeys, and system logs",
+    subtitle: "AI language models, prompts, replacement rules, and general application preferences",
+  },
+  "logs": {
+    title: "Usage & App Logs",
+    subtitle: "Persistent AI translation usage metrics, cost tracking, token analysis, and system logs",
   },
 };
 

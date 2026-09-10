@@ -3,21 +3,25 @@ use crate::oneocr::{find_oneocr_installation, scan_screen_regions, OcrEngineStat
 use crate::screen_capture::{image_to_base64_data_url, CaptureRegion};
 
 #[tauri::command]
-pub fn detect_oneocr_path(custom_path: Option<String>) -> Result<OcrEngineStatus, String> {
-    match find_oneocr_installation(custom_path) {
-        Ok((dll, model, _onnx)) => Ok(OcrEngineStatus {
-            is_available: true,
-            dll_path: dll.to_string_lossy().to_string(),
-            model_path: model.to_string_lossy().to_string(),
-            error: None,
-        }),
-        Err(e) => Ok(OcrEngineStatus {
-            is_available: false,
-            dll_path: String::new(),
-            model_path: String::new(),
-            error: Some(e),
-        }),
-    }
+pub async fn detect_oneocr_path(custom_path: Option<String>) -> Result<OcrEngineStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        match find_oneocr_installation(custom_path) {
+            Ok((dll, model, _onnx)) => Ok(OcrEngineStatus {
+                is_available: true,
+                dll_path: dll.to_string_lossy().to_string(),
+                model_path: model.to_string_lossy().to_string(),
+                error: None,
+            }),
+            Err(e) => Ok(OcrEngineStatus {
+                is_available: false,
+                dll_path: String::new(),
+                model_path: String::new(),
+                error: Some(e),
+            }),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

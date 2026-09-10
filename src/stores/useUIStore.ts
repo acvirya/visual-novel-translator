@@ -5,7 +5,8 @@ export type LivePipelineStage = "input" | "stream" | "overlay";
 export type LiveInputMode = "textractor" | "ocr";
 export type BatchSubTab = "preview" | "settings";
 export type KnowledgeBaseSubTab = "glossary" | "script";
-export type SettingsSubTab = "providers" | "custom_rules" | "general" | "logs";
+export type SettingsSubTab = "providers" | "custom_rules" | "general";
+export type LogsSubTab = "usage" | "system";
 
 export interface UIState {
   currentTab: NavigationTab;
@@ -15,6 +16,7 @@ export interface UIState {
   batchSubTab: BatchSubTab;
   knowledgeBaseSubTab: KnowledgeBaseSubTab;
   settingsSubTab: SettingsSubTab;
+  logsSubTab: LogsSubTab;
 
   // Actions
   setCurrentTab: (tab: NavigationTab) => void;
@@ -24,6 +26,7 @@ export interface UIState {
   setBatchSubTab: (tab: BatchSubTab) => void;
   setKnowledgeBaseSubTab: (tab: KnowledgeBaseSubTab) => void;
   setSettingsSubTab: (tab: SettingsSubTab) => void;
+  setLogsSubTab: (tab: LogsSubTab) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -34,6 +37,7 @@ export const useUIStore = create<UIState>((set) => ({
   batchSubTab: "preview",
   knowledgeBaseSubTab: "glossary",
   settingsSubTab: "providers",
+  logsSubTab: "usage",
 
   setCurrentTab: (currentTab) => set({ currentTab }),
   setIsSidebarCollapsed: (val) =>
@@ -45,4 +49,5 @@ export const useUIStore = create<UIState>((set) => ({
   setBatchSubTab: (batchSubTab) => set({ batchSubTab }),
   setKnowledgeBaseSubTab: (knowledgeBaseSubTab) => set({ knowledgeBaseSubTab }),
   setSettingsSubTab: (settingsSubTab) => set({ settingsSubTab }),
+  setLogsSubTab: (logsSubTab) => set({ logsSubTab }),
 }));

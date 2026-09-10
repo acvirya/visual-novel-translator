@@ -21,6 +21,10 @@ pub fn run() {
         )
         .try_init();
 
+    std::panic::set_hook(Box::new(|panic_info| {
+        tracing::error!("[PANIC] Rust backend panicked: {}", panic_info);
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -66,7 +70,11 @@ pub fn run() {
             file_dialogs::show_pick_files_dialog,
             file_dialogs::show_pick_directory_dialog,
             file_dialogs::append_debug_log,
+            file_dialogs::read_debug_log,
+            file_dialogs::clear_debug_log,
             file_dialogs::open_file_in_default_app,
+            file_dialogs::load_app_settings,
+            file_dialogs::save_app_settings,
             llm::openrouter_chat_completion,
             llm::openrouter_stream_chat_completion,
             llm::llm_chat_completion,

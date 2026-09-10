@@ -16,15 +16,20 @@ pub fn get_stream_tokens() -> &'static DashMap<String, CancellationToken> {
 
 pub fn get_global_stream_token() -> CancellationToken {
     let lock = GLOBAL_STREAM_CANCEL_TOKEN.get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
-    lock.read().clone()
+    let guard = lock.read();
+    guard.child_token()
 }
 
 #[tauri::command]
 pub fn cancel_all_llm_streams() {
     let lock = GLOBAL_STREAM_CANCEL_TOKEN.get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
-    let mut guard = lock.write();
-    guard.cancel();
-    *guard = CancellationToken::new();
+    let old_token = {
+        let mut guard = lock.write();
+        let old = guard.clone();
+        *guard = CancellationToken::new();
+        old
+    };
+    old_token.cancel();
 
     for item in get_stream_tokens().iter() {
         item.value().cancel();
@@ -95,14 +100,15 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
             } else {
                 // Check if trailing slice of tag_buffer is a prefix of "</think>"
                 let mut prefix_len = 0;
-                for len in (1..8).rev() {
-                    let start_idx = tag_buffer.len().saturating_sub(len);
+                let max_check = 8.min(tag_buffer.len());
+                for len in (1..=max_check).rev() {
+                    let start_idx = tag_buffer.len() - len;
                     if tag_buffer.is_char_boundary(start_idx) && "</think>".starts_with(&tag_buffer[start_idx..]) {
                         prefix_len = len;
                         break;
                     }
                 }
-                let emit_len = tag_buffer.len() - prefix_len;
+                let emit_len = tag_buffer.len().saturating_sub(prefix_len);
                 if emit_len > 0 {
                     let to_emit = tag_buffer[..emit_len].to_string();
                     *tag_buffer = tag_buffer[emit_len..].to_string();
@@ -132,14 +138,15 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
             } else {
                 // Check if trailing slice of tag_buffer is a prefix of "<think>"
                 let mut prefix_len = 0;
-                for len in (1..7).rev() {
-                    let start_idx = tag_buffer.len().saturating_sub(len);
+                let max_check = 7.min(tag_buffer.len());
+                for len in (1..=max_check).rev() {
+                    let start_idx = tag_buffer.len() - len;
                     if tag_buffer.is_char_boundary(start_idx) && "<think>".starts_with(&tag_buffer[start_idx..]) {
                         prefix_len = len;
                         break;
                     }
                 }
-                let emit_len = tag_buffer.len() - prefix_len;
+                let emit_len = tag_buffer.len().saturating_sub(prefix_len);
                 if emit_len > 0 {
                     let to_emit = tag_buffer[..emit_len].to_string();
                     *tag_buffer = tag_buffer[emit_len..].to_string();
@@ -156,7 +163,8 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
     }
 }
 
-/// Helper that handles split `<think>` and `</think>` tags across token chunks using a sliding window buffer
+/// Helper that handles split `<think>` and `</think>` tags across token chunks using a sliding window buffer.
+/// Returns true if all events were successfully sent to the channel, or false if the channel was closed/dropped.
 pub fn process_stream_content_chunk(
     c: &str,
     tag_buffer: &mut String,
@@ -166,7 +174,8 @@ pub fn process_stream_content_chunk(
     accumulated_content: &mut String,
     accumulated_reasoning: &mut String,
     on_event: &Channel<StreamEvent>,
-) {
+) -> bool {
+    let mut ok = true;
     process_stream_content_chunk_generic(
         c,
         tag_buffer,
@@ -176,9 +185,12 @@ pub fn process_stream_content_chunk(
         accumulated_content,
         accumulated_reasoning,
         |ev| {
-            let _ = on_event.send(ev);
+            if on_event.send(ev).is_err() {
+                ok = false;
+            }
         },
     );
+    ok
 }
 
 pub fn flush_stream_content_buffer_generic<F: FnMut(StreamEvent)>(
@@ -212,7 +224,8 @@ pub fn flush_stream_content_buffer(
     accumulated_content: &mut String,
     accumulated_reasoning: &mut String,
     on_event: &Channel<StreamEvent>,
-) {
+) -> bool {
+    let mut ok = true;
     flush_stream_content_buffer_generic(
         tag_buffer,
         in_think_tag,
@@ -220,9 +233,12 @@ pub fn flush_stream_content_buffer(
         accumulated_content,
         accumulated_reasoning,
         |ev| {
-            let _ = on_event.send(ev);
+            if on_event.send(ev).is_err() {
+                ok = false;
+            }
         },
     );
+    ok
 }
 
 struct StreamIdGuard<'a>(&'a Option<String>);
@@ -259,6 +275,7 @@ async fn handle_sse_stream(
     let mut has_usage = false;
     let mut last_error = String::new();
     let mut last_finish_reason = String::new();
+    let mut raw_bytes_buffer: Vec<u8> = Vec::new();
 
     'chunk_loop: loop {
         if cancel_token.is_cancelled() || global_token.is_cancelled() {
@@ -305,12 +322,44 @@ async fn handle_sse_stream(
         let chunk = match chunk_opt {
             Some(c) => c,
             None => {
+                if !raw_bytes_buffer.is_empty() {
+                    buffer.push_str(&String::from_utf8_lossy(&raw_bytes_buffer));
+                    raw_bytes_buffer.clear();
+                }
                 let _ = on_event.send(StreamEvent::Status("validating".to_string()));
                 break 'chunk_loop;
             }
         };
 
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        raw_bytes_buffer.extend_from_slice(&chunk);
+        loop {
+            match std::str::from_utf8(&raw_bytes_buffer) {
+                Ok(valid_str) => {
+                    buffer.push_str(valid_str);
+                    raw_bytes_buffer.clear();
+                    break;
+                }
+                Err(e) => {
+                    let valid_len = e.valid_up_to();
+                    if valid_len > 0 {
+                        if let Ok(valid_str) = std::str::from_utf8(&raw_bytes_buffer[..valid_len]) {
+                            buffer.push_str(valid_str);
+                        }
+                    }
+                    match e.error_len() {
+                        Some(err_len) => {
+                            let invalid_end = valid_len + err_len;
+                            buffer.push_str(&String::from_utf8_lossy(&raw_bytes_buffer[valid_len..invalid_end]));
+                            raw_bytes_buffer.drain(..invalid_end);
+                        }
+                        None => {
+                            raw_bytes_buffer.drain(..valid_len);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         while let Some(newline_pos) = buffer.find('\n') {
             let line = buffer[..newline_pos].trim().to_string();
@@ -450,7 +499,7 @@ async fn handle_sse_stream(
                                     }
 
                                     if let Some(c) = delta["content"].as_str() {
-                                        process_stream_content_chunk(
+                                        if !process_stream_content_chunk(
                                             c,
                                             &mut tag_buffer,
                                             &mut in_think_tag,
@@ -459,7 +508,10 @@ async fn handle_sse_stream(
                                             &mut accumulated_content,
                                             &mut accumulated_reasoning,
                                             on_event,
-                                        );
+                                        ) {
+                                            tracing::warn!("[LLM] Stream IPC receiver dropped; aborting stream");
+                                            return Err((false, "Client disconnected from stream channel".to_string()));
+                                        }
                                     }
                                 }
 
@@ -492,14 +544,17 @@ async fn handle_sse_stream(
     }
 
     // Flush any remaining text held in tag_buffer at stream end
-    flush_stream_content_buffer(
+    if !flush_stream_content_buffer(
         &mut tag_buffer,
         in_think_tag,
         &mut in_content_phase,
         &mut accumulated_content,
         &mut accumulated_reasoning,
         on_event,
-    );
+    ) {
+        tracing::warn!("[LLM] Stream IPC receiver dropped during flush; aborting stream");
+        return Err((false, "Client disconnected from stream channel".to_string()));
+    }
 
     if stream_failed && !is_json_completed(&accumulated_content) {
         let err_msg = if !last_error.is_empty() {
@@ -570,35 +625,15 @@ pub async fn openrouter_stream_chat_completion(
     let messages: serde_json::Value = serde_json::from_str(&messages_json)
         .map_err(|e| format!("Invalid messages JSON: {}", e))?;
 
-    let mut payload = serde_json::json!({
-        "model": model_id,
-        "messages": messages,
-        "temperature": temperature,
-        "response_format": { "type": "json_object" },
-        "stream": true,
-        "stream_options": { "include_usage": true },
-        "include_reasoning": true,
-    });
-
-    if let Some(ref r) = reasoning {
-        if r.is_object() && !r.as_object().unwrap().is_empty() {
-            payload["reasoning"] = r.clone();
-        }
-    }
-
-    let mut provider_obj = serde_json::json!({
-        "allow_fallbacks": false,
-    });
-    if let Some(ref list) = providers {
-        if !list.is_empty() {
-            provider_obj["only"] = serde_json::json!(list);
-        }
-    }
-    payload["provider"] = provider_obj;
-
-    if let Some(tokens) = max_tokens {
-        payload["max_tokens"] = serde_json::json!(tokens);
-    }
+    let mut payload = super::payload::build_openrouter_payload(
+        &model_id,
+        messages,
+        temperature,
+        max_tokens,
+        providers.as_deref(),
+        reasoning.as_ref(),
+        true,
+    );
 
     let max_attempts = 3;
     let mut last_error = String::new();
@@ -616,7 +651,7 @@ pub async fn openrouter_stream_chat_completion(
             .header("Authorization", format!("Bearer {}", api_key.trim()))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
-            .header("HTTP-Referer", "https://github.com/visual-novel-translator")
+            .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
             .header("X-Title", "Visual Novel Translator")
             .json(&payload);
 
@@ -654,12 +689,7 @@ pub async fn openrouter_stream_chat_completion(
                     || body_text.contains("schema"));
 
             if is_format_error {
-                let mut fallback_payload = payload.clone();
-                if let Some(map) = fallback_payload.as_object_mut() {
-                    map.remove("response_format");
-                    map.remove("stream_options");
-                }
-                payload = fallback_payload;
+                super::payload::remove_format_from_payload(&mut payload);
                 continue;
             }
 
@@ -948,6 +978,57 @@ mod tests {
             accumulated_content,
             "「こんにちは、世界”…——里」{\"halo\": \"dunia—selamat pagi”}"
         );
+    }
+
+    #[test]
+    fn test_raw_bytes_buffer_chunk_splitting() {
+        let full_text = "{\"id\":5,\"translated_message\":\"“What kind of town is this?”\"}\n{\"id\":21,\"translated_message\":\"…今のは?\"}";
+        let full_bytes = full_text.as_bytes();
+
+        // Test splitting at EVERY possible 1-byte, 2-byte, 3-byte chunk size
+        for chunk_size in 1..=10 {
+            let mut buffer = String::new();
+            let mut raw_bytes_buffer: Vec<u8> = Vec::new();
+
+            for chunk in full_bytes.chunks(chunk_size) {
+                raw_bytes_buffer.extend_from_slice(chunk);
+                loop {
+                    match std::str::from_utf8(&raw_bytes_buffer) {
+                        Ok(valid_str) => {
+                            buffer.push_str(valid_str);
+                            raw_bytes_buffer.clear();
+                            break;
+                        }
+                        Err(e) => {
+                            let valid_len = e.valid_up_to();
+                            if valid_len > 0 {
+                                if let Ok(valid_str) = std::str::from_utf8(&raw_bytes_buffer[..valid_len]) {
+                                    buffer.push_str(valid_str);
+                                }
+                            }
+                            match e.error_len() {
+                                Some(err_len) => {
+                                    let invalid_end = valid_len + err_len;
+                                    buffer.push_str(&String::from_utf8_lossy(&raw_bytes_buffer[valid_len..invalid_end]));
+                                    raw_bytes_buffer.drain(..invalid_end);
+                                }
+                                None => {
+                                    raw_bytes_buffer.drain(..valid_len);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !raw_bytes_buffer.is_empty() {
+                buffer.push_str(&String::from_utf8_lossy(&raw_bytes_buffer));
+            }
+
+            assert_eq!(buffer, full_text, "Failed at chunk_size = {}", chunk_size);
+            assert!(!buffer.contains('\u{FFFD}'), "Contained replacement character at chunk_size = {}", chunk_size);
+        }
     }
 }
 

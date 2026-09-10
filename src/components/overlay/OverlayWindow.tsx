@@ -94,6 +94,17 @@ export const OverlayWindow: React.FC = () => {
         });
       } else if (event.type === "SET_EDIT_MODE") {
         setIsEditing(event.isEditing);
+        if (event.isEditing) {
+          const fresh = overlayChannel.getSavedConfig();
+          const active = fresh || config;
+          setConfig(active);
+          setBoxRect({
+            x: active.x,
+            y: active.y,
+            width: active.width,
+            height: active.height,
+          });
+        }
       } else if (event.type === "RESET_SEQUENCE") {
         highestIdRef.current = 0;
       } else if (event.type === "DIALOGUE_UPDATE") {
@@ -158,7 +169,10 @@ export const OverlayWindow: React.FC = () => {
     };
     setConfig(updated);
 
-    // Notify main window
+    // Notify all windows that edit mode is completed
+    overlayChannel.send({ type: "SET_EDIT_MODE", isEditing: false });
+
+    // Notify main window with new coordinates
     overlayChannel.send({
       type: "POSITION_SAVED",
       x: updated.x,
@@ -231,14 +245,17 @@ export const OverlayWindow: React.FC = () => {
   // Pointer Handlers for Draw, Move & Resize
   const handleBackdropMouseDown = (e: React.MouseEvent) => {
     if (!isEditing) return;
-    // Start drawing a new box from scratch
-    setInteractionMode("drawing");
-    dragStartRef.current = {
-      mouseX: e.clientX,
-      mouseY: e.clientY,
-      initialBox: { x: e.clientX, y: e.clientY, width: 20, height: 20 },
-    };
-    setBoxRect({ x: e.clientX, y: e.clientY, width: 20, height: 20 });
+    // Only allow drawing a new box from scratch if user explicitly holds Shift or Alt
+    // to prevent accidental clicks on the background from destroying/resizing the box
+    if (e.shiftKey || e.altKey) {
+      setInteractionMode("drawing");
+      dragStartRef.current = {
+        mouseX: e.clientX,
+        mouseY: e.clientY,
+        initialBox: { x: e.clientX, y: e.clientY, width: 20, height: 20 },
+      };
+      setBoxRect({ x: e.clientX, y: e.clientY, width: 20, height: 20 });
+    }
   };
 
   const handleBoxMouseDown = (e: React.MouseEvent) => {
@@ -447,7 +464,7 @@ export const OverlayWindow: React.FC = () => {
           </div>
 
           <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
-            Hold & drag canvas to redraw • Drag box to move • Drag edges to resize
+            Drag box to move • Drag edges to resize • Shift+Drag to redraw
           </div>
 
           <div style={{ display: "flex", gap: "8px" }}>

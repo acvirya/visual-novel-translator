@@ -1,9 +1,8 @@
 import React from "react";
-import { Sliders, Terminal, KeyRound, Code } from "lucide-react";
+import { Sliders, KeyRound, Code } from "lucide-react";
 import { TranslationProvidersView } from "./TranslationProvidersView";
 import { CustomReplacementRulesView } from "./CustomReplacementRulesView";
 import { GeneralSettingsView } from "./GeneralSettingsView";
-import { LogsView } from "./LogsView";
 import { SegmentedControl, SegmentedOption } from "../common/SegmentedControl";
 import { useUIStore, SettingsSubTab } from "../../stores/useUIStore";
 
@@ -29,11 +28,6 @@ export const UnifiedSettingsView: React.FC = () => {
       label: "General & Hotkeys",
       icon: <Sliders size={14} />,
     },
-    {
-      id: "logs",
-      label: "System Logs",
-      icon: <Terminal size={14} />,
-    },
   ];
 
   return (
@@ -53,7 +47,6 @@ export const UnifiedSettingsView: React.FC = () => {
         {activeSubTab === "providers" && <TranslationProvidersView />}
         {activeSubTab === "custom_rules" && <CustomReplacementRulesView />}
         {activeSubTab === "general" && <GeneralSettingsView />}
-        {activeSubTab === "logs" && <LogsView />}
       </div>
     </div>
   );

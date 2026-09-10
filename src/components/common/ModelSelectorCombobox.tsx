@@ -15,15 +15,15 @@ import {
   Globe,
   Zap,
   ChevronDown,
-  ChevronRight,
   ArrowUp,
   ArrowDown,
   X,
   Brain,
-  Check,
 } from "lucide-react";
 import { ReasoningEffort } from "../../types";
 import { settingsManager } from "../../services/settingsManager";
+import { ModelRowItem } from "./modelSelector/ModelRowItem";
+import { ReasoningSubmenu } from "./modelSelector/ReasoningSubmenu";
 
 export interface ModelSelectorComboboxProps {
   selectedModelId: string;
@@ -613,81 +613,19 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               >
                 <Star size={11} fill="var(--accent-gold)" /> STARRED FAVORITES ({filteredStarred.length})
               </div>
-              {filteredStarred.map((m) => {
-                const isSelected = m.id === selectedModelId;
-                const parsed = splitModelProviderAndName(m);
-                const capabilities = getModelReasoningCapabilities(m, allMergedModels);
-                const preferredEffort = getModelPreferredReasoningEffort(m.id);
-                const effortPreviewLabel = preferredEffort && preferredEffort !== "default"
-                  ? formatReasoningEffortLabel(preferredEffort)
-                  : (capabilities.defaultEffort ? formatReasoningEffortLabel(capabilities.defaultEffort) : (capabilities.mode === "toggle_only" ? "On" : "Effort"));
-
-                return (
-                  <div
-                    key={`starred_${m.id}`}
-                    onClick={() => handleSelect(m.id)}
-                    style={{
-                      padding: "7px 10px",
-                      cursor: "pointer",
-                      backgroundColor: isSelected ? "rgba(78, 115, 223, 0.25)" : "transparent",
-                      borderBottom: "1px solid var(--border-subtle)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      position: "relative",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
-                      handleRowMouseEnter(e, m);
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isSelected) e.currentTarget.style.backgroundColor = "transparent";
-                      handleRowMouseLeave();
-                    }}
-                  >
-                    <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden", minWidth: 0 }}>
-                      <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                        {parsed.modelName}
-                      </span>
-                      <span style={{ fontSize: "10.5px", color: "var(--accent-cyan)", fontWeight: 500, fontFamily: "var(--font-mono)" }}>
-                        {parsed.provider}
-                      </span>
-                    </div>
-
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
-                      {capabilities.isSupported && (
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "2px",
-                            fontSize: "9px",
-                            fontWeight: 700,
-                            color: "var(--accent-purple, #a855f7)",
-                            backgroundColor: "rgba(168, 85, 247, 0.12)",
-                            border: "1px solid rgba(168, 85, 247, 0.25)",
-                            padding: "1px 5px",
-                            borderRadius: "3px",
-                          }}
-                          title={`Will select: ${effortPreviewLabel}. Hover to change.`}
-                        >
-                          <Brain size={9} />
-                          <span>{effortPreviewLabel}</span>
-                          <ChevronRight size={9} />
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={(e) => handleToggleStar(m.id, e)}
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px", color: "var(--accent-gold)" }}
-                        title="Remove from starred"
-                      >
-                        <Star size={13} fill="var(--accent-gold)" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {filteredStarred.map((m) => (
+                <ModelRowItem
+                  key={`starred_${m.id}`}
+                  model={m}
+                  isSelected={m.id === selectedModelId}
+                  isStarred={true}
+                  allMergedModels={allMergedModels}
+                  onSelect={handleSelect}
+                  onToggleStar={handleToggleStar}
+                  onMouseEnter={handleRowMouseEnter}
+                  onMouseLeave={handleRowMouseLeave}
+                />
+              ))}
             </div>
           )}
 
@@ -792,81 +730,19 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                 <Zap size={11} /> AVAILABLE AI MODELS ({filteredCatalog.length})
               </div>
 
-              {filteredCatalog.map((m) => {
-                const isSelected = m.id === selectedModelId;
-                const parsed = splitModelProviderAndName(m);
-                const capabilities = getModelReasoningCapabilities(m, allMergedModels);
-                const preferredEffort = getModelPreferredReasoningEffort(m.id);
-                const effortPreviewLabel = preferredEffort && preferredEffort !== "default"
-                  ? formatReasoningEffortLabel(preferredEffort)
-                  : (capabilities.defaultEffort ? formatReasoningEffortLabel(capabilities.defaultEffort) : (capabilities.mode === "toggle_only" ? "On" : "Effort"));
-
-                return (
-                  <div
-                    key={`catalog_${m.id}`}
-                    onClick={() => handleSelect(m.id)}
-                    style={{
-                      padding: "7px 10px",
-                      cursor: "pointer",
-                      backgroundColor: isSelected ? "rgba(78, 115, 223, 0.25)" : "transparent",
-                      borderBottom: "1px solid var(--border-subtle)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      position: "relative",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
-                      handleRowMouseEnter(e, m);
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isSelected) e.currentTarget.style.backgroundColor = "transparent";
-                      handleRowMouseLeave();
-                    }}
-                  >
-                    <div style={{ display: "flex", flexDirection: "column", gap: "1px", overflow: "hidden", minWidth: 0 }}>
-                      <span style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-primary)", whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
-                        {parsed.modelName}
-                      </span>
-                      <span style={{ fontSize: "10.5px", color: "var(--accent-cyan)", fontWeight: 500, fontFamily: "var(--font-mono)" }}>
-                        {parsed.provider}
-                      </span>
-                    </div>
-
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
-                      {capabilities.isSupported && (
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "2px",
-                            fontSize: "9px",
-                            fontWeight: 700,
-                            color: "var(--accent-purple, #a855f7)",
-                            backgroundColor: "rgba(168, 85, 247, 0.12)",
-                            border: "1px solid rgba(168, 85, 247, 0.25)",
-                            padding: "1px 5px",
-                            borderRadius: "3px",
-                          }}
-                          title={`Will select: ${effortPreviewLabel}. Hover to change.`}
-                        >
-                          <Brain size={9} />
-                          <span>{effortPreviewLabel}</span>
-                          <ChevronRight size={9} />
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={(e) => handleToggleStar(m.id, e)}
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px", color: "var(--text-muted)" }}
-                        title="Add to starred favorites"
-                      >
-                        <Star size={13} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {filteredCatalog.map((m) => (
+                <ModelRowItem
+                  key={`catalog_${m.id}`}
+                  model={m}
+                  isSelected={m.id === selectedModelId}
+                  isStarred={starredIds.includes(m.id)}
+                  allMergedModels={allMergedModels}
+                  onSelect={handleSelect}
+                  onToggleStar={handleToggleStar}
+                  onMouseEnter={handleRowMouseEnter}
+                  onMouseLeave={handleRowMouseLeave}
+                />
+              ))}
             </div>
           )}
 
@@ -891,140 +767,12 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
       )}
 
       {isOpen && hoveredSubmenu && (
-        <div
+        <ReasoningSubmenu
+          hoveredSubmenu={hoveredSubmenu}
+          onSelect={handleSelect}
           onMouseEnter={handleSubmenuMouseEnter}
           onMouseLeave={handleSubmenuMouseLeave}
-          style={{
-            position: "fixed",
-            top: hoveredSubmenu.y,
-            left: hoveredSubmenu.x,
-            width: "200px",
-            backgroundColor: "#161B26",
-            border: "1px solid var(--accent-purple, #a855f7)",
-            borderRadius: "var(--radius-sm)",
-            boxShadow: "0 14px 40px rgba(0,0,0,0.9)",
-            zIndex: 1000000,
-            padding: "4px 0",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1px",
-          }}
-        >
-          <div
-            style={{
-              padding: "6px 10px",
-              borderBottom: "1px solid rgba(168, 85, 247, 0.25)",
-              backgroundColor: "rgba(168, 85, 247, 0.12)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--accent-purple, #a855f7)", display: "flex", alignItems: "center", gap: "4px" }}>
-              <Brain size={12} /> Thinking Effort
-            </span>
-            {hoveredSubmenu.capabilities.isMandatory && (
-              <span style={{ fontSize: "9.5px", color: "var(--accent-gold)", fontWeight: 600 }}>Required</span>
-            )}
-          </div>
-
-          <div style={{ maxHeight: "240px", overflowY: "auto" }}>
-            {(() => {
-              const currentPreferred = getModelPreferredReasoningEffort(hoveredSubmenu.modelId);
-              const isDefaultSelected = !currentPreferred || currentPreferred === "default";
-              const isOffSelected = currentPreferred === "none";
-
-              return (
-                <>
-                  <div
-                    onClick={() => handleSelect(hoveredSubmenu.modelId, "default")}
-                    style={{
-                      padding: "7px 10px",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      fontSize: "11.5px",
-                      backgroundColor: isDefaultSelected ? "rgba(168, 85, 247, 0.18)" : "transparent",
-                      color: isDefaultSelected ? "var(--accent-purple, #a855f7)" : "var(--text-primary)",
-                      fontWeight: isDefaultSelected ? 700 : 500,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isDefaultSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isDefaultSelected) e.currentTarget.style.backgroundColor = "transparent";
-                    }}
-                  >
-                    <span>
-                      Default{hoveredSubmenu.capabilities.defaultEffort ? `: ${formatReasoningEffortLabel(hoveredSubmenu.capabilities.defaultEffort)}` : ""}
-                    </span>
-                    {isDefaultSelected && <Check size={12} color="var(--accent-purple, #a855f7)" />}
-                  </div>
-
-                  {!hoveredSubmenu.capabilities.isMandatory && (
-                    <div
-                      onClick={() => handleSelect(hoveredSubmenu.modelId, "none")}
-                      style={{
-                        padding: "7px 10px",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        fontSize: "11.5px",
-                        backgroundColor: isOffSelected ? "rgba(168, 85, 247, 0.18)" : "transparent",
-                        color: isOffSelected ? "var(--accent-purple, #a855f7)" : "var(--text-primary)",
-                        fontWeight: isOffSelected ? 700 : 500,
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isOffSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isOffSelected) e.currentTarget.style.backgroundColor = "transparent";
-                      }}
-                    >
-                      <span>Off</span>
-                      {isOffSelected && <Check size={12} color="var(--accent-purple, #a855f7)" />}
-                    </div>
-                  )}
-
-                  {hoveredSubmenu.capabilities.mode === "efforts_list" &&
-                    hoveredSubmenu.capabilities.supportedEfforts
-                      .filter((eff) => eff !== "none")
-                      .map((eff) => {
-                        const isEffSelected = currentPreferred === eff;
-                        return (
-                          <div
-                            key={eff}
-                            onClick={() => handleSelect(hoveredSubmenu.modelId, eff as ReasoningEffort)}
-                            style={{
-                              padding: "7px 10px",
-                              cursor: "pointer",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              fontSize: "11.5px",
-                              backgroundColor: isEffSelected ? "rgba(168, 85, 247, 0.18)" : "transparent",
-                              color: isEffSelected ? "var(--accent-purple, #a855f7)" : "var(--text-primary)",
-                              fontWeight: isEffSelected ? 700 : 500,
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!isEffSelected) e.currentTarget.style.backgroundColor = "var(--bg-surface-elevated)";
-                            }}
-                            onMouseLeave={(e) => {
-                              if (!isEffSelected) e.currentTarget.style.backgroundColor = "transparent";
-                            }}
-                          >
-                            <span>{formatReasoningEffortLabel(eff)}</span>
-                            {isEffSelected && <Check size={12} color="var(--accent-purple, #a855f7)" />}
-                          </div>
-                        );
-                      })}
-                </>
-              );
-            })()}
-          </div>
-        </div>
+        />
       )}
     </div>
   );

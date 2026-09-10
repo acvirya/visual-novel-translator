@@ -11,6 +11,7 @@ import { LiveGameHubView } from "./components/views/LiveGameHubView";
 import { BatchTranslateView } from "./components/views/BatchTranslateView";
 import { KnowledgeBaseView } from "./components/views/KnowledgeBaseView";
 import { UnifiedSettingsView } from "./components/views/UnifiedSettingsView";
+import { LogsHubView } from "./components/views/LogsHubView";
 
 // Error Boundary
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
@@ -21,6 +22,7 @@ import { scriptManagerService } from "./services/scriptManagerService";
 import { translationManager } from "./services/translationManager";
 import { batchTranslateService } from "./services/batchTranslateService";
 import { textractorManagedService } from "./services/textractorService";
+import { usageLogService } from "./services/usageLogService";
 import { overlayChannel } from "./utils/overlayChannel";
 
 export function App() {
@@ -38,6 +40,7 @@ export function App() {
     appContainer.register(shortcutService);
     appContainer.register(overlayChannel);
     appContainer.register(textractorManagedService);
+    appContainer.register(usageLogService);
     appContainer.init();
 
     // Background refresh models for all verified providers on boot (graceful error handling)
@@ -54,7 +57,6 @@ export function App() {
     window.addEventListener("resize", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
-      appContainer.dispose().catch(() => {});
     };
   }, [setIsSidebarCollapsed]);
 
@@ -82,6 +84,12 @@ export function App() {
         return (
           <ErrorBoundary fallbackTitle="Settings & AI Configuration Error">
             <UnifiedSettingsView />
+          </ErrorBoundary>
+        );
+      case "logs":
+        return (
+          <ErrorBoundary fallbackTitle="Usage & App Logs Error">
+            <LogsHubView />
           </ErrorBoundary>
         );
       default:

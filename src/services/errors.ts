@@ -33,8 +33,14 @@ export class AppError extends Error {
 export class TranslationError extends AppError {
   public readonly providerId?: string;
 
-  constructor(message: string, providerId?: string, isRetryable = false, originalError?: unknown) {
-    super(message, "TRANSLATION_ERROR", isRetryable, originalError);
+  constructor(
+    message: string,
+    providerId?: string,
+    isRetryable = false,
+    originalError?: unknown,
+    code: AppErrorCode = "TRANSLATION_ERROR"
+  ) {
+    super(message, code, isRetryable, originalError);
     this.name = "TranslationError";
     this.providerId = providerId;
   }
@@ -44,9 +50,8 @@ export class RateLimitError extends TranslationError {
   public readonly retryAfterMs?: number;
 
   constructor(message: string, providerId?: string, retryAfterMs?: number, originalError?: unknown) {
-    super(message, providerId, true, originalError);
+    super(message, providerId, true, originalError, "RATE_LIMIT_ERROR");
     this.name = "RateLimitError";
-    (this as any).code = "RATE_LIMIT_ERROR";
     this.retryAfterMs = retryAfterMs;
   }
 }
@@ -56,9 +61,8 @@ export class LlmParseError extends TranslationError {
   public readonly isSyntaxError: boolean;
 
   constructor(message: string, rawContent?: string, isSyntaxError = true, providerId?: string, originalError?: unknown) {
-    super(message, providerId, true, originalError);
+    super(message, providerId, true, originalError, "LLM_PARSE_ERROR");
     this.name = "LlmParseError";
-    (this as any).code = "LLM_PARSE_ERROR";
     this.rawContent = rawContent;
     this.isSyntaxError = isSyntaxError;
   }
@@ -66,9 +70,8 @@ export class LlmParseError extends TranslationError {
 
 export class ApiKeyMissingError extends TranslationError {
   constructor(providerId: string) {
-    super(`API key missing or empty for provider: ${providerId}`, providerId, false);
+    super(`API key missing or empty for provider: ${providerId}`, providerId, false, undefined, "API_KEY_MISSING");
     this.name = "ApiKeyMissingError";
-    (this as any).code = "API_KEY_MISSING";
   }
 }
 
@@ -81,9 +84,8 @@ export class CancellationError extends AppError {
 
 export class ContentFilterError extends TranslationError {
   constructor(message: string, providerId?: string, originalError?: unknown) {
-    super(message, providerId, false, originalError);
+    super(message, providerId, false, originalError, "CONTENT_FILTER_ERROR");
     this.name = "ContentFilterError";
-    (this as any).code = "CONTENT_FILTER_ERROR";
   }
 }
 
@@ -113,6 +115,17 @@ export function classifyError(err: unknown, defaultProviderId?: string): AppErro
     const retryAfterMs = match ? parseInt(match[1], 10) * 1000 : undefined;
     return new RateLimitError(msg, defaultProviderId, retryAfterMs, err);
   }
+
+  // Model rejected json_object or structured output parameter specifically (should retry without response_format)
+  if (
+    lower.includes("response_format") ||
+    lower.includes("json_object") ||
+    lower.includes("unsupported parameter") ||
+    lower.includes("structured output")
+  ) {
+    return new TranslationError(msg, defaultProviderId, true, err);
+  }
+
   // IPC / Tauri command argument errors should not be treated as LLM model output parsing errors
   if (
     lower.includes("invalid args") ||
@@ -136,12 +149,12 @@ export function classifyError(err: unknown, defaultProviderId?: string): AppErro
   }
 
   if (
-    lower.includes("json") ||
     lower.includes("syntaxerror") ||
-    lower.includes("schema") ||
-    lower.includes("validation") ||
     lower.includes("failed to parse") ||
-    lower.includes("empty batch response")
+    lower.includes("json parsing failed") ||
+    lower.includes("unexpected token") ||
+    lower.includes("empty batch response") ||
+    (lower.includes("json") && (lower.includes("invalid") || lower.includes("malformed") || lower.includes("incomplete") || lower.includes("parse error")))
   ) {
     return new LlmParseError(msg, undefined, true, defaultProviderId, err);
   }

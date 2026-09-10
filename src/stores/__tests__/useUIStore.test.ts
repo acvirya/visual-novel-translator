@@ -40,8 +40,11 @@ describe("useUIStore", () => {
     useUIStore.getState().setKnowledgeBaseSubTab("script");
     expect(useUIStore.getState().knowledgeBaseSubTab).toBe("script");
 
-    useUIStore.getState().setSettingsSubTab("logs");
-    expect(useUIStore.getState().settingsSubTab).toBe("logs");
+    useUIStore.getState().setSettingsSubTab("custom_rules");
+    expect(useUIStore.getState().settingsSubTab).toBe("custom_rules");
+
+    useUIStore.getState().setLogsSubTab("system");
+    expect(useUIStore.getState().logsSubTab).toBe("system");
   });
 
   it("should toggle sidebar collapse correctly", () => {

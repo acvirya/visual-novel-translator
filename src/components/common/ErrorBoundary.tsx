@@ -1,5 +1,6 @@
 import { Component, ErrorInfo, ReactNode } from "react";
 import { AlertTriangle, RotateCcw, Copy, Check } from "lucide-react";
+import { logger } from "../../services/loggerService";
 
 interface Props {
   children: ReactNode;
@@ -27,6 +28,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught runtime error caught by ErrorBoundary:", error, errorInfo);
+    logger.error("UI:ErrorBoundary", error?.message || "Uncaught component error", {
+      stack: error?.stack,
+      componentStack: errorInfo?.componentStack,
+    });
     this.setState({ errorInfo });
   }
 

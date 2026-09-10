@@ -21,6 +21,27 @@ class LoggerService {
 
   constructor() {
     this.info("System", "VN Translator logging service initialized.");
+    this.attachGlobalErrorHandlers();
+  }
+
+  private attachGlobalErrorHandlers() {
+    if (typeof window === "undefined") return;
+
+    window.addEventListener("error", (event) => {
+      this.error("GlobalRuntime", event.message || "Uncaught window error", {
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        stack: event.error?.stack,
+      });
+    });
+
+    window.addEventListener("unhandledrejection", (event) => {
+      const reason = event.reason;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      const stack = reason instanceof Error ? reason.stack : undefined;
+      this.error("UnhandledPromise", message, { stack, raw: reason });
+    });
   }
 
   public subscribe(callback: (logs: AppLogEntry[]) => void) {

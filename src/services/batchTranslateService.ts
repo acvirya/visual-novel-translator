@@ -47,7 +47,7 @@ class BatchTranslateService implements ManagedService {
   public readonly id = "batchTranslateService";
   private isRunning = false;
   private abortController: AbortController | null = null;
-  private listeners: ((progress: BatchProgressUpdate) => void)[] = [];
+  private listeners: Set<(progress: BatchProgressUpdate) => void> = new Set();
   private lastDispatchTimestamp = 0;
   private dispatchLock: Promise<void> = Promise.resolve();
 
@@ -88,18 +88,24 @@ class BatchTranslateService implements ManagedService {
 
   public async dispose() {
     await this.cancel();
-    this.listeners = [];
+    this.listeners.clear();
   }
 
   public subscribe(callback: (progress: BatchProgressUpdate) => void) {
-    this.listeners.push(callback);
+    this.listeners.add(callback);
     return () => {
-      this.listeners = this.listeners.filter((cb) => cb !== callback);
+      this.listeners.delete(callback);
     };
   }
 
   private notify(update: BatchProgressUpdate) {
-    this.listeners.forEach((cb) => cb(update));
+    this.listeners.forEach((cb) => {
+      try {
+        cb(update);
+      } catch (err) {
+        console.error("[BatchTranslateService] Listener error:", err);
+      }
+    });
     useBatchStore.getState().setProgressData(update);
     eventBus.emit("batch:progress", update);
   }
@@ -144,8 +150,7 @@ class BatchTranslateService implements ManagedService {
     this.abortController = new AbortController();
     this.lastDispatchTimestamp = 0;
     this.dispatchLock = Promise.resolve();
-    useBatchStore.getState().setIsRunning(true);
-    useBatchStore.getState().setIsPaused(false);
+    useBatchStore.getState().transitionTo("running");
 
     try {
       const apiKey = settingsManager.getOpenRouterApiKey();
@@ -343,8 +348,7 @@ class BatchTranslateService implements ManagedService {
       );
     } finally {
       this.isRunning = false;
-      useBatchStore.getState().setIsRunning(false);
-      useBatchStore.getState().setIsPaused(false);
+      useBatchStore.getState().transitionTo("idle");
     }
   }
 
@@ -669,6 +673,9 @@ class BatchTranslateService implements ManagedService {
   }
 
   public async cancel(): Promise<void> {
+    if (this.isRunning) {
+      useBatchStore.getState().transitionTo("cancelling");
+    }
     if (this.abortController) {
       this.abortController.abort();
     }

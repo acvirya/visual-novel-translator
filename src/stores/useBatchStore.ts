@@ -5,11 +5,20 @@ import { settingsManager } from "../services/settingsManager";
 
 export type { SessionUsageStats, FileStreamingState, FileStreamingPhase };
 
+export type BatchLifecycleState =
+  | "idle"
+  | "running"
+  | "paused"
+  | "cancelling"
+  | "completed"
+  | "failed";
+
 export interface BatchState {
   queuedFiles: BatchFileEntry[];
   selectedFileId: string | null;
   searchFilter: string;
   statusFilter: "all" | "completed" | "untranslated" | "explicit";
+  lifecycleState: BatchLifecycleState;
   isRunning: boolean;
   isPaused: boolean;
   progressData: BatchProgressUpdate | null;
@@ -22,6 +31,7 @@ export interface BatchState {
   completedBatchesCount: number;
 
   // Actions
+  transitionTo: (nextState: BatchLifecycleState) => boolean;
   setQueuedFiles: (files: BatchFileEntry[] | ((prev: BatchFileEntry[]) => BatchFileEntry[])) => void;
   updateFile: (file: BatchFileEntry) => void;
   setSelectedFileId: (id: string | null) => void;
@@ -47,11 +57,21 @@ export const useBatchStore = create<BatchState>((set) => {
     });
   }
 
+  const VALID_TRANSITIONS: Record<BatchLifecycleState, BatchLifecycleState[]> = {
+    idle: ["running"],
+    running: ["paused", "cancelling", "completed", "failed", "idle"],
+    paused: ["running", "cancelling", "idle"],
+    cancelling: ["idle", "failed"],
+    completed: ["idle", "running"],
+    failed: ["idle", "running"],
+  };
+
   return {
     queuedFiles: [],
     selectedFileId: null,
     searchFilter: "",
     statusFilter: "all",
+    lifecycleState: "idle",
     isRunning: false,
     isPaused: false,
     progressData: null,
@@ -68,6 +88,34 @@ export const useBatchStore = create<BatchState>((set) => {
     batchesPerMinute: 0,
     completedBatchesCount: 0,
 
+    transitionTo: (nextState) => {
+      let allowed = false;
+      set((state) => {
+        const validNext = VALID_TRANSITIONS[state.lifecycleState];
+        if (!validNext || !validNext.includes(nextState)) {
+          console.warn(`[useBatchStore] Invalid state transition: ${state.lifecycleState} -> ${nextState}`);
+          allowed = false;
+          return state;
+        }
+        allowed = true;
+        const isRunning = nextState === "running" || nextState === "paused";
+        const isPaused = nextState === "paused";
+        return {
+          lifecycleState: nextState,
+          isRunning,
+          isPaused,
+          ...(isRunning
+            ? {}
+            : {
+                completedBatchesCount: 0,
+                avgBatchDurationMs: 0,
+                estimatedRemainingSeconds: null,
+                batchesPerMinute: 0,
+              }),
+        };
+      });
+      return allowed;
+    },
     setQueuedFiles: (filesOrFn) =>
       set((state) => ({
         queuedFiles: typeof filesOrFn === "function" ? filesOrFn(state.queuedFiles) : filesOrFn,
@@ -84,6 +132,7 @@ export const useBatchStore = create<BatchState>((set) => {
     setIsRunning: (isRunning) =>
       set(() => ({
         isRunning,
+        lifecycleState: isRunning ? "running" : "idle",
         // Reset moving average metrics on stopped
         ...(isRunning
           ? {}
@@ -94,7 +143,11 @@ export const useBatchStore = create<BatchState>((set) => {
               batchesPerMinute: 0,
             }),
       })),
-    setIsPaused: (isPaused) => set({ isPaused }),
+    setIsPaused: (isPaused) =>
+      set((state) => ({
+        isPaused,
+        lifecycleState: isPaused ? "paused" : state.isRunning ? "running" : "idle",
+      })),
     setProgressData: (progressData) => set({ progressData }),
     setSettings: (partial) =>
       set((state) => {

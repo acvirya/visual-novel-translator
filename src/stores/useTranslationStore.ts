@@ -3,6 +3,7 @@ import { TranslationLogItem, ReasoningEffort, SessionUsageStats } from "../types
 import { translationManager, LlmContextSettings } from "../services/translationManager";
 import { scriptManagerService } from "../services/scriptManagerService";
 import { settingsManager } from "../services/settingsManager";
+import { eventBus } from "../services/eventBus";
 
 export interface TranslationState {
   liveLogs: TranslationLogItem[];
@@ -97,11 +98,22 @@ export const useTranslationStore = create<TranslationState>((set) => {
           break;
       }
     });
+
+    // Dual-channel fallback subscription via eventBus (A3)
+    eventBus.on("translation:logged", (item) => {
+      set((state) => {
+        if (state.liveLogs.some((l) => l.id === item.id)) return state;
+        return { liveLogs: [item, ...state.liveLogs].slice(0, 250) };
+      });
+    });
+    eventBus.on("translation:paused", (isPaused) => {
+      set({ isPaused });
+    });
   }
 
   return {
     liveLogs: [],
-    isPaused: false,
+    isPaused: translationManager.isPaused(),
     selectedProvider: translationSettings.liveModel || translationSettings.activeProviderId || "mt:google-translate",
     reasoningEffort: translationSettings.reasoningEffort || "default",
     useScriptOnly: translationSettings.useScriptOnly || false,

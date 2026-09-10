@@ -42,7 +42,10 @@ fn copy_oneocr_files_to_target() {
 
 #[cfg(target_os = "windows")]
 fn find_snipping_tool_dir() -> Option<PathBuf> {
-    let win_apps = Path::new("C:\\Program Files\\WindowsApps");
+    let program_files = env::var("ProgramW6432")
+        .or_else(|_| env::var("ProgramFiles"))
+        .unwrap_or_else(|_| "C:\\Program Files".to_string());
+    let win_apps = Path::new(&program_files).join("WindowsApps");
     if win_apps.exists() {
         if let Ok(entries) = fs::read_dir(win_apps) {
             for entry in entries.flatten() {

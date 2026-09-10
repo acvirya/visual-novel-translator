@@ -55,10 +55,17 @@ class OverlayChannel {
     if (!event || !event.type) return;
 
     // Fast deduplicate event if delivered through both BroadcastChannel and Tauri native event (PERF-04)
-    const sig =
-      event.type === "DIALOGUE_UPDATE"
-        ? `dlg_${event.dialogue.id}_${event.dialogue.message}_${event.dialogue.translatedMessage || ""}`
-        : `${event.type}_${(event as any).isEditing ?? (event as any).x ?? ""}`;
+    let sig: string = event.type;
+    if (event.type === "DIALOGUE_UPDATE") {
+      sig = `dlg_${event.dialogue.id}_${event.dialogue.message}_${event.dialogue.translatedMessage || ""}`;
+    } else if (event.type === "SET_EDIT_MODE") {
+      sig = `edit_${event.isEditing}`;
+    } else if (event.type === "POSITION_SAVED") {
+      sig = `pos_${event.x}_${event.y}_${event.width}_${event.height}`;
+    } else if (event.type === "CONFIG_UPDATE") {
+      sig = `cfg_${event.config.x}_${event.config.y}_${event.config.width}_${event.config.height}_${event.config.targetMonitor}`;
+    }
+
     const now = Date.now();
     // SERI-09: 350ms debounce window guarantees dual-broadcast (BroadcastChannel + Tauri IPC) never produces duplicate lines
     if (sig === this.lastEventSignature && now - this.lastEventTime < 350) {
@@ -66,6 +73,20 @@ class OverlayChannel {
     }
     this.lastEventSignature = sig;
     this.lastEventTime = now;
+
+    // Sync incoming config updates from another webview to local SettingsManager
+    if (event.type === "CONFIG_UPDATE") {
+      settingsManager.updateOverlay({
+        config: { ...event.config },
+      });
+    } else if (event.type === "POSITION_SAVED") {
+      settingsManager.updateOverlayConfig({
+        x: event.x,
+        y: event.y,
+        width: event.width,
+        height: event.height,
+      });
+    }
 
     this.listeners.forEach((cb) => cb(event));
   }
@@ -92,6 +113,13 @@ class OverlayChannel {
       settingsManager.updateOverlay({
         config: { ...event.config },
       });
+    } else if (event.type === "POSITION_SAVED") {
+      settingsManager.updateOverlayConfig({
+        x: event.x,
+        y: event.y,
+        width: event.width,
+        height: event.height,
+      });
     }
   }
 
@@ -113,7 +141,7 @@ class OverlayChannel {
   }
 
   public dispose() {
-    this.destroy();
+    // Retain BroadcastChannel & listeners during SPA lifecycle; explicit destroy() only on app teardown
   }
 
   public destroy() {

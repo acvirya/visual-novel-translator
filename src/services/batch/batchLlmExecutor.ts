@@ -15,6 +15,7 @@ import {
   SOURCE_EAST_ASIAN_CHAR_REGEX,
 } from "../../utils/batchFileUtils";
 import { buildBatchPromptMessages, writeBatchDebugLog } from "./batchPromptBuilder";
+import { usageLogService, AiUsageStatus } from "../usageLogService";
 
 export interface BatchFileContext {
   fileId: string;
@@ -64,6 +65,7 @@ export async function executeBatchLlm(params: {
 
   const { messages, rawUserContent } = buildBatchPromptMessages(items, contextHistory, realToVirtualMap);
   const timeoutSeconds = Math.max(60, (settings.timeoutMinutes || 10) * 60);
+  const requestStartTime = Date.now();
 
   let content = "";
   let lastErr = "";
@@ -295,6 +297,41 @@ export async function executeBatchLlm(params: {
     }
     lastErr = e?.message || String(e);
     logger.error("BatchTranslate", `Native completion failed: ${lastErr}`);
+
+    let failStatus: AiUsageStatus = "error";
+    const errLower = lastErr.toLowerCase();
+    if (errLower.includes("safety") || errLower.includes("filter") || errLower.includes("refusal")) {
+      failStatus = "safety_refusal";
+    } else if (errLower.includes("rate") || errLower.includes("429")) {
+      failStatus = "rate_limited";
+    } else if (errLower.includes("timeout") || errLower.includes("timed out")) {
+      failStatus = "timeout";
+    }
+
+    const latencyMs = Date.now() - requestStartTime;
+    usageLogService.recordLog({
+      mode: "batch",
+      modelId: settings.modelId,
+      provider: providerId,
+      cost: 0,
+      latencyMs,
+      promptTokens: exactPromptTokens,
+      completionTokens: exactCompletionTokens,
+      cachedTokens: exactCachedTokens,
+      status: failStatus,
+      statusMessage: lastErr,
+      inputSnippet: items.length > 0
+        ? `${items.length} lines (IDs ${items[0]?.id}..${items[items.length - 1]?.id}): "${items[0]?.originalMessage.slice(0, 80)}"`
+        : undefined,
+      metadata: {
+        fileId: fileContext?.fileId,
+        fileName: fileContext?.fileName,
+        batchIndex: fileContext?.batchIndex,
+        totalBatches: fileContext?.totalBatches,
+        lineCount: items.length,
+      },
+    });
+
     throw new Error(lastErr);
   } finally {
     if (flushTimer) {
@@ -302,6 +339,44 @@ export async function executeBatchLlm(params: {
       flushTimer = null;
     }
   }
+
+  let hasLoggedUsage = false;
+  const logAiUsage = (status: AiUsageStatus, statusMessage?: string, finalContent?: string) => {
+    if (hasLoggedUsage) return;
+    hasLoggedUsage = true;
+    const latencyMs = Date.now() - requestStartTime;
+    const estPromptTokens = Math.round(rawUserContent.length / 3);
+    const estCompletionTokens = Math.round((finalContent || content).length / 3);
+    const finalPrompt = exactPromptTokens || estPromptTokens;
+    const finalCompletion = exactCompletionTokens || estCompletionTokens;
+    const finalCost = hasExactUsage
+      ? exactCost
+      : calculateUsageCost(settings.modelId, finalPrompt, finalCompletion, 0);
+
+    usageLogService.recordLog({
+      mode: "batch",
+      modelId: settings.modelId,
+      provider: providerId,
+      cost: finalCost,
+      latencyMs,
+      promptTokens: finalPrompt,
+      completionTokens: finalCompletion,
+      cachedTokens: exactCachedTokens || 0,
+      status,
+      statusMessage,
+      inputSnippet: items.length > 0
+        ? `${items.length} lines (IDs ${items[0]?.id}..${items[items.length - 1]?.id}): "${items[0]?.originalMessage.slice(0, 80)}"`
+        : undefined,
+      outputSnippet: (finalContent || content) ? (finalContent || content).slice(0, 150) : undefined,
+      metadata: {
+        fileId: fileContext?.fileId,
+        fileName: fileContext?.fileName,
+        batchIndex: fileContext?.batchIndex,
+        totalBatches: fileContext?.totalBatches,
+        lineCount: items.length,
+      },
+    });
+  };
 
   // Transparent Token & Cost Tracking: Immediately record usage once LLM responded,
   // ensuring cost is tracked even if subsequent JSON parsing or line verification fails.
@@ -334,6 +409,7 @@ export async function executeBatchLlm(params: {
   }
 
   if (!content) {
+    logAiUsage("error", "Empty batch response returned from LLM");
     await writeBatchDebugLog({
       outputDir: settings.outputDir,
       modelId: settings.modelId,
@@ -348,6 +424,7 @@ export async function executeBatchLlm(params: {
   const parsedArray = parseLlmBatchResponse(content, items);
 
   if (!Array.isArray(parsedArray) || parsedArray.length === 0) {
+    logAiUsage("parsing_error", `Failed to parse valid JSON array: ${content.slice(0, 100)}...`);
     await writeBatchDebugLog({
       outputDir: settings.outputDir,
       modelId: settings.modelId,
@@ -431,6 +508,7 @@ export async function executeBatchLlm(params: {
       extraInfo: "Missing IDs triggered batch reject",
     });
 
+    logAiUsage("parsing_error", `LLM dropped or returned empty translation for ${missingIds.length}/${items.length} lines`);
     throw new Error(
       `LLM dropped or returned empty translation for ${missingIds.length}/${items.length} lines (IDs: [${previewIds}${moreNotice}]). Failing batch to ensure zero missing lines.`
     );
@@ -448,6 +526,9 @@ export async function executeBatchLlm(params: {
 
   // Ensure token usage is recorded (idempotent fallback)
   recordTokenUsage();
+
+  // Log successful completion
+  logAiUsage("completed", undefined, content);
 
   return {
     userContent: rawUserContent,

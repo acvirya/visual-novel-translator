@@ -117,35 +117,15 @@ pub async fn openrouter_chat_completion(
     let messages: serde_json::Value = serde_json::from_str(&messages_json)
         .map_err(|e| format!("Invalid messages JSON: {}", e))?;
 
-    let mut payload = serde_json::json!({
-        "model": model_id,
-        "messages": messages,
-        "temperature": temperature,
-        "response_format": { "type": "json_object" },
-        "include_reasoning": true,
-    });
-
-    if let Some(ref r) = reasoning {
-        if r.is_object() && !r.as_object().unwrap().is_empty() {
-            payload["reasoning"] = r.clone();
-        }
-    }
-
-    let mut provider_obj = serde_json::json!({
-        "allow_fallbacks": false,
-    });
-    if let Some(ref list) = providers {
-        if !list.is_empty() {
-            provider_obj["only"] = serde_json::json!(list);
-        }
-    }
-    payload["provider"] = provider_obj;
-
-    if let Some(mt) = max_tokens {
-        if mt > 0 {
-            payload["max_tokens"] = serde_json::json!(mt);
-        }
-    }
+    let mut payload = super::payload::build_openrouter_payload(
+        &model_id,
+        messages,
+        temperature,
+        max_tokens,
+        providers.as_deref(),
+        reasoning.as_ref(),
+        false,
+    );
 
     let max_attempts = 3;
     let mut last_error = String::new();
@@ -197,55 +177,8 @@ pub async fn openrouter_chat_completion(
                     || body_text.contains("schema"));
 
             if is_format_error {
-                let mut fallback_payload = serde_json::json!({
-                    "model": model_id,
-                    "messages": messages,
-                    "temperature": temperature,
-                });
-
-                if let Some(ref r) = reasoning {
-                    if r.is_object() && !r.as_object().unwrap().is_empty() {
-                        fallback_payload["reasoning"] = r.clone();
-                    }
-                }
-
-                let mut fallback_provider_obj = serde_json::json!({
-                    "allow_fallbacks": false,
-                });
-                if let Some(ref list) = providers {
-                    if !list.is_empty() {
-                        fallback_provider_obj["only"] = serde_json::json!(list);
-                    }
-                }
-                fallback_payload["provider"] = fallback_provider_obj;
-
-                if let Some(mt) = max_tokens {
-                    if mt > 0 {
-                        fallback_payload["max_tokens"] = serde_json::json!(mt);
-                    }
-                }
-
-                let retry_resp = client
-                    .post("https://openrouter.ai/api/v1/chat/completions")
-                    .timeout(timeout_duration)
-                    .header("Authorization", format!("Bearer {}", api_key.trim()))
-                    .header("Content-Type", "application/json")
-                    .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
-                    .header("X-Title", "VN Translator Desktop")
-                    .json(&fallback_payload)
-                    .send()
-                    .await
-                    .map_err(|e| format_reqwest_error("Failed to connect to OpenRouter API (format fallback retry)", &e))?;
-
-                let retry_status = retry_resp.status();
-                let retry_bytes = retry_resp.bytes().await.map_err(|e| format_reqwest_error("Failed to read format fallback retry response bytes", &e))?;
-                let retry_body = String::from_utf8_lossy(&retry_bytes).to_string();
-                if !retry_status.is_success() {
-                    return Err(format!("OpenRouter API error (HTTP {}): {}", retry_status, retry_body));
-                }
-                let parsed: serde_json::Value = serde_json::from_str(&retry_body)
-                    .map_err(|e| format!("Failed to parse OpenRouter response: {} (raw body: {})", e, retry_body))?;
-                return parse_openrouter_payload(&parsed, &retry_body);
+                super::payload::remove_format_from_payload(&mut payload);
+                continue;
             }
             let status_code = status.as_u16();
             let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504 || body_text.contains("unreachable") || body_text.contains("temporarily unavailable") || body_text.contains("high demand");

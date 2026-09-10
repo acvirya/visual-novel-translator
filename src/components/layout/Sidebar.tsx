@@ -4,6 +4,7 @@ import {
   Layers,
   BookOpen,
   Sliders,
+  ScrollText,
   Menu,
   Languages,
   Bot,
@@ -82,6 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: "Data & Config",
       items: [
         { id: "knowledge-base", label: "Knowledge Base", icon: <BookOpen size={16} /> },
+        { id: "logs", label: "Usage & Logs", icon: <ScrollText size={16} /> },
         { id: "settings", label: "Settings", icon: <Sliders size={16} /> },
       ],
     },

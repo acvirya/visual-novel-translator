@@ -78,6 +78,64 @@ pub fn get_window_monitor(app: AppHandle, label: String) -> Result<MonitorInfo, 
     }
 }
 
+fn safe_scale_coord(base: i32, offset: i32, scale: f64) -> i32 {
+    let scaled = (offset as f64 * scale).round();
+    let clamped = scaled.clamp(-32768.0, 32767.0) as i32;
+    base.saturating_add(clamped)
+}
+
+fn safe_scale_dim(dim: u32, scale: f64, min_val: u32) -> u32 {
+    let scaled = (dim as f64 * scale).round();
+    (scaled.clamp(min_val as f64, 32767.0) as u32).max(min_val)
+}
+
+fn resolve_target_monitor(
+    window: &tauri::WebviewWindow,
+    monitor_name: Option<&str>,
+) -> Option<tauri::Monitor> {
+    let monitors = window.available_monitors().ok()?;
+    if let Some(name) = monitor_name {
+        let trimmed = name.trim();
+        // 1. Direct exact name match (e.g. "\\\\.\\DISPLAY1")
+        if let Some(m) = monitors.iter().find(|m| m.name().map(|n| n.as_str()) == Some(trimmed)) {
+            return Some(m.clone());
+        }
+
+        // 2. Case-insensitive name match
+        let lower = trimmed.to_lowercase();
+        if let Some(m) = monitors.iter().find(|m| {
+            m.name().map(|n| n.to_lowercase() == lower).unwrap_or(false)
+        }) {
+            return Some(m.clone());
+        }
+
+        // 3. Match array index / alias (e.g. "0", "1", "monitor_1", "display 1", "display_1")
+        let clean_num_str = lower
+            .strip_prefix("monitor_")
+            .or_else(|| lower.strip_prefix("monitor "))
+            .or_else(|| lower.strip_prefix("display_"))
+            .or_else(|| lower.strip_prefix("display "))
+            .unwrap_or(&lower);
+
+        if let Ok(idx) = clean_num_str.parse::<usize>() {
+            // Support 1-based (1 -> monitors[0]) and 0-based (0 -> monitors[0])
+            if idx >= 1 && idx <= monitors.len() {
+                return Some(monitors[idx - 1].clone());
+            } else if idx < monitors.len() {
+                return Some(monitors[idx].clone());
+            }
+        }
+    }
+
+    // 4. Primary monitor fallback
+    if let Ok(Some(primary)) = window.primary_monitor() {
+        return Some(primary);
+    }
+
+    // 5. First available monitor fallback
+    monitors.into_iter().next()
+}
+
 #[tauri::command]
 pub fn show_overlay(
     app: AppHandle,
@@ -89,29 +147,21 @@ pub fn show_overlay(
     is_click_through: Option<bool>,
 ) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("overlay") {
-        if let Ok(monitors) = overlay_win.available_monitors() {
-            let target_monitor = if let Some(ref m_name) = monitor_name {
-                monitors.into_iter().find(|m| m.name() == Some(m_name))
+        if let Some(m) = resolve_target_monitor(&overlay_win, monitor_name.as_deref()) {
+            let pos = m.position();
+            let mon_size = m.size();
+
+            if let (Some(bx), Some(by), Some(bw), Some(bh)) = (x, y, width, height) {
+                let scale = m.scale_factor();
+                let phys_x = safe_scale_coord(pos.x, bx, scale);
+                let phys_y = safe_scale_coord(pos.y, by, scale);
+                let phys_w = safe_scale_dim(bw, scale, 50);
+                let phys_h = safe_scale_dim(bh, scale, 30);
+                let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
+                let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
             } else {
-                overlay_win.primary_monitor().ok().flatten()
-            };
-
-            if let Some(m) = target_monitor {
-                let pos = m.position();
-                let mon_size = m.size();
-
-                if let (Some(bx), Some(by), Some(bw), Some(bh)) = (x, y, width, height) {
-                    let scale = m.scale_factor();
-                    let phys_x = pos.x + (bx as f64 * scale).round() as i32;
-                    let phys_y = pos.y + (by as f64 * scale).round() as i32;
-                    let phys_w = ((bw as f64 * scale).round() as u32).max(50);
-                    let phys_h = ((bh as f64 * scale).round() as u32).max(30);
-                    let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
-                    let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
-                } else {
-                    let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
-                    let _ = overlay_win.set_size(PhysicalSize::new(mon_size.width, mon_size.height));
-                }
+                let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
+                let _ = overlay_win.set_size(PhysicalSize::new(mon_size.width, mon_size.height));
             }
         }
 
@@ -135,24 +185,16 @@ pub fn update_overlay_bounds(
     monitor_name: Option<String>,
 ) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("overlay") {
-        if let Ok(monitors) = overlay_win.available_monitors() {
-            let target_monitor = if let Some(ref m_name) = monitor_name {
-                monitors.into_iter().find(|m| m.name() == Some(m_name))
-            } else {
-                overlay_win.primary_monitor().ok().flatten()
-            };
+        if let Some(m) = resolve_target_monitor(&overlay_win, monitor_name.as_deref()) {
+            let pos = m.position();
+            let scale = m.scale_factor();
+            let phys_x = safe_scale_coord(pos.x, x, scale);
+            let phys_y = safe_scale_coord(pos.y, y, scale);
+            let phys_w = safe_scale_dim(width, scale, 50);
+            let phys_h = safe_scale_dim(height, scale, 30);
 
-            if let Some(m) = target_monitor {
-                let pos = m.position();
-                let scale = m.scale_factor();
-                let phys_x = pos.x + (x as f64 * scale).round() as i32;
-                let phys_y = pos.y + (y as f64 * scale).round() as i32;
-                let phys_w = ((width as f64 * scale).round() as u32).max(50);
-                let phys_h = ((height as f64 * scale).round() as u32).max(30);
-
-                let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
-                let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
-            }
+            let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
+            let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
         }
         Ok(())
     } else {
@@ -197,36 +239,32 @@ pub fn set_overlay_edit_mode(
     is_click_through: Option<bool>,
 ) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("overlay") {
-        if let Ok(monitors) = overlay_win.available_monitors() {
-            let target_monitor = if let Some(ref m_name) = monitor_name {
-                monitors.into_iter().find(|m| m.name() == Some(m_name))
+        if let Some(m) = resolve_target_monitor(&overlay_win, monitor_name.as_deref()) {
+            let pos = m.position();
+            let mon_size = m.size();
+
+            if is_editing {
+                // Ensure window is resizable so OS permits setting fullscreen dimensions
+                let _ = overlay_win.set_resizable(true);
+                // Expand to full monitor for free dragging/resizing across the entire screen
+                let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
+                let _ = overlay_win.set_size(PhysicalSize::new(mon_size.width, mon_size.height));
+                let _ = overlay_win.set_ignore_cursor_events(false);
+                let _ = overlay_win.show();
+                let _ = overlay_win.set_focus();
             } else {
-                overlay_win.primary_monitor().ok().flatten()
-            };
-
-            if let Some(m) = target_monitor {
-                let pos = m.position();
-                let mon_size = m.size();
-
-                if is_editing {
-                    // Expand to full monitor for free dragging/resizing across the entire screen
-                    let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
-                    let _ = overlay_win.set_size(PhysicalSize::new(mon_size.width, mon_size.height));
-                    let _ = overlay_win.set_ignore_cursor_events(false);
-                } else {
-                    // Shrink to dialogue box bounds with DPI scaling
-                    if let (Some(bx), Some(by), Some(bw), Some(bh)) = (x, y, width, height) {
-                        let scale = m.scale_factor();
-                        let phys_x = pos.x + (bx as f64 * scale).round() as i32;
-                        let phys_y = pos.y + (by as f64 * scale).round() as i32;
-                        let phys_w = ((bw as f64 * scale).round() as u32).max(50);
-                        let phys_h = ((bh as f64 * scale).round() as u32).max(30);
-                        let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
-                        let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
-                    }
-                    let click_through = is_click_through.unwrap_or(false);
-                    let _ = overlay_win.set_ignore_cursor_events(click_through);
+                // Shrink to dialogue box bounds with DPI scaling
+                if let (Some(bx), Some(by), Some(bw), Some(bh)) = (x, y, width, height) {
+                    let scale = m.scale_factor();
+                    let phys_x = safe_scale_coord(pos.x, bx, scale);
+                    let phys_y = safe_scale_coord(pos.y, by, scale);
+                    let phys_w = safe_scale_dim(bw, scale, 50);
+                    let phys_h = safe_scale_dim(bh, scale, 30);
+                    let _ = overlay_win.set_position(PhysicalPosition::new(phys_x, phys_y));
+                    let _ = overlay_win.set_size(PhysicalSize::new(phys_w, phys_h));
                 }
+                let click_through = is_click_through.unwrap_or(false);
+                let _ = overlay_win.set_ignore_cursor_events(click_through);
             }
         }
 
@@ -258,19 +296,11 @@ pub fn open_region_selector_overlay(
     mode: Option<String>,
 ) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("region-selector") {
-        if let Ok(monitors) = overlay_win.available_monitors() {
-            let target_monitor = if let Some(ref m_name) = monitor_name {
-                monitors.into_iter().find(|m| m.name() == Some(m_name))
-            } else {
-                overlay_win.primary_monitor().ok().flatten()
-            };
-
-            if let Some(m) = target_monitor {
-                let pos = m.position();
-                let size = m.size();
-                let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
-                let _ = overlay_win.set_size(PhysicalSize::new(size.width, size.height));
-            }
+        if let Some(m) = resolve_target_monitor(&overlay_win, monitor_name.as_deref()) {
+            let pos = m.position();
+            let size = m.size();
+            let _ = overlay_win.set_position(PhysicalPosition::new(pos.x, pos.y));
+            let _ = overlay_win.set_size(PhysicalSize::new(size.width, size.height));
         }
 
         let is_snipping = mode.as_deref() == Some("snipping");

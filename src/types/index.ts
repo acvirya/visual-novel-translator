@@ -2,6 +2,7 @@ export type NavigationTab =
   | "live-game"
   | "batch-translate"
   | "knowledge-base"
+  | "logs"
   | "settings";
 
 export type PreprocessingType =

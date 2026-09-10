@@ -214,7 +214,10 @@ pub fn find_oneocr_installation(custom_path: Option<String>) -> Result<(PathBuf,
     }
 
     // 2. Search WindowsApps for Microsoft.ScreenSketch (Snipping Tool)
-    let win_apps = Path::new("C:\\Program Files\\WindowsApps");
+    let program_files = std::env::var("ProgramW6432")
+        .or_else(|_| std::env::var("ProgramFiles"))
+        .unwrap_or_else(|_| "C:\\Program Files".to_string());
+    let win_apps = Path::new(&program_files).join("WindowsApps");
     if win_apps.exists() {
         if let Ok(entries) = fs::read_dir(win_apps) {
             for entry in entries.flatten() {

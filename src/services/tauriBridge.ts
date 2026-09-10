@@ -224,6 +224,12 @@ export const TauriBridge = {
   appendDebugLog: (fileName: string, content: string): Promise<void> =>
     invoke("append_debug_log", { fileName, content }),
 
+  readDebugLog: (fileName: string, maxLines?: number | null): Promise<string[]> =>
+    invoke<string[]>("read_debug_log", { fileName, maxLines: maxLines ?? null }),
+
+  clearDebugLog: (fileName: string): Promise<void> =>
+    invoke("clear_debug_log", { fileName }),
+
   openFileInDefaultApp: (path: string): Promise<void> =>
     invoke("open_file_in_default_app", { path }),
 
@@ -236,4 +242,11 @@ export const TauriBridge = {
 
   deleteSecureKey: (providerId: string): Promise<void> =>
     invoke("delete_secure_key", { providerId }),
+
+  // Desktop App Settings Persistence (AppData / config dir)
+  loadAppSettings: (): Promise<string | null> =>
+    invoke<string | null>("load_app_settings"),
+
+  saveAppSettings: (jsonContent: string): Promise<void> =>
+    invoke("save_app_settings", { jsonContent }),
 };

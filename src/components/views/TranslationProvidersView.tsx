@@ -31,7 +31,6 @@ import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
 import { useToast } from "../common/ToastProvider";
 import { settingsManager } from "../../services/settingsManager";
 import { StylePresetsCard } from "./providers/StylePresetsCard";
-import { FreeMtCard } from "./providers/FreeMtCard";
 
 export const TranslationProvidersView: React.FC = () => {
   const toast = useToast();
@@ -609,9 +608,6 @@ export const TranslationProvidersView: React.FC = () => {
         }}
         onDeleteCustomPreset={handleDeleteCustomPreset}
       />
-
-      {/* 5. Free Online MT (Zero API Cost Built-in Engines) */}
-      <FreeMtCard />
     </div>
   );
 };
