@@ -177,7 +177,7 @@ export async function translateWithNativeRust(
     );
     return { text: result };
   } catch (err: any) {
-    logger.warn("FreeMtService", "Native MT command failed, trying fallback:", err);
+    logger.warn("FreeMtService", "Native MT command failed:", err);
     return { text: "", error: err?.toString() || String(err) };
   }
 }
@@ -195,7 +195,7 @@ export async function translateWithGoogleFetch(
       sourceLang
     )}&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
 
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) {
       throw new Error(`Google Translate HTTP ${res.status}`);
     }
@@ -247,13 +247,11 @@ export async function translateWithFreeMt(
 
   // 2. Call Native Rust command first (Bypasses webview CORS restrictions)
   let translationRes = await translateWithNativeRust(formattedText, sourceLang, targetLang, provider);
-  let providerLabel = provider === "deepl" ? "DeepL Free" : "Google Translate (Free)";
+  const providerLabel = provider === "deepl" ? "DeepL Free" : "Google Translate (Free)";
 
-  // Fallback to fetch if native call failed
-  if (!translationRes.text) {
-    if (provider === "deepl") {
-      providerLabel = "Google Translate (DeepL Fallback)";
-    }
+  // Retry using the webview's network stack if native Google requests fail.
+  // The selected provider stays Google, including in the desktop runtime.
+  if (!translationRes.text && provider === "google") {
     translationRes = await translateWithGoogleFetch(formattedText, sourceLang, targetLang);
   }
 
@@ -263,9 +261,9 @@ export async function translateWithFreeMt(
     return {
       success: false,
       speaker: effectiveSpeaker || undefined,
-      translatedSpeaker: effectiveSpeaker || undefined,
+      translatedSpeaker: undefined,
       message: effectiveMessage,
-      translatedMessage: effectiveMessage, // fallback to original
+      translatedMessage: "",
       rawResponse: translationRes.text,
       provider: providerLabel,
       durationMs,

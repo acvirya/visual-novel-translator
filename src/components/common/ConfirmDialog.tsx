@@ -1,11 +1,11 @@
-import React from "react";
+﻿import React, { useState } from "react";
 import { Modal } from "./Modal";
 import { AlertTriangle, Trash2, RotateCcw } from "lucide-react";
 
 export interface ConfirmDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   title: string;
   message: React.ReactNode;
   confirmText?: string;
@@ -14,93 +14,28 @@ export interface ConfirmDialogProps {
   isLoading?: boolean;
 }
 
-export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
-  isOpen,
-  onClose,
-  onConfirm,
-  title,
-  message,
-  confirmText = "Confirm",
-  cancelText = "Cancel",
-  variant = "danger",
-  isLoading = false,
-}) => {
-  const getIcon = () => {
-    switch (variant) {
-      case "danger":
-        return <Trash2 size={20} className="text-rose-400" />;
-      case "warning":
-        return <AlertTriangle size={20} className="text-amber-400" />;
-      default:
-        return <RotateCcw size={20} className="text-indigo-400" />;
+export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ isOpen, onClose, onConfirm, title, message, confirmText = "Confirm", cancelText = "Cancel", variant = "danger", isLoading = false }) => {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const busy = isLoading || pending;
+  const confirm = async () => {
+    if (busy) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onConfirm();
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(false);
     }
   };
-
-  const getConfirmButtonBg = () => {
-    switch (variant) {
-      case "danger":
-        return "linear-gradient(135deg, #ef4444, #dc2626)";
-      case "warning":
-        return "linear-gradient(135deg, #f59e0b, #d97706)";
-      default:
-        return "linear-gradient(135deg, #6366f1, #4f46e5)";
-    }
-  };
-
+  const icon = variant === "danger" ? <Trash2 size={20} /> : variant === "warning" ? <AlertTriangle size={20} /> : <RotateCcw size={20} />;
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={title}
-      icon={getIcon()}
-      maxWidth="460px"
-      footer={
-        <>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            style={{
-              padding: "8px 16px",
-              borderRadius: "8px",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
-              backgroundColor: "rgba(255, 255, 255, 0.05)",
-              color: "#e5e7eb",
-              fontSize: "13px",
-              fontWeight: 500,
-              cursor: "pointer",
-            }}
-          >
-            {cancelText}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onConfirm();
-              onClose();
-            }}
-            disabled={isLoading}
-            style={{
-              padding: "8px 18px",
-              borderRadius: "8px",
-              border: "none",
-              background: getConfirmButtonBg(),
-              color: "#ffffff",
-              fontSize: "13px",
-              fontWeight: 600,
-              cursor: isLoading ? "not-allowed" : "pointer",
-              opacity: isLoading ? 0.7 : 1,
-              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.25)",
-            }}
-          >
-            {isLoading ? "Processing..." : confirmText}
-          </button>
-        </>
-      }
-    >
-      <div style={{ color: "#d1d5db", fontSize: "14px", lineHeight: "1.6" }}>
-        {typeof message === "string" ? <p style={{ margin: 0 }}>{message}</p> : message}
-      </div>
+    <Modal isOpen={isOpen} onClose={onClose} title={title} icon={icon} maxWidth="460px" closeDisabled={busy} footer={<><button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>{cancelText}</button><button type="button" className={variant === "danger" ? "btn-danger" : "btn-primary"} onClick={() => { void confirm(); }} disabled={busy}>{busy ? "Processing…" : confirmText}</button></>}>
+      <div style={{ color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.65 }}>{message}</div>
+      {error && <p role="alert" style={{ color: "var(--accent-danger)", marginTop: 12 }}>{error}</p>}
     </Modal>
   );
 };

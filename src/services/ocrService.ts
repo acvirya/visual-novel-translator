@@ -4,24 +4,35 @@ import { useOcrStore } from "../stores/useOcrStore";
 import { executePreprocessingPipeline, cleanSpeakerName } from "../utils/textPreprocessor";
 import { translationManager } from "./translationManager";
 import { logger } from "./loggerService";
+import { settingsManager } from "./settingsManager";
 
 /**
  * Maps logical OCR region coordinates to physical screen coordinates using device pixel ratio (M5)
  */
 function mapRegionsToPhysical(regions: OcrRegion[], dpr: number) {
-  return regions.map((r) => ({
-    id: r.id,
-    name: r.name,
-    role: r.role,
-    x: Math.round(r.x),
-    y: Math.round(r.y),
-    width: Math.round(r.width),
-    height: Math.round(r.height),
-    physicalX: r.physicalX != null ? Math.round(r.physicalX) : Math.round(r.x * dpr),
-    physicalY: r.physicalY != null ? Math.round(r.physicalY) : Math.round(r.y * dpr),
-    physicalWidth: r.physicalWidth != null ? Math.round(r.physicalWidth) : Math.round(r.width * dpr),
-    physicalHeight: r.physicalHeight != null ? Math.round(r.physicalHeight) : Math.round(r.height * dpr),
-  }));
+  return regions.map((r) => {
+    const hasValidPhysical =
+      r.physicalWidth != null &&
+      r.physicalHeight != null &&
+      r.physicalWidth > 0 &&
+      r.physicalHeight > 0 &&
+      r.physicalX != null &&
+      r.physicalY != null;
+
+    return {
+      id: r.id,
+      name: r.name,
+      role: r.role,
+      x: Math.round(r.x),
+      y: Math.round(r.y),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+      physicalX: hasValidPhysical ? Math.round(r.physicalX!) : Math.round(r.x * dpr),
+      physicalY: hasValidPhysical ? Math.round(r.physicalY!) : Math.round(r.y * dpr),
+      physicalWidth: hasValidPhysical ? Math.round(r.physicalWidth!) : Math.round(r.width * dpr),
+      physicalHeight: hasValidPhysical ? Math.round(r.physicalHeight!) : Math.round(r.height * dpr),
+    };
+  });
 }
 
 export class OcrService {
@@ -128,7 +139,6 @@ export class OcrService {
       this.scanTimer = null;
     }
     this.consecutiveErrorCount = 0;
-    this.isProcessing = false;
     this.lastSentText = { speaker: "", message: "" };
     useOcrStore.getState().setIsScanning(false);
   }
@@ -204,7 +214,7 @@ export class OcrService {
       const isSettled = result.isSettled !== false;
       const hasChanged = cleanSpk !== this.lastSentText.speaker || cleanMsg !== this.lastSentText.message;
 
-      if (hasText && isSettled && hasChanged) {
+      if (store.autoForwardToOverlay && hasText && isSettled && hasChanged) {
         this.lastSentText = { speaker: cleanSpk, message: cleanMsg };
         translationManager.translate({
           speaker: cleanSpk || undefined,
@@ -234,6 +244,7 @@ export class OcrService {
    */
   public static async openRegionSelector(monitorName?: string, mode: "setup" | "snipping" = "setup"): Promise<void> {
     try {
+      await settingsManager.flushPendingSaves();
       const channel = new BroadcastChannel("vn_ocr_channel");
       channel.postMessage({ type: "OPEN_SELECTOR", mode });
       channel.close();

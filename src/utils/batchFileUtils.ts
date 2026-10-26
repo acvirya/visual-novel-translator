@@ -133,6 +133,7 @@ export function cancellableSleep(ms: number, signal?: AbortSignal | null): Promi
  * Computes the target absolute output path for a given source script file (always saved as .jsonl)
  */
 export function calculateOutputPath(sourcePath: string, outputDir?: string, fileSuffix = "_translated"): string {
+  if (/[\\/:*?"<>|\x00-\x1f]/.test(fileSuffix)) throw new Error("The output suffix cannot contain path separators or reserved filename characters.");
   const cleanSource = sourcePath.replace(/\\/g, "/");
   const fileName = cleanSource.split("/").pop() || "script.jsonl";
   const lastDot = fileName.lastIndexOf(".");
@@ -144,20 +145,21 @@ export function calculateOutputPath(sourcePath: string, outputDir?: string, file
     return `${dir}/${outFileName}`;
   } else {
     const parentDir = cleanSource.substring(0, cleanSource.lastIndexOf("/"));
-    return `${parentDir}/${outFileName}`;
+      return parentDir ? `${parentDir}/${outFileName}` : outFileName;
   }
 }
 
 /**
  * Serializes batch items to standard JSONL format with preprocessed dialogue.
  */
-export function serializeBatchItemsToJsonl(items: BatchItem[]): string {
+export function serializeBatchItemsToJsonl(items: BatchItem[], overrideRawWithPreprocessed = false): string {
   const outputLines = items.map((item) => {
-    const finalRawSpeaker = item.originalSpeaker
+    const finalRawSpeaker = overrideRawWithPreprocessed && item.originalSpeaker
       ? cleanSpeakerName(executePreprocessingPipeline(item.originalSpeaker, "batch"))
       : item.originalSpeaker;
 
-    const finalRawMessage = executePreprocessingPipeline(item.originalMessage, "batch");
+    const finalRawMessage = overrideRawWithPreprocessed
+      ? executePreprocessingPipeline(item.originalMessage, "batch") : item.originalMessage;
 
     return JSON.stringify({
       id: item.id,
@@ -176,13 +178,14 @@ export function serializeBatchItemsToJsonl(items: BatchItem[]): string {
  */
 export async function saveTranslatedFileToDisk(file: BatchFileEntry, settings: BatchSettings): Promise<void> {
   try {
-    const outputContent = serializeBatchItemsToJsonl(file.items);
+    const outputContent = serializeBatchItemsToJsonl(file.items, settings.overrideRawWithPreprocessed);
     const targetPath = calculateOutputPath(file.path, settings.outputDir, settings.fileSuffix);
 
     await TauriBridge.saveScriptFile(targetPath, outputContent);
     logger.info("BatchTranslate", `Saved to disk (.jsonl): ${targetPath} (${file.completedLines}/${file.totalLines} lines)`);
   } catch (err: any) {
     logger.error("BatchTranslate", `Failed to save translated file ${file.name}: ${err?.message || err}`);
+    throw err;
   }
 }
 
@@ -202,35 +205,34 @@ export async function hydrateExistingTranslationFromDisk(
     if (existingContent && existingContent.trim()) {
       const existingItems = parseScriptContentAsBatchItems(existingContent);
       if (Array.isArray(existingItems) && existingItems.length > 0) {
-        let translatedCount = 0;
-        let explicitCount = 0;
         const existingMap = new Map<number, BatchItem>(existingItems.map((e) => [e.id, e]));
         const hydratedItems = file.items.map((item, idx) => {
           const found = existingMap.get(item.id) || existingItems[idx];
+          const sameSource = found && (
+            found.originalMessage === item.originalMessage ||
+            found.originalMessage === executePreprocessingPipeline(item.originalMessage, "batch")
+          );
+          if (!sameSource) return item;
           if (found && isGenuinelyTranslated(found)) {
-            translatedCount++;
             return {
               ...item,
               translatedSpeaker: found.translatedSpeaker || undefined,
               translatedMessage: found.translatedMessage,
             };
           } else if (found && isExplicitTagged(found)) {
-            explicitCount++;
             return {
               ...item,
               translatedSpeaker: found.translatedSpeaker || undefined,
               translatedMessage: found.translatedMessage,
             };
           } else {
-            return {
-              ...item,
-              translatedSpeaker: undefined,
-              translatedMessage: undefined,
-            };
+            return item;
           }
         });
 
         file.items = hydratedItems;
+        const translatedCount = hydratedItems.filter(isGenuinelyTranslated).length;
+        const explicitCount = hydratedItems.filter(isExplicitTagged).length;
         file.completedLines = translatedCount;
         file.explicitLines = explicitCount;
         if (translatedCount + explicitCount >= file.totalLines && file.totalLines > 0) {

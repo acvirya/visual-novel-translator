@@ -1,4 +1,5 @@
 import { logger } from "./loggerService";
+import { settingsManager } from "./settingsManager";
 import { TauriBridge } from "./tauriBridge";
 import {
   ReasoningEffort,
@@ -314,7 +315,7 @@ export async function testOpenRouterKey(apiKey: string): Promise<OpenRouterTestR
     return { isValid: false, message: "API key cannot be empty." };
   }
 
-  logger.info("OpenRouter::Auth", `Testing API key validation (${cleanKey.slice(0, 8)}...)...`);
+  logger.info("OpenRouter::Auth", "Testing API key validation...");
 
   try {
     const response = await fetchViaTauriOrWeb("https://openrouter.ai/api/v1/auth/key", {
@@ -400,6 +401,7 @@ export interface OpenRouterTranslateResult {
  * Perform chat completion translation using OpenRouter with structured JSON inputs and outputs
  */
 export async function translateWithOpenRouter(options: OpenRouterTranslateOptions): Promise<OpenRouterTranslateResult> {
+  await settingsManager.ensureReady();
   const {
     apiKey,
     modelId,
@@ -425,10 +427,10 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
   const cleanKey = (
     providerId === "openrouter"
       ? (apiKey || providerCfg.apiKey)
-      : (providerCfg.apiKey || apiKey)
+      : providerCfg.apiKey
   || "").trim();
 
-  if (!cleanKey) {
+  if (!cleanKey && providerId !== "custom") {
     const providerDef = LlmProviderRegistry.getProvider(providerId);
     const err = `${providerDef?.name || "LLM"} API Key is missing. Please set your API key in Translation Providers.`;
     logger.error("LLM::API", err);

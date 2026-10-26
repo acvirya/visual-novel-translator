@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-target-processes"
+description = "Enables the list_target_processes command without any pre-configured scope."
+commands.allow = ["list_target_processes"]
+
+[[permission]]
+identifier = "deny-list-target-processes"
+description = "Denies the list_target_processes command without any pre-configured scope."
+commands.deny = ["list_target_processes"]

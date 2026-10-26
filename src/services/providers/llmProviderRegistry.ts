@@ -175,8 +175,8 @@ export class LlmProviderRegistry {
     return settingsManager.getLlmProvider(providerId);
   }
 
-  public static saveProviderConfig(config: StoredProviderConfig): void {
-    settingsManager.saveLlmProvider(config);
+  public static saveProviderConfig(config: StoredProviderConfig): Promise<void> {
+    return settingsManager.saveLlmProvider(config);
   }
 
   /**

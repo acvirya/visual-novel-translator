@@ -44,11 +44,26 @@ export class ErrorBoundary extends Component<Props, State> {
     });
   };
 
-  private handleCopyError = () => {
+  private copyTimer: ReturnType<typeof setTimeout> | null = null;
+  private mounted = false;
+
+  public componentDidMount() { this.mounted = true; }
+  public componentWillUnmount() {
+    this.mounted = false;
+    if (this.copyTimer) clearTimeout(this.copyTimer);
+  }
+
+  private handleCopyError = async () => {
     const errorText = `${this.state.error?.name || "Error"}: ${this.state.error?.message || "Unknown error"}\n\nStack Trace:\n${this.state.error?.stack || ""}\n\nComponent Stack:\n${this.state.errorInfo?.componentStack || ""}`;
-    navigator.clipboard.writeText(errorText);
-    this.setState({ copied: true });
-    setTimeout(() => this.setState({ copied: false }), 2000);
+    try {
+      await navigator.clipboard.writeText(errorText);
+      if (!this.mounted) return;
+      this.setState({ copied: true });
+      if (this.copyTimer) clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => this.setState({ copied: false }), 2000);
+    } catch {
+      logger.warn("UI:ErrorBoundary", "Clipboard unavailable; error details were not copied.");
+    }
   };
 
   public render() {

@@ -1,5 +1,5 @@
 # Logs
-logs
+/logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -37,3 +37,7 @@ batch_debug_log.jsonl
 stdin.txt
 *.jsonl.tmp
 analysis.md
+
+# Browser verification artifacts
+/test-results/
+/playwright-report/

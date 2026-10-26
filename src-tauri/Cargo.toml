@@ -32,7 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
-oneocr-rs = "0.3"
+oneocr-rs = { path = "vendor/oneocr-rs" }
 windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",

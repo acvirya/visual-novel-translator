@@ -99,6 +99,7 @@ export interface GlossaryEntry {
   translation: string;
   category: string;
   notes?: string;
+  isLocked?: boolean;
 }
 
 export type PickFileTuple = [filePath: string, fileName: string, fileSize: number];

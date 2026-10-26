@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stop-textractor"
+description = "Enables the stop_textractor command without any pre-configured scope."
+commands.allow = ["stop_textractor"]
+
+[[permission]]
+identifier = "deny-stop-textractor"
+description = "Denies the stop_textractor command without any pre-configured scope."
+commands.deny = ["stop_textractor"]

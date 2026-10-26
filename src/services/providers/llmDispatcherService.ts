@@ -3,6 +3,7 @@ import { TauriBridge } from "../tauriBridge";
 import { LlmProviderRegistry, CuratedModelInfo } from "./llmProviderRegistry";
 import { OpenRouterCompletionResponse } from "../openRouterService";
 import { logger } from "../loggerService";
+import { settingsManager } from "../settingsManager";
 import { ReasoningEffort, StreamEvent } from "../../types";
 export type { StreamEvent };
 
@@ -55,8 +56,8 @@ export class LlmDispatcherService {
         "X-GitHub-Api-Version": "2026-06-01",
       };
     } else if (providerId === "google" && !baseUrl.includes("/openai")) {
-      url = `${baseUrl}/models?key=${cleanKey}`;
-      headers = {};
+      url = `${baseUrl}/models`;
+      headers = cleanKey ? { "x-goog-api-key": cleanKey } : {};
     }
 
     return { url, headers };
@@ -177,7 +178,7 @@ export class LlmDispatcherService {
         try {
           const models = await this.fetchProviderModels(p.id, cfg.apiKey, cfg.baseUrl);
           if (models.length > 0) {
-            LlmProviderRegistry.saveProviderConfig({
+            await LlmProviderRegistry.saveProviderConfig({
               ...cfg,
               customModels: models,
             });
@@ -194,6 +195,7 @@ export class LlmDispatcherService {
    * Execute chat completion across any supported provider via Rust backend
    */
   public static async executeChat(options: UniversalChatOptions): Promise<UniversalChatResult> {
+    await settingsManager.ensureReady();
     const { providerId, modelId } = LlmProviderRegistry.parseModelId(options.modelId);
     const def = LlmProviderRegistry.getProvider(providerId);
     const cfg = LlmProviderRegistry.getProviderConfig(providerId);

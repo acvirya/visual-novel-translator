@@ -3,6 +3,7 @@ import { OcrRegion, MonitorInfo, DetectedTextLine } from "../../types";
 import { OcrService } from "../../services/ocrService";
 import { translationManager } from "../../services/translationManager";
 import { TauriBridge } from "../../services/tauriBridge";
+import { settingsManager } from "../../services/settingsManager";
 import { Sparkles, Loader2 } from "lucide-react";
 
 interface SnippingBox {
@@ -33,6 +34,8 @@ interface TranslatedItemBox {
 
 export const OneShotOcrOverlay: React.FC = () => {
   const currentMonitorRef = useRef<MonitorInfo | null>(null);
+  const requestGeneration = useRef(0);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isSnipDrawing, setIsSnipDrawing] = useState<boolean>(false);
   const [snipBox, setSnipBox] = useState<SnippingBox | null>(null);
@@ -69,6 +72,7 @@ export const OneShotOcrOverlay: React.FC = () => {
     loadWindowMonitor();
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector("dialog[open]")) return;
       if (e.key === "Escape" || e.key === "Enter") {
         e.preventDefault();
         handleCloseSnipping();
@@ -77,11 +81,14 @@ export const OneShotOcrOverlay: React.FC = () => {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
+      requestGeneration.current += 1;
+      if (copyTimer.current) clearTimeout(copyTimer.current);
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0 || isSnipProcessing) return;
     // If translations or error are already showing, clicking outside closes the overlay
     if (activeSnipRect && (translatedBoxes.length > 0 || snipError)) {
       handleCloseSnipping();
@@ -131,12 +138,15 @@ export const OneShotOcrOverlay: React.FC = () => {
   };
 
   const executeSnippingTranslate = async (rect: ActiveSnipRect) => {
+    const generation = ++requestGeneration.current;
+    const isCurrent = () => generation === requestGeneration.current;
     setIsSnipProcessing(true);
     setSnipError(null);
     setTranslatedBoxes([]);
 
     try {
       const mon = currentMonitorRef.current || (await loadWindowMonitor());
+      if (!isCurrent()) return;
       const scale = mon.scale_factor || window.devicePixelRatio || 1.0;
       const physicalX = Math.round((mon.x || 0) + rect.x * scale);
       const physicalY = Math.round((mon.y || 0) + rect.y * scale);
@@ -159,7 +169,8 @@ export const OneShotOcrOverlay: React.FC = () => {
       };
 
       // 1. Run Instant OneOCR Scan with fresh snapshot (no motion caching)
-      const ocrRes = await OcrService.runOneOcrScan([ocrRegion], 100);
+      const ocrRes = await OcrService.runOneOcrScan([ocrRegion], 100, settingsManager.getOcr().customPath);
+      if (!isCurrent()) return;
       const detectedLines: DetectedTextLine[] = ocrRes.detectedLines || [];
 
       let rawBoxes: TranslatedItemBox[] = [];
@@ -204,14 +215,18 @@ export const OneShotOcrOverlay: React.FC = () => {
 
       setTranslatedBoxes(rawBoxes);
 
-      // 2. Translate all detected boxes in parallel
-      await Promise.all(
-        rawBoxes.map(async (box) => {
+      // Limit outstanding work so a page of text cannot overflow the shared
+      // translation queue. Closing the overlay prevents more work being added.
+      let nextBox = 0;
+      const worker = async () => {
+        while (nextBox < rawBoxes.length && isCurrent()) {
+          const box = rawBoxes[nextBox++];
           try {
             const transRes = await translationManager.translate({
               message: box.rawText,
               sourceType: "ocr",
             });
+            if (!isCurrent()) return;
 
             const isSuccess = transRes.success && Boolean(transRes.translatedMessage);
             const resultText = isSuccess ? transRes.translatedMessage : box.rawText;
@@ -230,6 +245,7 @@ export const OneShotOcrOverlay: React.FC = () => {
               )
             );
           } catch (transErr: any) {
+            if (!isCurrent()) return;
             setTranslatedBoxes((prev) =>
               prev.map((item) =>
                 item.id === box.id
@@ -242,31 +258,42 @@ export const OneShotOcrOverlay: React.FC = () => {
               )
             );
           }
-        })
-      );
+        }
+      };
+      await Promise.all([worker(), worker()]);
     } catch (err: any) {
-      setSnipError(err?.message || String(err));
+      if (isCurrent()) setSnipError(err?.message || String(err));
     } finally {
-      setIsSnipProcessing(false);
+      if (isCurrent()) setIsSnipProcessing(false);
     }
   };
 
   const handleCloseSnipping = async () => {
+    requestGeneration.current += 1;
     setSnipBox(null);
     setActiveSnipRect(null);
     setIsSnipDrawing(false);
     setIsSnipProcessing(false);
     setTranslatedBoxes([]);
     setSnipError(null);
-    await OcrService.closeRegionSelector(false);
+    try {
+      await OcrService.closeRegionSelector(false);
+    } catch (error) {
+      setSnipError(error instanceof Error ? error.message : String(error));
+    }
   };
 
-  const handleCopyBox = (box: TranslatedItemBox) => {
+  const handleCopyBox = async (box: TranslatedItemBox) => {
     const textToCopy = box.translatedText || box.rawText;
     if (!textToCopy) return;
-    navigator.clipboard.writeText(textToCopy);
-    setCopiedBoxId(box.id);
-    setTimeout(() => setCopiedBoxId(null), 1500);
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setCopiedBoxId(box.id);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopiedBoxId(null), 1500);
+    } catch {
+      setSnipError("Could not copy the translation to the clipboard.");
+    }
   };
 
   const drawingRect =
@@ -284,6 +311,7 @@ export const OneShotOcrOverlay: React.FC = () => {
       onMouseDown={handleCanvasMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onMouseLeave={() => { setIsSnipDrawing(false); setSnipBox(null); }}
       style={{
         width: "100vw",
         height: "100vh",
@@ -310,6 +338,9 @@ export const OneShotOcrOverlay: React.FC = () => {
           borderRadius: "30px",
           padding: "6px 18px",
           display: "flex",
+          flexWrap: "wrap",
+          width: "max-content",
+          maxWidth: "calc(100vw - 32px)",
           alignItems: "center",
           gap: "10px",
           boxShadow: "0 8px 28px rgba(0, 0, 0, 0.6)",
@@ -407,6 +438,7 @@ export const OneShotOcrOverlay: React.FC = () => {
         return (
           <div
             key={box.id}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               handleCopyBox(box);
@@ -416,6 +448,7 @@ export const OneShotOcrOverlay: React.FC = () => {
               left: `${box.x}px`,
               top: `${box.y}px`,
               minWidth: `${Math.max(box.width, 60)}px`,
+              maxWidth: `${Math.max(60, window.innerWidth - box.x - 8)}px`,
               minHeight: `${Math.max(box.height, 26)}px`,
               backgroundColor: "rgba(0, 0, 0, 0.88)",
               color: "#ffffff",

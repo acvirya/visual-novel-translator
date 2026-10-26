@@ -1,3 +1,5 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
+import { useClipboardText } from "../common/useClipboardText";
 import React, { useState } from "react";
 import {
   Copy,
@@ -21,13 +23,14 @@ import { LlmProviderRegistry } from "../../services/providers/llmProviderRegistr
 import { settingsManager } from "../../services/settingsManager";
 
 export const ManualTranslateView: React.FC = () => {
+  const confirm = useConfirmation();
   const [sourceText, setSourceText] = useState<string>("");
   const [translatedText, setTranslatedText] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     return settingsManager.getSelectedModel();
   });
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
-  const [copied, setCopied] = useState<boolean>(false);
+  const { copied, copyText } = useClipboardText();
   const [statusInfo, setStatusInfo] = useState<{
     latencyMs?: number;
     provider?: string;
@@ -75,8 +78,11 @@ export const ManualTranslateView: React.FC = () => {
           const res = await translateWithFreeMt({
             speaker: cleanSpeaker,
             message: cleanMessage,
+            sourceLang: settingsManager.getSourceLang(),
+            targetLang: settingsManager.getTargetLang(),
             provider: "google",
           });
+          if (!res.success) throw new Error(res.error || "Translation failed.");
           finalTranslatedSpeaker = res.translatedSpeaker || cleanSpeaker;
           finalTranslatedMessage = res.translatedMessage || cleanMessage;
         } else if (selectedModel === "mt:deepl-free" || selectedModel === "deepl") {
@@ -84,8 +90,11 @@ export const ManualTranslateView: React.FC = () => {
           const res = await translateWithFreeMt({
             speaker: cleanSpeaker,
             message: cleanMessage,
+            sourceLang: settingsManager.getSourceLang(),
+            targetLang: settingsManager.getTargetLang(),
             provider: "deepl",
           });
+          if (!res.success) throw new Error(res.error || "Translation failed.");
           finalTranslatedSpeaker = res.translatedSpeaker || cleanSpeaker;
           finalTranslatedMessage = res.translatedMessage || cleanMessage;
         } else {
@@ -104,6 +113,7 @@ export const ManualTranslateView: React.FC = () => {
             systemPrompt,
           });
 
+          if (!res.success) throw new Error(res.error || "Translation failed.");
           finalTranslatedSpeaker = res.translatedSpeaker || cleanSpeaker;
           finalTranslatedMessage = res.translatedMessage || cleanMessage;
         }
@@ -145,18 +155,13 @@ export const ManualTranslateView: React.FC = () => {
     }
   };
 
-  const handleCopy = () => {
-    if (!translatedText) return;
-    navigator.clipboard.writeText(translatedText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
+  const handleCopy = () => { void copyText(translatedText); };
 
-  const handleClear = () => {
+  const handleClear = () => confirm({ title: "Clear manual translation?", message: "Discard the input and translation shown here?", confirmText: "Clear text" }, () => {
     setSourceText("");
     setTranslatedText("");
     setStatusInfo(null);
-  };
+  });
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -190,7 +195,7 @@ export const ManualTranslateView: React.FC = () => {
             selectedModelId={selectedModel}
             onSelectModel={(id) => {
               setSelectedModel(id);
-              localStorage.setItem("vn_selected_model", id);
+              settingsManager.updateTranslation({ activeProviderId: id, liveModel: id });
             }}
             width="280px"
             compact={true}
@@ -230,7 +235,7 @@ export const ManualTranslateView: React.FC = () => {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
           gap: "14px",
           flex: 1,
           minHeight: "360px",
@@ -247,6 +252,7 @@ export const ManualTranslateView: React.FC = () => {
           </div>
 
           <textarea
+            aria-label="Source text"
             value={sourceText}
             onChange={(e) => setSourceText(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -292,6 +298,7 @@ export const ManualTranslateView: React.FC = () => {
           </div>
 
           <textarea
+            aria-label="Translated text"
             value={translatedText}
             onChange={(e) => setTranslatedText(e.target.value)}
             placeholder="Translation output will appear here..."

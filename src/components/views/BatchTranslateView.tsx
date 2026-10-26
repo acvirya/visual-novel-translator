@@ -1,3 +1,4 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
 import React, { useState, useEffect, useMemo } from "react";
 import { TauriBridge } from "../../services/tauriBridge";
 import {
@@ -45,6 +46,7 @@ export interface BatchTranslateViewProps {
 export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   onOpenPreprocessingSettings,
 }) => {
+  const confirm = useConfirmation();
   const {
     queuedFiles,
     setQueuedFiles,
@@ -244,18 +246,22 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   };
 
   const handleRemoveFile = (id: string) => {
-    if (isRunning) return;
-    setQueuedFiles((prev) => prev.filter((f) => f.id !== id));
-    if (selectedFileId === id) {
-      setSelectedFileId(null);
-    }
+    confirm({ title: "Remove queued script?", message: "Remove this script and its in-memory progress from the batch queue? Saved files are kept.", confirmText: "Remove script" }, () => {
+      if (isRunning) return;
+      setQueuedFiles((prev) => prev.filter((f) => f.id !== id));
+      if (selectedFileId === id) {
+        setSelectedFileId(null);
+      }
+    });
   };
 
   const handleClearQueue = () => {
-    if (isRunning) return;
-    setQueuedFiles([]);
-    setSelectedFileId(null);
-    setProgressData(null);
+    confirm({ title: "Clear batch queue?", message: "Remove all queued scripts and their in-memory progress? Saved files are kept.", confirmText: "Clear queue" }, () => {
+      if (isRunning) return;
+      setQueuedFiles([]);
+      setSelectedFileId(null);
+      setProgressData(null);
+    });
   };
 
   const handleStartBatch = async () => {
@@ -350,23 +356,23 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100%", minWidth: 0, maxWidth: "1200px", margin: "0 auto" }}>
+    <div className="workspace-view">
       {/* ========================================================================= */}
       {/* 1. TOP SUB-TAB SWITCHER (Centered & Uniform with other Views)              */}
       {/* ========================================================================= */}
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", padding: "0 0 12px 0", flexShrink: 0 }}>
+      <div className="workspace-tabs">
         <SegmentedControl<"preview" | "settings">
           options={[
             {
               id: "preview",
-              label: "Script Translation Preview",
+              label: "Script queue",
               icon: <FileCode size={14} />,
               badge: queuedFiles.length > 0 ? `${queuedFiles.length} files` : undefined,
               badgeColor: "neutral",
             },
             {
               id: "settings",
-              label: "Batch Settings",
+              label: "Batch settings",
               icon: <Sliders size={14} />,
             },
           ]}
@@ -396,7 +402,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       >
         {/* Left Side: Model Selector + Master Execution Buttons */}
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", minWidth: 0 }}>
             <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
               Model:
             </span>
@@ -430,7 +436,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             )}
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", minWidth: 0 }}>
             {!isRunning ? (
               <button
                 onClick={handleStartBatch}
@@ -518,7 +524,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
               gap: "14px",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", minWidth: 0 }}>
               <Sliders size={16} style={{ color: "var(--accent-gold)" }} />
               <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text-primary)" }}>
                 Batching, LLM Context & Worker Parameters
@@ -526,7 +532,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             </div>
 
             {/* Grid of Number Inputs */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "14px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "14px" }}>
               {/* Lines Per Batch Chunk */}
               <div>
                 <label style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
@@ -775,7 +781,7 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             </div>
 
             {/* Automation Toggles */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px", marginTop: "4px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "12px", marginTop: "4px" }}>
               <div
                 style={{
                   backgroundColor: autoContinue ? "rgba(56, 189, 248, 0.06)" : "var(--bg-surface-elevated)",

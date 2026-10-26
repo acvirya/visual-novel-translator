@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useConfirmation } from "../common/ConfirmationProvider";
 import { ModelSelectorCombobox } from "../common/ModelSelectorCombobox";
 import { ProviderSelectorMultiSelect } from "../common/ProviderSelectorMultiSelect";
 import {
@@ -18,6 +19,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { translationManager, LlmContextSettings } from "../../services/translationManager";
+import { useUIStore } from "../../stores/useUIStore";
 import { useTranslationStore } from "../../stores/useTranslationStore";
 import {
   fetchModelEndpoints,
@@ -28,6 +30,8 @@ import {
 } from "../../services/openRouterService";
 
 export const LiveTranslateView: React.FC = () => {
+  const confirm = useConfirmation();
+  const viewRef = useRef<HTMLDivElement>(null);
   const {
     liveLogs,
     isPaused,
@@ -44,6 +48,12 @@ export const LiveTranslateView: React.FC = () => {
     clearLiveLogs,
     resetSessionStats,
   } = useTranslationStore();
+
+  useLayoutEffect(() => {
+    // Rows are prepended. Disable browser anchoring and follow the newest row.
+    const scrollContainer = viewRef.current?.closest("main");
+    if (scrollContainer) scrollContainer.scrollTop = 0;
+  }, [liveLogs[0]?.id]);
 
   const [showContextModal, setShowContextModal] = useState<boolean>(false);
   const [maxContextInput, setMaxContextInput] = useState<string>(() => String(contextSettings.maxContextLines));
@@ -65,9 +75,10 @@ export const LiveTranslateView: React.FC = () => {
       return;
     }
     let cancelled = false;
+    setModelEndpoints([]);
     fetchModelEndpoints(selectedProvider).then((eps) => {
       if (!cancelled) setModelEndpoints(eps);
-    });
+    }).catch(() => { if (!cancelled) setModelEndpoints([]); });
     return () => {
       cancelled = true;
     };
@@ -121,13 +132,13 @@ export const LiveTranslateView: React.FC = () => {
   };
 
   const handleResetContextHistory = () => {
-    translationManager.clearContextHistory();
+    confirm({ title: "Reset translation memory?", message: "Clear the conversation context used by the next translation?", confirmText: "Reset memory" }, () => translationManager.clearContextHistory());
   };
 
   const isLlmProvider = selectedProvider && !selectedProvider.startsWith("mt:");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "12px" }}>
+    <div ref={viewRef} style={{ display: "flex", flexDirection: "column", width: "100%", gap: "12px", overflowAnchor: "none" }}>
       {/* ========================================================================= */}
       {/* 1. TOP CONTROL & PROVIDER BAR                                            */}
       {/* ========================================================================= */}
@@ -149,10 +160,11 @@ export const LiveTranslateView: React.FC = () => {
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
           {/* Auto Translate Toggle Button */}
           <button
+            aria-pressed={!isPaused}
             onClick={handleTogglePause}
             className={!isPaused ? "btn-primary" : "btn-secondary"}
             style={{
-              backgroundColor: !isPaused ? "var(--accent-success)" : "var(--bg-surface-elevated)",
+              backgroundColor: !isPaused ? "var(--accent-primary)" : "var(--bg-surface-elevated)",
               padding: "6px 14px",
               fontWeight: 600,
               display: "flex",
@@ -162,11 +174,11 @@ export const LiveTranslateView: React.FC = () => {
             }}
           >
             {!isPaused ? <Pause size={13} /> : <Play size={13} />}
-            <span>{!isPaused ? "Auto-Translate: Active" : "Stream Paused"}</span>
+            <span>{!isPaused ? "Translation enabled" : "Translation paused"}</span>
           </button>
 
           {/* Translation Model Selector with Integrated Hover Reasoning Submenu */}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", minWidth: 0 }}>
             <ModelSelectorCombobox
               selectedModelId={selectedProvider}
               selectedReasoningEffort={reasoningEffort}
@@ -196,6 +208,7 @@ export const LiveTranslateView: React.FC = () => {
           {/* Use Script Only Toggle Button */}
           <button
             type="button"
+            aria-pressed={useScriptOnly}
             onClick={() => handleToggleScriptOnly(!useScriptOnly)}
             style={{
               display: "flex",
@@ -274,7 +287,7 @@ export const LiveTranslateView: React.FC = () => {
             {sessionStats.totalCost > 0 && (
               <button
                 type="button"
-                onClick={resetSessionStats}
+                onClick={() => confirm({ title: "Reset session statistics?", message: "Clear the token and cost counters for this session?", confirmText: "Reset statistics" }, resetSessionStats)}
                 style={{
                   background: "none",
                   border: "none",
@@ -323,7 +336,7 @@ export const LiveTranslateView: React.FC = () => {
             </span>
 
             <button
-              onClick={clearLiveLogs}
+              onClick={() => confirm({ title: "Clear live translation logs?", message: "Remove all displayed dialogue logs?", confirmText: "Clear logs" }, clearLiveLogs)}
               disabled={liveLogs.length === 0}
               className="btn-secondary"
               style={{ height: "30px", padding: "0 8px", fontSize: "11.5px" }}
@@ -369,7 +382,7 @@ export const LiveTranslateView: React.FC = () => {
             </button>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "16px" }}>
             {/* Max Context Lines Input */}
             <div>
               <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
@@ -468,11 +481,12 @@ export const LiveTranslateView: React.FC = () => {
               <MessageSquare size={22} color="var(--accent-primary)" />
             </div>
             <div className="empty-state-title">
-              Waiting for dialogue stream...
+              Your next line starts here
             </div>
             <div className="empty-state-desc">
-              Make sure Textractor Hook or Screen OCR is attached in <strong>1. Input Setup</strong>, then advance dialogue in your visual novel.
+              Connect your game or choose a screen area in <strong>Capture setup</strong>. New dialogue and its translation will appear here as you play.
             </div>
+            <button className="btn-secondary" onClick={() => useUIStore.getState().setLiveGameStage("input")}>Set up dialogue capture</button>
           </div>
         ) : (
           liveLogs.map((item) => {

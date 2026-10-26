@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-send-textractor-command"
+description = "Enables the send_textractor_command command without any pre-configured scope."
+commands.allow = ["send_textractor_command"]
+
+[[permission]]
+identifier = "deny-send-textractor-command"
+description = "Denies the send_textractor_command command without any pre-configured scope."
+commands.deny = ["send_textractor_command"]

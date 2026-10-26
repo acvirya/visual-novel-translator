@@ -1,11 +1,11 @@
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use parking_lot::Mutex;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 use tauri::{AppHandle, Emitter};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProcessInfo {
@@ -53,7 +53,8 @@ mod win32 {
     use sysinfo::{Pid, ProcessesToUpdate, System};
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible,
     };
 
     struct EnumContext {
@@ -200,7 +201,10 @@ fn get_textractor_candidate_paths(arch_filter: Option<&str>) -> Vec<std::path::P
 
     for base in base_dirs {
         for arch in &arches {
-            candidates.push(std::path::PathBuf::from(format!("{}\\{}\\TextractorCLI.exe", base, arch)));
+            candidates.push(std::path::PathBuf::from(format!(
+                "{}\\{}\\TextractorCLI.exe",
+                base, arch
+            )));
         }
     }
 
@@ -251,7 +255,10 @@ pub fn start_textractor(
 
         // ARCH-05: Strict backend sanitization of inputs from frontend IPC
         if target_pid == 0 {
-            return Err("Invalid target process PID (0). Please select a valid active game process.".to_string());
+            return Err(
+                "Invalid target process PID (0). Please select a valid active game process."
+                    .to_string(),
+            );
         }
 
         let resolved_exe = resolve_textractor_exe(&exe_path);
@@ -262,7 +269,10 @@ pub fn start_textractor(
             ));
         }
 
-        eprintln!("[Textractor::Start] Target PID: {}, Executable: {:?}", target_pid, resolved_exe);
+        eprintln!(
+            "[Textractor::Start] Target PID: {}, Executable: {:?}",
+            target_pid, resolved_exe
+        );
 
         let mut cmd = Command::new(&resolved_exe);
 
@@ -305,7 +315,10 @@ pub fn start_textractor(
         if let Err(e) = stdin.write_all(&str_to_utf16_bytes(&attach_cmd)) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("Failed to send attach command to Textractor stdin: {}", e));
+            return Err(format!(
+                "Failed to send attach command to Textractor stdin: {}",
+                e
+            ));
         }
         if let Err(e) = stdin.flush() {
             let _ = child.kill();
@@ -377,7 +390,13 @@ pub fn start_textractor(
                 }
             }
 
-            let _ = app_clone.emit("textractor-process-terminated", serde_json::json!({ "pid": target_pid }));
+            // A reader from a replaced session must not mark the new session disconnected.
+            if !cancel_clone.is_cancelled() {
+                let _ = app_clone.emit(
+                    "textractor-process-terminated",
+                    serde_json::json!({ "pid": target_pid }),
+                );
+            }
         });
 
         Ok(())
@@ -397,18 +416,24 @@ pub fn format_textractor_command(command: &str, active_pid: Option<u32>) -> Resu
     if trimmed.is_empty() {
         return Err("Command or hook code cannot be empty".to_string());
     }
+    if trimmed.contains(['\r', '\n', '\0']) || trimmed.encode_utf16().count() > 500 {
+        return Err("Textractor commands must be one line of at most 500 UTF-16 code units".into());
+    }
 
     // Check if command already contains a valid -P<digits> or -p<digits> flag
-    let has_pid_flag = trimmed
-        .split_whitespace()
-        .any(|part| (part.starts_with("-P") || part.starts_with("-p")) && part[2..].parse::<u32>().is_ok());
+    let has_pid_flag = trimmed.split_whitespace().any(|part| {
+        (part.starts_with("-P") || part.starts_with("-p")) && part[2..].parse::<u32>().is_ok()
+    });
 
     if has_pid_flag {
         Ok(trimmed.to_string())
     } else if let Some(pid) = active_pid {
         Ok(format!("{} -P{}", trimmed, pid))
     } else {
-        Err("No active game process attached (attach to a game process first or provide -P<pid>)".to_string())
+        Err(
+            "No active game process attached (attach to a game process first or provide -P<pid>)"
+                .to_string(),
+        )
     }
 }
 
@@ -421,14 +446,19 @@ pub fn send_textractor_command(
     let mut session_guard = state.session.lock();
     if let Some(ref mut session) = *session_guard {
         let final_cmd = format_textractor_command(&command, session.active_pid)?;
-        tracing::info!("[Textractor::SendCommand] Sending stdin command: {}", final_cmd);
+        tracing::info!(
+            "[Textractor::SendCommand] Sending stdin command: {}",
+            final_cmd
+        );
 
         let formatted = format!("{}\r\n", final_cmd);
         let utf16_bytes = str_to_utf16_bytes(&formatted);
-        session.stdin
+        session
+            .stdin
             .write_all(&utf16_bytes)
             .map_err(|e| format!("Failed to write to Textractor stdin: {}", e))?;
-        session.stdin
+        session
+            .stdin
             .flush()
             .map_err(|e| format!("Failed to flush Textractor stdin: {}", e))?;
         return Ok(());
@@ -485,8 +515,12 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
     }
 
     // Support both hexadecimal and decimal thread handles
-    let clean_h = parts[0].trim().trim_start_matches("0x").trim_start_matches("0X");
-    let handle = u32::from_str_radix(clean_h, 16).unwrap_or_else(|_| clean_h.parse::<u32>().unwrap_or(0));
+    let clean_h = parts[0]
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    let handle =
+        u32::from_str_radix(clean_h, 16).unwrap_or_else(|_| clean_h.parse::<u32>().unwrap_or(0));
 
     let mut pid = fallback_pid;
     let mut address = String::new();
@@ -499,9 +533,12 @@ fn parse_textractor_line(line: &str, fallback_pid: u32) -> Option<TextractorMess
         let raw_pid = parts[1].trim();
         if raw_pid.starts_with("0x") || raw_pid.starts_with("0X") {
             let clean_pid = raw_pid.trim_start_matches("0x").trim_start_matches("0X");
-            pid = u32::from_str_radix(clean_pid, 16).unwrap_or_else(|_| clean_pid.parse::<u32>().unwrap_or(fallback_pid));
+            pid = u32::from_str_radix(clean_pid, 16)
+                .unwrap_or_else(|_| clean_pid.parse::<u32>().unwrap_or(fallback_pid));
         } else {
-            pid = raw_pid.parse::<u32>().unwrap_or_else(|_| u32::from_str_radix(raw_pid, 16).unwrap_or(fallback_pid));
+            pid = raw_pid
+                .parse::<u32>()
+                .unwrap_or_else(|_| u32::from_str_radix(raw_pid, 16).unwrap_or(fallback_pid));
         }
         address = parts[2].trim().to_string();
         context = parts[3].trim().to_string();
@@ -583,4 +620,3 @@ mod tests {
         assert!(res.is_err());
     }
 }
-

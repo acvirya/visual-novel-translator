@@ -28,9 +28,10 @@ export interface ScriptDatabaseState {
   entries: ScriptEntry[];
   autoAppend: boolean;
   matchThreshold: number;
+  canAutoSave: boolean;
 }
 
-class ScriptManagerService implements ManagedService {
+export class ScriptManagerService implements ManagedService {
   public readonly id = "scriptManagerService";
   private activeFilePath: string | null = null;
   private activeFileName: string | null = null;
@@ -39,13 +40,19 @@ class ScriptManagerService implements ManagedService {
   private matchThreshold = 0.85;
   private listeners: Set<(state: ScriptDatabaseState) => void> = new Set();
   private saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingSave: { path: string; content: string } | null = null;
+  private saveQueue: Promise<void> = Promise.resolve();
+  private loadGeneration = 0;
+  private readyPromise: Promise<void>;
   private canonicalIndex: Map<string, ScriptEntry[]> = new Map();
   private messageOnlyIndex: Map<string, ScriptEntry[]> = new Map();
   private ngramIndex: Map<string, Set<ScriptEntry>> = new Map();
 
   constructor() {
-    this.loadPersistedState();
+    this.readyPromise = this.loadPersistedState();
   }
+
+  public async init(): Promise<void> { await this.readyPromise; }
 
   public normalizeSpeaker(s?: string): string {
     if (!s) return "";
@@ -139,6 +146,7 @@ class ScriptManagerService implements ManagedService {
   }
 
   public async loadPersistedState() {
+    const generation = ++this.loadGeneration;
     if (typeof window === "undefined" || typeof localStorage === "undefined") return;
     try {
       const savedPath = localStorage.getItem("vn_active_script_filepath");
@@ -152,11 +160,13 @@ class ScriptManagerService implements ManagedService {
       this.activeFilePath = savedPath || null;
       this.activeFileName = savedFile || null;
       this.autoAppend = savedAutoAppend !== null ? savedAutoAppend === "true" : true;
-      this.matchThreshold = savedThreshold ? Math.max(0.1, Math.min(1.0, parseFloat(savedThreshold))) : 0.85;
+      const parsedThreshold = Number(savedThreshold);
+      this.matchThreshold = savedThreshold && Number.isFinite(parsedThreshold) ? Math.max(0.1, Math.min(1.0, parsedThreshold)) : 0.85;
 
       if (this.activeFilePath) {
         try {
           const diskContent = await TauriBridge.readScriptFileByPath(this.activeFilePath);
+          if (generation !== this.loadGeneration) return;
           if (diskContent) {
             this.entries = this.parseEntriesFromContent(diskContent);
             this.rebuildIndexes();
@@ -164,6 +174,7 @@ class ScriptManagerService implements ManagedService {
             return;
           }
         } catch (readErr) {
+          if (generation !== this.loadGeneration) return;
           console.warn("Failed to load script from disk file:", readErr);
         }
       }
@@ -180,9 +191,9 @@ class ScriptManagerService implements ManagedService {
     this.notify();
   }
 
-  private saveState(skipRebuild = false) {
-    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  private saveState(skipRebuild = false, persistEntries = true) {
     try {
+      if (typeof localStorage !== "undefined") {
       if (this.activeFileName) {
         if (this.activeFilePath) {
           localStorage.setItem("vn_active_script_filepath", this.activeFilePath);
@@ -196,6 +207,7 @@ class ScriptManagerService implements ManagedService {
       localStorage.removeItem("vn_active_script_entries");
       localStorage.setItem("vn_script_auto_append", String(this.autoAppend));
       localStorage.setItem("vn_script_match_threshold", String(this.matchThreshold));
+      }
     } catch (e) {
       console.warn("Failed to autosave script settings to storage:", e);
     }
@@ -205,17 +217,12 @@ class ScriptManagerService implements ManagedService {
     }
 
     // Auto-save to physical disk file if filePath exists (debounced)
-    if (this.activeFilePath) {
+    if (persistEntries && this.activeFilePath && /\.jsonl?$/i.test(this.activeFilePath)) {
       if (this.saveDebounceTimer) clearTimeout(this.saveDebounceTimer);
-      this.saveDebounceTimer = setTimeout(async () => {
-        try {
-          if (!this.activeFilePath) return;
-          const isJson = this.activeFilePath.toLowerCase().endsWith(".json");
-          const content = this.exportAsContent(isJson);
-          await TauriBridge.saveScriptFile(this.activeFilePath, content);
-        } catch (err) {
-          console.warn("Failed to write autosave to disk file:", err);
-        }
+      this.pendingSave = { path: this.activeFilePath, content: this.exportAsContent(this.activeFilePath.toLowerCase().endsWith(".json")) };
+      this.saveDebounceTimer = setTimeout(() => {
+        this.saveDebounceTimer = null;
+        void this.enqueuePendingSave().catch(() => {});
       }, 300);
     }
 
@@ -230,14 +237,17 @@ class ScriptManagerService implements ManagedService {
       clearTimeout(this.saveDebounceTimer);
       this.saveDebounceTimer = null;
     }
-    if (!this.activeFilePath) return;
-    try {
-      const isJson = this.activeFilePath.toLowerCase().endsWith(".json");
-      const content = this.exportAsContent(isJson);
-      await TauriBridge.saveScriptFile(this.activeFilePath, content);
-    } catch (err) {
-      console.warn("Failed to flush pending script save to disk file:", err);
-    }
+    await this.enqueuePendingSave();
+    await this.saveQueue;
+  }
+
+  private enqueuePendingSave(): Promise<void> {
+    const pending = this.pendingSave;
+    if (!pending) return this.saveQueue;
+    this.pendingSave = null;
+    const operation = this.saveQueue.then(() => TauriBridge.saveScriptFile(pending.path, pending.content));
+    this.saveQueue = operation.catch((err) => { console.error("Failed to save script:", err); });
+    return operation;
   }
 
   public async dispose(): Promise<void> {
@@ -261,9 +271,11 @@ class ScriptManagerService implements ManagedService {
     return {
       activeFilePath: this.activeFilePath,
       activeFileName: this.activeFileName,
-      entries: [...this.entries], // CRIT-06: return shallow copy to prevent external mutation
+      entries: this.entries.map(({ id, speaker, translated_speaker, message, translated_message, matchedCount, lastUsed }) =>
+        ({ id, speaker, translated_speaker, message, translated_message, matchedCount, lastUsed })),
       autoAppend: this.autoAppend,
       matchThreshold: this.matchThreshold,
+      canAutoSave: Boolean(this.activeFilePath && /\.jsonl?$/i.test(this.activeFilePath)),
     };
   }
 
@@ -272,13 +284,13 @@ class ScriptManagerService implements ManagedService {
   }
 
   public setMatchThreshold(val: number) {
-    this.matchThreshold = Math.max(0.1, Math.min(1.0, val));
-    this.saveState();
+    this.matchThreshold = Number.isFinite(val) ? Math.max(0.1, Math.min(1.0, val)) : 0.85;
+    this.saveState(true, false);
   }
 
   public setAutoAppend(enable: boolean) {
     this.autoAppend = enable;
-    this.saveState();
+    this.saveState(true, false);
   }
 
   /**
@@ -293,6 +305,8 @@ class ScriptManagerService implements ManagedService {
       }
 
       const basename = selectedPath.split(/[/\\]/).pop() || selectedPath;
+      await this.flushPendingSaves();
+      this.loadGeneration += 1;
       this.activeFilePath = selectedPath;
       this.activeFileName = basename;
       this.entries = [];
@@ -334,12 +348,15 @@ class ScriptManagerService implements ManagedService {
     rawContent: string
   ): { success: boolean; count: number; error?: string } {
     try {
+      this.loadGeneration += 1;
+      // Capture the previous file's queued write before changing the active path.
+      void this.flushPendingSaves().catch(() => {});
       const cleanContent = rawContent.trim();
       if (!cleanContent) {
         this.activeFilePath = filePath;
         this.activeFileName = fileName;
         this.entries = [];
-        this.saveState();
+        this.saveState(false, false);
         return { success: true, count: 0 };
       }
 
@@ -348,7 +365,7 @@ class ScriptManagerService implements ManagedService {
       this.activeFilePath = filePath;
       this.activeFileName = fileName;
       this.entries = parsedEntries;
-      this.saveState();
+      this.saveState(false, false);
 
       return { success: true, count: parsedEntries.length };
     } catch (err: any) {
@@ -418,10 +435,12 @@ class ScriptManagerService implements ManagedService {
    * Close active script (reverts to no active script)
    */
   public closeScript() {
+    this.loadGeneration += 1;
+    void this.flushPendingSaves().catch(() => {});
     this.activeFilePath = null;
     this.activeFileName = null;
     this.entries = [];
-    this.saveState();
+    this.saveState(false, false);
   }
 
   /**
@@ -547,7 +566,7 @@ class ScriptManagerService implements ManagedService {
     if (entry) {
       entry.matchedCount = (entry.matchedCount || 0) + 1;
       entry.lastUsed = new Date().toISOString();
-      this.saveState(true);
+      this.saveState(true, false);
     }
   }
 

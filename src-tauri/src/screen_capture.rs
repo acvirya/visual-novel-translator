@@ -1,6 +1,6 @@
+use image::{imageops::FilterType, DynamicImage, ImageBuffer, Rgba};
 use std::collections::HashMap;
 use std::io::Cursor;
-use image::{imageops::FilterType, DynamicImage, ImageBuffer, Rgba};
 use windows_sys::Win32::{
     Foundation::HWND,
     Graphics::Gdi::{
@@ -28,6 +28,34 @@ pub struct CaptureRegion {
 
 pub struct CapturedImage {
     pub dynamic_image: DynamicImage,
+}
+
+const MAX_CAPTURE_PIXELS: u64 = 64 * 1024 * 1024;
+
+fn validate_dimensions(width: i32, height: i32) -> Result<u64, String> {
+    if width <= 0 || height <= 0 || width > 16_384 || height > 16_384 {
+        return Err(format!(
+            "Invalid capture rectangle dimensions ({width}x{height})"
+        ));
+    }
+    let pixels = width as u64 * height as u64;
+    if pixels > MAX_CAPTURE_PIXELS {
+        return Err("Capture exceeds the 64 megapixel limit".into());
+    }
+    Ok(pixels)
+}
+
+fn contained_crop(
+    (x, y, width, height): (i32, i32, i32, i32),
+    (mx, my, mw, mh): (i32, i32, u32, u32),
+) -> Option<(u32, u32)> {
+    let dx = i64::from(x) - i64::from(mx);
+    let dy = i64::from(y) - i64::from(my);
+    (dx >= 0
+        && dy >= 0
+        && dx + i64::from(width) <= i64::from(mw)
+        && dy + i64::from(height) <= i64::from(mh))
+    .then_some((dx as u32, dy as u32))
 }
 
 struct GdiCaptureGuard {
@@ -59,7 +87,12 @@ impl Drop for GdiCaptureGuard {
 
 /// Capture a screen region via modern DirectX/Desktop Duplication (xcap)
 #[allow(dead_code)]
-fn capture_screen_rect_xcap(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
+fn capture_screen_rect_xcap(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<CapturedImage, String> {
     let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to list monitors: {}", e))?;
     if monitors.is_empty() {
         return Err("No active display monitors found".to_string());
@@ -73,9 +106,8 @@ fn capture_screen_rect_xcap(x: i32, y: i32, width: i32, height: i32) -> Result<C
             let my = m.y().unwrap_or(0);
             let mw = m.width().unwrap_or(0) as i32;
             let mh = m.height().unwrap_or(0) as i32;
-            x >= mx && x < mx + mw && y >= my && y < my + mh
+            contained_crop((x, y, width, height), (mx, my, mw as u32, mh as u32)).is_some()
         })
-        .or_else(|| xcap::Monitor::all().ok()?.into_iter().next())
         .ok_or_else(|| "Failed to locate target monitor for coordinates".to_string())?;
 
     let full_image = target_monitor
@@ -84,8 +116,11 @@ fn capture_screen_rect_xcap(x: i32, y: i32, width: i32, height: i32) -> Result<C
 
     let mon_x = target_monitor.x().unwrap_or(0);
     let mon_y = target_monitor.y().unwrap_or(0);
-    let rel_x = (x - mon_x).max(0) as u32;
-    let rel_y = (y - mon_y).max(0) as u32;
+    let (rel_x, rel_y) = contained_crop(
+        (x, y, width, height),
+        (mon_x, mon_y, full_image.width(), full_image.height()),
+    )
+    .ok_or("Capture region extends beyond the monitor")?;
 
     let crop_w = (width as u32).min(full_image.width().saturating_sub(rel_x));
     let crop_h = (height as u32).min(full_image.height().saturating_sub(rel_y));
@@ -105,7 +140,13 @@ fn capture_screen_rect_xcap(x: i32, y: i32, width: i32, height: i32) -> Result<C
 }
 
 /// Fallback capture via Win32 GDI BitBlt
-fn capture_screen_rect_gdi(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
+fn capture_screen_rect_gdi(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<CapturedImage, String> {
+    let pixels = validate_dimensions(width, height)?;
     unsafe {
         let h_wnd: HWND = 0 as HWND;
         let h_dc_screen: HDC = GetDC(h_wnd);
@@ -154,7 +195,10 @@ fn capture_screen_rect_gdi(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
 
-        let buffer_size = (width.max(0) as usize) * (height.max(0) as usize) * 4;
+        // GetDIBits requires the bitmap to be deselected from every DC.
+        SelectObject(h_dc_mem, h_old_bitmap);
+        guard.h_old_bitmap = std::ptr::null_mut();
+        let buffer_size = pixels as usize * 4;
         let mut raw_pixels = vec![0u8; buffer_size];
 
         let get_bits_ok = GetDIBits(
@@ -167,14 +211,14 @@ fn capture_screen_rect_gdi(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
             DIB_RGB_COLORS,
         );
 
-        if get_bits_ok == 0 {
+        if get_bits_ok != height {
             return Err("GetDIBits failed to extract pixel buffer".to_string());
         }
 
         // Convert raw BGRA to RGBA in-place to eliminate double heap allocation and reduce cache misses
         raw_pixels.chunks_exact_mut(4).for_each(|chunk| {
             chunk.swap(0, 2); // Swap B and R: [B, G, R, A] -> [R, G, B, A]
-            chunk[3] = 255;   // Ensure full opacity
+            chunk[3] = 255; // Ensure full opacity
         });
 
         let img_buffer: ImageBuffer<Rgba<u8>, Vec<u8>> =
@@ -183,106 +227,96 @@ fn capture_screen_rect_gdi(x: i32, y: i32, width: i32, height: i32) -> Result<Ca
 
         let dynamic_image = DynamicImage::ImageRgba8(img_buffer);
 
-        Ok(CapturedImage {
-            dynamic_image,
-        })
+        Ok(CapturedImage { dynamic_image })
     }
 }
 
 /// Capture a screen region with primary hardware acceleration (xcap) and GDI fallback
 #[allow(dead_code)]
-pub fn capture_screen_rect(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
-    if width <= 0 || height <= 0 || width > 16_384 || height > 16_384 {
-        return Err(format!("Invalid capture rectangle dimensions ({}x{})", width, height));
-    }
+pub fn capture_screen_rect(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<CapturedImage, String> {
+    validate_dimensions(width, height)?;
 
     match capture_screen_rect_xcap(x, y, width, height) {
         Ok(captured) => Ok(captured),
         Err(e) => {
-            tracing::warn!("[ScreenCapture] xcap capture failed ({}), falling back to Win32 GDI BitBlt", e);
+            tracing::warn!(
+                "[ScreenCapture] xcap capture failed ({}), falling back to Win32 GDI BitBlt",
+                e
+            );
             capture_screen_rect_gdi(x, y, width, height)
         }
     }
 }
 
-/// Single-frame batch screen capture for multiple regions on a strictly single monitor.
-/// Captures the full monitor once via xcap and performs in-memory crops for all regions.
-pub fn capture_monitor_regions(regions: &[CaptureRegion]) -> Result<HashMap<String, CapturedImage>, String> {
+/// Capture each required monitor once, retaining physical coordinates across displays.
+pub fn capture_monitor_regions(
+    regions: &[CaptureRegion],
+) -> Result<HashMap<String, CapturedImage>, String> {
     let mut results = HashMap::new();
-    let valid_regions: Vec<&CaptureRegion> = regions
-        .iter()
-        .filter(|r| {
-            let w = r.physical_width.unwrap_or(r.width);
-            let h = r.physical_height.unwrap_or(r.height);
-            w > 0 && h > 0 && w <= 16_384 && h <= 16_384
-        })
-        .collect();
-
-    if valid_regions.is_empty() {
-        return Ok(results);
+    if regions.len() > 64 {
+        return Err("At most 64 capture regions are supported".into());
     }
-
-    // Identify target monitor using the first valid region's coordinates
-    let first_r = valid_regions[0];
-    let first_x = first_r.physical_x.unwrap_or(first_r.x);
-    let first_y = first_r.physical_y.unwrap_or(first_r.y);
-
-    let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to list monitors: {}", e))?;
-    let target_monitor = monitors
-        .into_iter()
-        .find(|m| {
-            let mx = m.x().unwrap_or(0);
-            let my = m.y().unwrap_or(0);
-            let mw = m.width().unwrap_or(0) as i32;
-            let mh = m.height().unwrap_or(0) as i32;
-            first_x >= mx && first_x < mx + mw && first_y >= my && first_y < my + mh
-        })
-        .or_else(|| xcap::Monitor::all().ok()?.into_iter().next());
-
-    if let Some(monitor) = target_monitor {
-        if let Ok(full_image) = monitor.capture_image() {
-            let mon_x = monitor.x().unwrap_or(0);
-            let mon_y = monitor.y().unwrap_or(0);
-
-            for r in &valid_regions {
-                let rx = r.physical_x.unwrap_or(r.x);
-                let ry = r.physical_y.unwrap_or(r.y);
-                let rw = r.physical_width.unwrap_or(r.width);
-                let rh = r.physical_height.unwrap_or(r.height);
-
-                let rel_x = (rx - mon_x).max(0) as u32;
-                let rel_y = (ry - mon_y).max(0) as u32;
-                let crop_w = (rw as u32).min(full_image.width().saturating_sub(rel_x));
-                let crop_h = (rh as u32).min(full_image.height().saturating_sub(rel_y));
-
-                if crop_w > 0 && crop_h > 0 {
-                    let cropped = image::imageops::crop_imm(&full_image, rel_x, rel_y, crop_w, crop_h).to_image();
-                    results.insert(
-                        r.id.clone(),
-                        CapturedImage {
-                            dynamic_image: DynamicImage::ImageRgba8(cropped),
-                        },
-                    );
-                }
-            }
-
-            return Ok(results);
+    let mut total_pixels = 0;
+    let mut ids = std::collections::HashSet::new();
+    for r in regions {
+        total_pixels += validate_dimensions(
+            r.physical_width.unwrap_or(r.width),
+            r.physical_height.unwrap_or(r.height),
+        )?;
+        if total_pixels > MAX_CAPTURE_PIXELS {
+            return Err("Combined capture regions exceed the 64 megapixel limit".into());
+        }
+        if r.id.is_empty() || !ids.insert(&r.id) {
+            return Err("Capture region IDs must be unique and nonempty".into());
         }
     }
-
-    // Fallback: GDI BitBlt per region if xcap failed
-    tracing::warn!("[ScreenCapture] Batch xcap monitor capture failed, falling back to individual GDI BitBlt");
+    if regions.is_empty() {
+        return Ok(results);
+    }
+    let monitors = xcap::Monitor::all().unwrap_or_default();
+    let mut frames: HashMap<usize, Option<image::RgbaImage>> = HashMap::new();
     for r in regions {
         let rx = r.physical_x.unwrap_or(r.x);
         let ry = r.physical_y.unwrap_or(r.y);
         let rw = r.physical_width.unwrap_or(r.width);
         let rh = r.physical_height.unwrap_or(r.height);
-
-        if rw > 0 && rh > 0 {
-            if let Ok(cap) = capture_screen_rect_gdi(rx, ry, rw, rh) {
-                results.insert(r.id.clone(), cap);
+        let mut captured = None;
+        for (index, monitor) in monitors.iter().enumerate() {
+            let (Ok(mx), Ok(my), Ok(mw), Ok(mh)) =
+                (monitor.x(), monitor.y(), monitor.width(), monitor.height())
+            else {
+                continue;
+            };
+            if let Some((cx, cy)) = contained_crop((rx, ry, rw, rh), (mx, my, mw, mh)) {
+                if let Some(frame) = frames
+                    .entry(index)
+                    .or_insert_with(|| monitor.capture_image().ok())
+                {
+                    if cx as u64 + rw as u64 <= frame.width() as u64
+                        && cy as u64 + rh as u64 <= frame.height() as u64
+                    {
+                        captured = Some(CapturedImage {
+                            dynamic_image: DynamicImage::ImageRgba8(
+                                image::imageops::crop_imm(frame, cx, cy, rw as u32, rh as u32)
+                                    .to_image(),
+                            ),
+                        });
+                    }
+                }
+                break;
             }
         }
+        // Cross-monitor rectangles and failed xcap frames use the same validated GDI path.
+        let captured = match captured {
+            Some(c) => c,
+            None => capture_screen_rect_gdi(rx, ry, rw, rh)?,
+        };
+        results.insert(r.id.clone(), captured);
     }
 
     Ok(results)
@@ -324,6 +358,28 @@ mod tests {
         assert!(capture_screen_rect(0, 0, 0, 100).is_err());
         assert!(capture_screen_rect(0, 0, 100, -5).is_err());
         assert!(capture_screen_rect(0, 0, 20_000, 100).is_err());
+        assert!(capture_screen_rect_gdi(0, 0, i32::MAX, i32::MAX).is_err());
+        assert!(validate_dimensions(16_384, 16_384).is_err());
+    }
+
+    #[test]
+    fn physical_crop_handles_negative_and_cross_monitor_coordinates() {
+        assert_eq!(
+            contained_crop((-1800, 100, 200, 100), (-1920, 0, 1920, 1080)),
+            Some((120, 100))
+        );
+        assert_eq!(
+            contained_crop((-100, 0, 200, 100), (0, 0, 1920, 1080)),
+            None
+        );
+        assert_eq!(
+            contained_crop((1800, 0, 200, 100), (0, 0, 1920, 1080)),
+            None
+        );
+        assert_eq!(
+            contained_crop((i32::MAX, 0, 100, 100), (i32::MIN, 0, 1920, 1080)),
+            None
+        );
     }
 
     #[test]
@@ -342,4 +398,3 @@ mod tests {
         assert_eq!(halved.height(), 25);
     }
 }
-

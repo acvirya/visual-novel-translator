@@ -9,6 +9,7 @@ import { LlmProviderRegistry } from "./providers/llmProviderRegistry";
 import { eventBus } from "./eventBus";
 import { ManagedService } from "./appContainer";
 import { usageLogService, AiUsageStatus } from "./usageLogService";
+import { publishAuxiliaryTranslationLog, subscribeAuxiliaryTranslationLogs } from "./translationLogChannel";
 
 export interface TranslatePipelineOptions {
   id?: number;
@@ -72,14 +73,22 @@ class TranslationManager implements ManagedService {
   private isPausedInternal = false;
   private dialogueSeq = 0;
   private lastUsedProviderId = "";
+  private logUnsubscribe: (() => void) | null = null;
+  private logSubscription: Promise<void> | null = null;
 
-  public init() {
-    // Lifecycle init if needed
+  public init(): Promise<void> {
+    if (!this.logSubscription) this.logSubscription = subscribeAuxiliaryTranslationLogs((item) => this.notify(item))
+      .then((unsubscribe) => { this.logUnsubscribe = unsubscribe; })
+      .catch((error) => { logger.warn("TranslationManager", `Cannot subscribe to auxiliary logs: ${error}`); });
+    return this.logSubscription;
   }
 
-  public dispose() {
-    this.queue = [];
-    this.isProcessingQueue = false;
+  public async dispose() {
+    await this.logSubscription;
+    this.logUnsubscribe?.();
+    this.logUnsubscribe = null;
+    this.logSubscription = null;
+    this.clearQueue();
   }
 
   public subscribe(callback: (item: TranslationLogItem) => void) {
@@ -122,7 +131,10 @@ class TranslationManager implements ManagedService {
   }
 
   public notify(item: TranslationLogItem) {
-    this.listeners.forEach((cb) => cb(item));
+    publishAuxiliaryTranslationLog(item);
+    this.listeners.forEach((cb) => {
+      try { cb(item); } catch (err) { logger.error("TranslationManager", `Subscriber error: ${err}`); }
+    });
     this.emit({ type: "log", item });
   }
 
@@ -174,8 +186,8 @@ class TranslationManager implements ManagedService {
     const max = t?.maxContextLines ?? 10;
     const retain = t?.retainContextLines ?? 3;
     return {
-      maxContextLines: max < 1 ? 10 : max,
-      retainContextLines: retain < 1 ? 3 : retain,
+      maxContextLines: Math.max(0, max),
+      retainContextLines: Math.max(0, Math.min(retain, max)),
       maxCharsPerLine: this.getMaxCharsPerLine(),
     };
   }
@@ -198,7 +210,8 @@ class TranslationManager implements ManagedService {
 
     // Prune existing if exceeding new max
     if (this.contextHistory.length >= currentMax) {
-      this.contextHistory = this.contextHistory.slice(-Math.min(currentRetain, currentMax));
+      const retained = Math.max(0, Math.min(currentRetain, currentMax));
+      this.contextHistory = retained > 0 ? this.contextHistory.slice(-retained) : [];
       this.emit({ type: "contextLength", length: this.contextHistory.length });
     }
 
@@ -224,7 +237,16 @@ class TranslationManager implements ManagedService {
   }
 
   public clearQueue() {
-    this.queue = [];
+    const cancelled = this.queue.splice(0);
+    for (const task of cancelled) {
+      const item: TranslationLogItem = {
+        id: generateLogId("cancelled"), timestamp: new Date().toLocaleTimeString(),
+        provider: "Cancelled", durationMs: 0, sourceType: task.options.sourceType,
+        message: { source: task.options.message, translated: "" },
+      };
+      task.resolve({ success: false, item, message: task.options.message, translatedMessage: "",
+        provider: "Cancelled", durationMs: 0, error: "Translation queue cleared." });
+    }
     overlayChannel.send({ type: "RESET_SEQUENCE" });
   }
 
@@ -370,6 +392,7 @@ class TranslationManager implements ManagedService {
    * 5. Forwards result to Transparent Overlay and Live Translate Log Stream
    */
   private async executeTranslate(options: TranslatePipelineOptions, reqSeq: number = 0): Promise<TranslatePipelineResult> {
+    await settingsManager.ensureReady();
     const startTime = Date.now();
     const cleanMsg = options.message.trim();
     const cleanSpk = options.speaker?.trim() || undefined;
@@ -548,7 +571,7 @@ class TranslationManager implements ManagedService {
       });
       isSuccess = res.success;
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
-      translatedMessage = res.translatedMessage || cleanMsg;
+      translatedMessage = res.success ? res.translatedMessage : "";
       if (!res.success) {
         translationError = res.error || "Google Translate unavailable (CAPTCHA / Network Block)";
       }
@@ -565,7 +588,7 @@ class TranslationManager implements ManagedService {
       });
       isSuccess = res.success;
       translatedSpeaker = res.translatedSpeaker || cleanSpk;
-      translatedMessage = res.translatedMessage || cleanMsg;
+      translatedMessage = res.success ? res.translatedMessage : "";
       if (!res.success) {
         translationError = res.error || "DeepL Free translation failed";
       }
@@ -582,7 +605,7 @@ class TranslationManager implements ManagedService {
 
       const apiKey = parsedProvider === "openrouter"
         ? settingsManager.getOpenRouterApiKey()
-        : (providerCfg.apiKey || settingsManager.getOpenRouterApiKey());
+        : providerCfg.apiKey;
 
       const res = await translateWithOpenRouter({
         apiKey,
@@ -736,8 +759,8 @@ class TranslationManager implements ManagedService {
     this.contextHistory.push({ user, assistant });
 
     if (this.contextHistory.length > maxContextLines) {
-      const retainCount = Math.max(1, Math.min(retainContextLines, maxContextLines));
-      this.contextHistory = this.contextHistory.slice(-retainCount);
+      const retainCount = Math.max(0, Math.min(retainContextLines, maxContextLines));
+      this.contextHistory = retainCount > 0 ? this.contextHistory.slice(-retainCount) : [];
     }
 
     this.emit({ type: "contextLength", length: this.contextHistory.length });

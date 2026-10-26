@@ -82,7 +82,7 @@ export const ReasoningSettingsCard: React.FC<ReasoningSettingsCardProps> = ({
         </div>
 
         {/* Reasoning Grid: Effort + Custom Max Tokens */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "14px" }}>
           {/* Reasoning Effort */}
           <div>
             <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>

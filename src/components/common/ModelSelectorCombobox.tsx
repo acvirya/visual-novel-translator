@@ -354,7 +354,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
       return searchFilter;
     }
     if (selectedModelId === "mt:google-translate") return "Google Translate (Free MT)";
-    if (selectedModelId === "mt:deepl-free") return "DeepL Free (Web Endpoint)";
+    if (selectedModelId === "mt:deepl-free") return "DeepL API Free (Key required)";
     if (currentModel) {
       const parsed = splitModelProviderAndName(currentModel);
       return `${parsed.modelName} [${parsed.provider}]`;
@@ -699,7 +699,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
                   }}
                 >
                   <div>
-                    <span style={{ fontWeight: 600, fontSize: "12px" }}>DeepL Free (Web Endpoint)</span>
+                    <span style={{ fontWeight: 600, fontSize: "12px" }}>DeepL API Free (Key required)</span>
                     <span style={{ fontSize: "10.5px", color: "var(--text-muted)", display: "block" }}>
                       Natural Japanese nuance MT scraper
                     </span>

@@ -26,6 +26,7 @@ class OverlayChannel {
   private lastEventSignature = "";
   private lastEventTime = 0;
   private tauriUnlistenFn: UnlistenFn | null = null;
+  private destroyed = false;
 
   constructor() {
     if (typeof window !== "undefined" && "BroadcastChannel" in window) {
@@ -44,7 +45,8 @@ class OverlayChannel {
       listen<OverlayEvent>("vn-overlay-event", (tauriEvent) => {
         this.handleIncoming(tauriEvent.payload);
       }).then((unlisten) => {
-        this.tauriUnlistenFn = unlisten;
+        if (this.destroyed) unlisten();
+        else this.tauriUnlistenFn = unlisten;
       }).catch((err) => {
         logger.warn("OverlayChannel", `Failed to register Tauri native listener for vn-overlay-event: ${err}`);
       });
@@ -53,17 +55,19 @@ class OverlayChannel {
 
   private handleIncoming(event: OverlayEvent) {
     if (!event || !event.type) return;
+    if (event.type === "DIALOGUE_UPDATE" && (!event.dialogue || typeof event.dialogue !== "object")) return;
+    if (event.type === "CONFIG_UPDATE" && (!event.config || typeof event.config !== "object")) return;
 
     // Fast deduplicate event if delivered through both BroadcastChannel and Tauri native event (PERF-04)
     let sig: string = event.type;
     if (event.type === "DIALOGUE_UPDATE") {
-      sig = `dlg_${event.dialogue.id}_${event.dialogue.message}_${event.dialogue.translatedMessage || ""}`;
+      sig = JSON.stringify(event);
     } else if (event.type === "SET_EDIT_MODE") {
       sig = `edit_${event.isEditing}`;
     } else if (event.type === "POSITION_SAVED") {
       sig = `pos_${event.x}_${event.y}_${event.width}_${event.height}`;
     } else if (event.type === "CONFIG_UPDATE") {
-      sig = `cfg_${event.config.x}_${event.config.y}_${event.config.width}_${event.config.height}_${event.config.targetMonitor}`;
+      sig = JSON.stringify(event);
     }
 
     const now = Date.now();
@@ -88,7 +92,9 @@ class OverlayChannel {
       });
     }
 
-    this.listeners.forEach((cb) => cb(event));
+    this.listeners.forEach((cb) => {
+      try { cb(event); } catch (err) { logger.error("OverlayChannel", `Subscriber failed: ${err}`); }
+    });
   }
 
   public send(event: OverlayEvent) {
@@ -145,6 +151,7 @@ class OverlayChannel {
   }
 
   public destroy() {
+    this.destroyed = true;
     if (this.channel) {
       try {
         this.channel.close();

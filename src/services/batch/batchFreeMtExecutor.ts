@@ -1,6 +1,6 @@
 import { translateWithFreeMt } from "../freeMtService";
 import { cleanSpeakerName, executePreprocessingPipeline } from "../../utils/textPreprocessor";
-import { BatchItem, BatchSettings } from "../../utils/batchFileUtils";
+import { BatchItem, BatchSettings, cancellableSleep } from "../../utils/batchFileUtils";
 
 export interface BatchLineTranslatedPayload {
   id: number;
@@ -44,12 +44,15 @@ export async function executeBatchFreeMt(params: {
       provider,
     });
 
+    if (abortSignal?.aborted) throw new Error("Translation cancelled by user.");
+
     if (!res.success || !res.translatedMessage) {
       throw new Error(res.error || "Translation engine returned failure");
     }
 
     item.translatedSpeaker = res.translatedSpeaker || cleanSpk;
     item.translatedMessage = res.translatedMessage;
+    if (filterIds?.has(item.id)) item.explicitRetranslated = true;
 
     onLineTranslated({
       id: item.id,
@@ -61,7 +64,7 @@ export async function executeBatchFreeMt(params: {
     });
 
     if (settings.delayMs > 0) {
-      await new Promise((r) => setTimeout(r, settings.delayMs));
+      await cancellableSleep(settings.delayMs, abortSignal);
     }
   }
 }

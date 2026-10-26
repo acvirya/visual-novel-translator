@@ -1,28 +1,33 @@
+use super::types::{OpenRouterCompletionResponse, StreamEvent};
+use crate::http::{
+    format_reqwest_error, get_http_client, parse_request_payload, validate_provider_url,
+};
+use dashmap::DashMap;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::ipc::Channel;
-use crate::http::{format_reqwest_error, get_http_client};
-use super::types::{OpenRouterCompletionResponse, StreamEvent};
-use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
-use std::sync::OnceLock;
 
 static ACTIVE_STREAM_TOKENS: OnceLock<DashMap<String, CancellationToken>> = OnceLock::new();
-static GLOBAL_STREAM_CANCEL_TOKEN: OnceLock<parking_lot::RwLock<CancellationToken>> = OnceLock::new();
+static GLOBAL_STREAM_CANCEL_TOKEN: OnceLock<parking_lot::RwLock<CancellationToken>> =
+    OnceLock::new();
 
 pub fn get_stream_tokens() -> &'static DashMap<String, CancellationToken> {
     ACTIVE_STREAM_TOKENS.get_or_init(DashMap::new)
 }
 
 pub fn get_global_stream_token() -> CancellationToken {
-    let lock = GLOBAL_STREAM_CANCEL_TOKEN.get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
+    let lock = GLOBAL_STREAM_CANCEL_TOKEN
+        .get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
     let guard = lock.read();
     guard.child_token()
 }
 
 #[tauri::command]
 pub fn cancel_all_llm_streams() {
-    let lock = GLOBAL_STREAM_CANCEL_TOKEN.get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
+    let lock = GLOBAL_STREAM_CANCEL_TOKEN
+        .get_or_init(|| parking_lot::RwLock::new(CancellationToken::new()));
     let old_token = {
         let mut guard = lock.write();
         let old = guard.clone();
@@ -31,19 +36,32 @@ pub fn cancel_all_llm_streams() {
     };
     old_token.cancel();
 
-    for item in get_stream_tokens().iter() {
-        item.value().cancel();
-    }
-    get_stream_tokens().clear();
     tracing::info!("[LLM] Cancelled all active LLM streams");
 }
 
 #[tauri::command]
 pub fn cancel_llm_stream(stream_id: String) {
-    if let Some((_, token)) = get_stream_tokens().remove(&stream_id) {
+    if let Some(token) = get_stream_tokens().get(&stream_id) {
         token.cancel();
         tracing::info!("[LLM] Cancelled stream {}", stream_id);
     }
+}
+
+fn register_stream(stream_id: &Option<String>, token: &CancellationToken) -> Result<(), String> {
+    if let Some(id) = stream_id {
+        if id.is_empty() || id.len() > 256 {
+            return Err("Invalid stream ID".into());
+        }
+        match get_stream_tokens().entry(id.clone()) {
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(token.clone());
+            }
+            dashmap::mapref::entry::Entry::Occupied(_) => {
+                return Err("Stream ID is already active".into())
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Robust check if text is a completed JSON object or array (supports direct JSON and markdown fenced JSON)
@@ -53,7 +71,9 @@ pub fn is_json_completed(text: &str) -> bool {
         return false;
     }
     // Direct JSON object or array
-    if (t.ends_with('}') || t.ends_with(']')) && serde_json::from_str::<serde_json::Value>(t).is_ok() {
+    if (t.ends_with('}') || t.ends_with(']'))
+        && serde_json::from_str::<serde_json::Value>(t).is_ok()
+    {
         return true;
     }
     // Markdown fenced JSON e.g. ```json ... ```
@@ -71,6 +91,7 @@ pub fn is_json_completed(text: &str) -> bool {
 }
 
 /// Internal helper for processing stream chunks with a custom event emitter closure
+#[allow(clippy::too_many_arguments)] // Existing incremental parser API keeps independent output buffers.
 pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
     c: &str,
     tag_buffer: &mut String,
@@ -103,7 +124,9 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
                 let max_check = 8.min(tag_buffer.len());
                 for len in (1..=max_check).rev() {
                     let start_idx = tag_buffer.len() - len;
-                    if tag_buffer.is_char_boundary(start_idx) && "</think>".starts_with(&tag_buffer[start_idx..]) {
+                    if tag_buffer.is_char_boundary(start_idx)
+                        && "</think>".starts_with(&tag_buffer[start_idx..])
+                    {
                         prefix_len = len;
                         break;
                     }
@@ -141,7 +164,9 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
                 let max_check = 7.min(tag_buffer.len());
                 for len in (1..=max_check).rev() {
                     let start_idx = tag_buffer.len() - len;
-                    if tag_buffer.is_char_boundary(start_idx) && "<think>".starts_with(&tag_buffer[start_idx..]) {
+                    if tag_buffer.is_char_boundary(start_idx)
+                        && "<think>".starts_with(&tag_buffer[start_idx..])
+                    {
                         prefix_len = len;
                         break;
                     }
@@ -165,6 +190,7 @@ pub fn process_stream_content_chunk_generic<F: FnMut(StreamEvent)>(
 
 /// Helper that handles split `<think>` and `</think>` tags across token chunks using a sliding window buffer.
 /// Returns true if all events were successfully sent to the channel, or false if the channel was closed/dropped.
+#[allow(clippy::too_many_arguments)]
 pub fn process_stream_content_chunk(
     c: &str,
     tag_buffer: &mut String,
@@ -326,12 +352,24 @@ async fn handle_sse_stream(
                     buffer.push_str(&String::from_utf8_lossy(&raw_bytes_buffer));
                     raw_bytes_buffer.clear();
                 }
+                if !content_finished && !is_json_completed(&accumulated_content) {
+                    stream_failed = true;
+                    last_error = "Stream ended before the provider completed its response".into();
+                }
                 let _ = on_event.send(StreamEvent::Status("validating".to_string()));
                 break 'chunk_loop;
             }
         };
 
         raw_bytes_buffer.extend_from_slice(&chunk);
+        if raw_bytes_buffer.len()
+            + buffer.len()
+            + accumulated_content.len()
+            + accumulated_reasoning.len()
+            > 32 * 1024 * 1024
+        {
+            return Err((false, "LLM stream exceeds the 32 MiB response limit".into()));
+        }
         loop {
             match std::str::from_utf8(&raw_bytes_buffer) {
                 Ok(valid_str) => {
@@ -349,7 +387,9 @@ async fn handle_sse_stream(
                     match e.error_len() {
                         Some(err_len) => {
                             let invalid_end = valid_len + err_len;
-                            buffer.push_str(&String::from_utf8_lossy(&raw_bytes_buffer[valid_len..invalid_end]));
+                            buffer.push_str(&String::from_utf8_lossy(
+                                &raw_bytes_buffer[valid_len..invalid_end],
+                            ));
                             raw_bytes_buffer.drain(..invalid_end);
                         }
                         None => {
@@ -388,7 +428,12 @@ async fn handle_sse_stream(
                             || msg.contains("queue-time")
                             || msg.contains("rate limit")
                             || msg.contains("temporarily unavailable");
-                        return Err((is_transient, format!("Stream Upstream Error ({}): {}", code, msg)));
+                        return Err((
+                            is_transient
+                                && accumulated_content.is_empty()
+                                && accumulated_reasoning.is_empty(),
+                            format!("Stream Upstream Error ({}): {}", code, msg),
+                        ));
                     }
 
                     if is_anthropic {
@@ -397,7 +442,8 @@ async fn handle_sse_stream(
                             if let Some(cb) = parsed.get("content_block") {
                                 if cb["type"] == "thinking" && !in_reasoning_phase {
                                     in_reasoning_phase = true;
-                                    let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                    let _ =
+                                        on_event.send(StreamEvent::Status("thinking".to_string()));
                                 }
                             }
                         } else if event_type == "content_block_delta" {
@@ -408,10 +454,13 @@ async fn handle_sse_stream(
                                         if !t.is_empty() {
                                             if !in_reasoning_phase {
                                                 in_reasoning_phase = true;
-                                                let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                                let _ = on_event.send(StreamEvent::Status(
+                                                    "thinking".to_string(),
+                                                ));
                                             }
                                             accumulated_reasoning.push_str(t);
-                                            let _ = on_event.send(StreamEvent::Reasoning(t.to_string()));
+                                            let _ = on_event
+                                                .send(StreamEvent::Reasoning(t.to_string()));
                                         }
                                     }
                                 } else if delta_type == "text_delta" {
@@ -419,10 +468,13 @@ async fn handle_sse_stream(
                                         if !text.is_empty() {
                                             if !in_content_phase {
                                                 in_content_phase = true;
-                                                let _ = on_event.send(StreamEvent::Status("translating".to_string()));
+                                                let _ = on_event.send(StreamEvent::Status(
+                                                    "translating".to_string(),
+                                                ));
                                             }
                                             accumulated_content.push_str(text);
-                                            let _ = on_event.send(StreamEvent::Chunk(text.to_string()));
+                                            let _ =
+                                                on_event.send(StreamEvent::Chunk(text.to_string()));
                                         }
                                     }
                                 }
@@ -437,6 +489,10 @@ async fn handle_sse_stream(
                                 }
                             }
                         } else if event_type == "message_delta" {
+                            if let Some(reason) = parsed["delta"]["stop_reason"].as_str() {
+                                last_finish_reason = reason.to_string();
+                                content_finished = true;
+                            }
                             if let Some(usage) = parsed.get("usage") {
                                 has_usage = true;
                                 if let Some(ot) = usage["output_tokens"].as_u64() {
@@ -454,22 +510,38 @@ async fn handle_sse_stream(
                         }
                     } else {
                         // OpenAI / OpenRouter format
-                        if let Some(usage) = parsed.get("usage") {
+                        if let Some(usage) = parsed.get("usage").filter(|u| u.is_object()) {
                             has_usage = true;
-                            if let Some(pt) = usage["prompt_tokens"].as_u64().or_else(|| usage["input_tokens"].as_u64()) {
+                            if let Some(pt) = usage["prompt_tokens"]
+                                .as_u64()
+                                .or_else(|| usage["input_tokens"].as_u64())
+                            {
                                 prompt_tokens = pt as u32;
                             }
-                            if let Some(ct) = usage["completion_tokens"].as_u64().or_else(|| usage["output_tokens"].as_u64()) {
+                            if let Some(ct) = usage["completion_tokens"]
+                                .as_u64()
+                                .or_else(|| usage["output_tokens"].as_u64())
+                            {
                                 completion_tokens = ct as u32;
                             }
-                            if let Some(c) = usage["total_cost"].as_f64().or_else(|| usage["cost"].as_f64()) {
+                            if let Some(c) = usage["total_cost"]
+                                .as_f64()
+                                .or_else(|| usage["cost"].as_f64())
+                            {
                                 cost = c;
                             }
                             if let Some(ptd) = usage.get("prompt_tokens_details") {
-                                if let Some(cached) = ptd["cached_tokens"].as_u64().or_else(|| ptd["cache_read_input_tokens"].as_u64()) {
+                                if let Some(cached) = ptd["cached_tokens"]
+                                    .as_u64()
+                                    .or_else(|| ptd["cache_read_input_tokens"].as_u64())
+                                {
                                     cached_tokens = cached as u32;
                                 }
-                            } else if let Some(cached) = usage["cached_tokens"].as_u64().or_else(|| usage["cache_read_input_tokens"].as_u64()).or_else(|| usage["cached_content_token_count"].as_u64()) {
+                            } else if let Some(cached) = usage["cached_tokens"]
+                                .as_u64()
+                                .or_else(|| usage["cache_read_input_tokens"].as_u64())
+                                .or_else(|| usage["cached_content_token_count"].as_u64())
+                            {
                                 cached_tokens = cached as u32;
                             }
                             let _ = on_event.send(StreamEvent::Usage {
@@ -481,9 +553,10 @@ async fn handle_sse_stream(
                         }
 
                         if let Some(choices) = parsed["choices"].as_array() {
-                            if let Some(choice) = choices.get(0) {
+                            if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
-                                    let reasoning_chunk = delta["reasoning"].as_str()
+                                    let reasoning_chunk = delta["reasoning"]
+                                        .as_str()
                                         .or_else(|| delta["reasoning_content"].as_str())
                                         .or_else(|| delta["thinking"].as_str());
 
@@ -491,10 +564,13 @@ async fn handle_sse_stream(
                                         if !r.is_empty() {
                                             if !in_reasoning_phase {
                                                 in_reasoning_phase = true;
-                                                let _ = on_event.send(StreamEvent::Status("thinking".to_string()));
+                                                let _ = on_event.send(StreamEvent::Status(
+                                                    "thinking".to_string(),
+                                                ));
                                             }
                                             accumulated_reasoning.push_str(r);
-                                            let _ = on_event.send(StreamEvent::Reasoning(r.to_string()));
+                                            let _ = on_event
+                                                .send(StreamEvent::Reasoning(r.to_string()));
                                         }
                                     }
 
@@ -510,16 +586,26 @@ async fn handle_sse_stream(
                                             on_event,
                                         ) {
                                             tracing::warn!("[LLM] Stream IPC receiver dropped; aborting stream");
-                                            return Err((false, "Client disconnected from stream channel".to_string()));
+                                            return Err((
+                                                false,
+                                                "Client disconnected from stream channel"
+                                                    .to_string(),
+                                            ));
                                         }
                                     }
                                 }
 
-                                if let Some(fr) = choice.get("finish_reason")
+                                if let Some(fr) = choice
+                                    .get("finish_reason")
                                     .or_else(|| choice.get("stop_reason"))
-                                    .or_else(|| choice.get("delta").and_then(|d| d.get("stop_reason")))
-                                    .or_else(|| parsed.get("delta").and_then(|d| d.get("stop_reason")))
-                                    .and_then(|f| f.as_str()) {
+                                    .or_else(|| {
+                                        choice.get("delta").and_then(|d| d.get("stop_reason"))
+                                    })
+                                    .or_else(|| {
+                                        parsed.get("delta").and_then(|d| d.get("stop_reason"))
+                                    })
+                                    .and_then(|f| f.as_str())
+                                {
                                     if !fr.is_empty() && fr != "null" {
                                         content_finished = true;
                                         last_finish_reason = fr.to_string();
@@ -535,11 +621,6 @@ async fn handle_sse_stream(
                     }
                 }
             }
-        }
-
-        if buffer.contains("[DONE]") {
-            let _ = on_event.send(StreamEvent::Status("validating".to_string()));
-            break 'chunk_loop;
         }
     }
 
@@ -562,7 +643,10 @@ async fn handle_sse_stream(
         } else {
             "Stream failed or disconnected prematurely before completing output".to_string()
         };
-        return Err((true, err_msg));
+        return Err((
+            accumulated_content.is_empty() && accumulated_reasoning.is_empty(),
+            err_msg,
+        ));
     }
 
     let final_content = if !accumulated_content.trim().is_empty() {
@@ -588,6 +672,7 @@ async fn handle_sse_stream(
                 ),
             ));
         }
+        return Err((false, "Provider returned an empty translation".into()));
     }
 
     Ok(OpenRouterCompletionResponse {
@@ -600,6 +685,7 @@ async fn handle_sse_stream(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Named arguments are part of the public Tauri IPC contract.
 pub async fn openrouter_stream_chat_completion(
     api_key: String,
     model_id: String,
@@ -613,9 +699,7 @@ pub async fn openrouter_stream_chat_completion(
     on_event: Channel<StreamEvent>,
 ) -> Result<OpenRouterCompletionResponse, String> {
     let cancel_token = CancellationToken::new();
-    if let Some(ref sid) = stream_id {
-        get_stream_tokens().insert(sid.clone(), cancel_token.clone());
-    }
+    register_stream(&stream_id, &cancel_token)?;
     let _stream_guard = StreamIdGuard(&stream_id);
     let global_token = get_global_stream_token();
 
@@ -651,7 +735,10 @@ pub async fn openrouter_stream_chat_completion(
             .header("Authorization", format!("Bearer {}", api_key.trim()))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
-            .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
+            .header(
+                "HTTP-Referer",
+                "https://github.com/acvirya/visual-novel-translator",
+            )
             .header("X-Title", "Visual Novel Translator")
             .json(&payload);
 
@@ -689,12 +776,20 @@ pub async fn openrouter_stream_chat_completion(
                     || body_text.contains("schema"));
 
             if is_format_error {
+                last_error = format!("OpenRouter API error (HTTP {}): {}", status, body_text);
                 super::payload::remove_format_from_payload(&mut payload);
                 continue;
             }
 
             let status_code = status.as_u16();
-            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504 || body_text.contains("unreachable") || body_text.contains("temporarily unavailable") || body_text.contains("high demand");
+            let is_transient = status_code == 429
+                || status_code == 500
+                || status_code == 502
+                || status_code == 503
+                || status_code == 504
+                || body_text.contains("unreachable")
+                || body_text.contains("temporarily unavailable")
+                || body_text.contains("high demand");
             if is_transient && attempt < max_attempts {
                 last_error = format!("OpenRouter API error (HTTP {}): {}", status, body_text);
                 tokio::select! {
@@ -704,10 +799,22 @@ pub async fn openrouter_stream_chat_completion(
                 }
                 continue;
             }
-            return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
+            return Err(format!(
+                "OpenRouter API error (HTTP {}): {}",
+                status, body_text
+            ));
         }
 
-        match handle_sse_stream(resp, timeout_duration, cancel_token.clone(), global_token.clone(), &on_event, false).await {
+        match handle_sse_stream(
+            resp,
+            timeout_duration,
+            cancel_token.clone(),
+            global_token.clone(),
+            &on_event,
+            false,
+        )
+        .await
+        {
             Ok(result) => return Ok(result),
             Err((true, err)) => {
                 last_error = err;
@@ -737,22 +844,23 @@ pub async fn llm_stream_chat_completion(
     stream_id: Option<String>,
     on_event: Channel<StreamEvent>,
 ) -> Result<OpenRouterCompletionResponse, String> {
+    let parsed_url = validate_provider_url(&url)?;
     let cancel_token = CancellationToken::new();
-    if let Some(ref sid) = stream_id {
-        get_stream_tokens().insert(sid.clone(), cancel_token.clone());
-    }
+    register_stream(&stream_id, &cancel_token)?;
     let _stream_guard = StreamIdGuard(&stream_id);
     let global_token = get_global_stream_token();
 
     let client = get_http_client().map_err(|e| e.to_string())?;
     let timeout_duration = Duration::from_secs(timeout_seconds.unwrap_or(600));
 
-    let mut payload: serde_json::Value = serde_json::from_str(&payload_json)
-        .map_err(|e| format!("Invalid payload JSON: {}", e))?;
+    let mut payload = parse_request_payload(&payload_json)?;
 
     // Ensure stream is enabled in payload
     payload["stream"] = serde_json::json!(true);
-    let is_anthropic = url.contains("/messages");
+    let is_anthropic = parsed_url
+        .path()
+        .trim_end_matches('/')
+        .ends_with("/messages");
     if !is_anthropic {
         payload["stream_options"] = serde_json::json!({ "include_usage": true });
     }
@@ -810,6 +918,7 @@ pub async fn llm_stream_chat_completion(
                     || body_text.contains("schema"));
 
             if is_format_error {
+                last_error = format!("LLM API error (HTTP {}): {}", status, body_text);
                 let mut fallback_payload = payload.clone();
                 if let Some(map) = fallback_payload.as_object_mut() {
                     map.remove("response_format");
@@ -820,7 +929,11 @@ pub async fn llm_stream_chat_completion(
             }
 
             let status_code = status.as_u16();
-            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504;
+            let is_transient = status_code == 429
+                || status_code == 500
+                || status_code == 502
+                || status_code == 503
+                || status_code == 504;
             if is_transient && attempt < max_attempts {
                 last_error = format!("LLM API error (HTTP {}): {}", status, body_text);
                 tokio::select! {
@@ -833,7 +946,16 @@ pub async fn llm_stream_chat_completion(
             return Err(format!("LLM API error (HTTP {}): {}", status, body_text));
         }
 
-        match handle_sse_stream(resp, timeout_duration, cancel_token.clone(), global_token.clone(), &on_event, is_anthropic).await {
+        match handle_sse_stream(
+            resp,
+            timeout_duration,
+            cancel_token.clone(),
+            global_token.clone(),
+            &on_event,
+            is_anthropic,
+        )
+        .await
+        {
             Ok(result) => return Ok(result),
             Err((true, err)) => {
                 last_error = err;
@@ -1002,14 +1124,18 @@ mod tests {
                         Err(e) => {
                             let valid_len = e.valid_up_to();
                             if valid_len > 0 {
-                                if let Ok(valid_str) = std::str::from_utf8(&raw_bytes_buffer[..valid_len]) {
+                                if let Ok(valid_str) =
+                                    std::str::from_utf8(&raw_bytes_buffer[..valid_len])
+                                {
                                     buffer.push_str(valid_str);
                                 }
                             }
                             match e.error_len() {
                                 Some(err_len) => {
                                     let invalid_end = valid_len + err_len;
-                                    buffer.push_str(&String::from_utf8_lossy(&raw_bytes_buffer[valid_len..invalid_end]));
+                                    buffer.push_str(&String::from_utf8_lossy(
+                                        &raw_bytes_buffer[valid_len..invalid_end],
+                                    ));
                                     raw_bytes_buffer.drain(..invalid_end);
                                 }
                                 None => {
@@ -1027,8 +1153,11 @@ mod tests {
             }
 
             assert_eq!(buffer, full_text, "Failed at chunk_size = {}", chunk_size);
-            assert!(!buffer.contains('\u{FFFD}'), "Contained replacement character at chunk_size = {}", chunk_size);
+            assert!(
+                !buffer.contains('\u{FFFD}'),
+                "Contained replacement character at chunk_size = {}",
+                chunk_size
+            );
         }
     }
 }
-

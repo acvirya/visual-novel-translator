@@ -83,17 +83,9 @@ export async function writeBatchDebugLog(params: {
 
   const logEntry = JSON.stringify(logObj) + "\n";
 
-  const logTargets = ["batch_debug_log.jsonl"];
-  if (params.outputDir && params.outputDir.trim()) {
-    const dir = params.outputDir.replace(/\\/g, "/").replace(/\/$/, "");
-    logTargets.push(`${dir}/batch_debug_log.jsonl`);
-  }
-
-  for (const target of logTargets) {
-    try {
-      await TauriBridge.appendDebugLog(target, logEntry);
-    } catch (e) {
-      logger.warn("BatchPromptBuilder", `Failed to write debug log to ${target}:`, e);
-    }
+  try {
+    await TauriBridge.appendDebugLog("batch_debug_log.jsonl", logEntry);
+  } catch (e) {
+    logger.warn("BatchPromptBuilder", "Failed to write batch debug log:", e);
   }
 }

@@ -33,7 +33,7 @@ export const SecureStorageService = {
       return key ?? null;
     } catch (err) {
       logger.warn("SecureStorage", `Failed to get key for ${providerId}: ${err}`);
-      return inMemoryKeyring.get(providerId) ?? null;
+      throw new Error("Unable to read credentials from the operating system secure storage.");
     }
   },
 
@@ -57,15 +57,11 @@ export const SecureStorageService = {
       } else {
         await TauriBridge.deleteSecureKey(providerId);
       }
-      inMemoryKeyring.set(providerId, trimmed);
+      if (trimmed) inMemoryKeyring.set(providerId, trimmed);
+      else inMemoryKeyring.delete(providerId);
     } catch (err) {
       logger.error("SecureStorage", `Failed to set key for ${providerId}: ${err}`);
-      // Fallback to memory so runtime doesn't break
-      if (trimmed) {
-        inMemoryKeyring.set(providerId, trimmed);
-      } else {
-        inMemoryKeyring.delete(providerId);
-      }
+      throw new Error("The API key could not be saved securely. Please retry.");
     }
   },
 
@@ -73,14 +69,16 @@ export const SecureStorageService = {
    * Delete an API key from OS Keyring
    */
   async deleteApiKey(providerId: string): Promise<void> {
-    inMemoryKeyring.delete(providerId);
     if (!this.isTauriEnvironment()) {
+      inMemoryKeyring.delete(providerId);
       return;
     }
     try {
       await TauriBridge.deleteSecureKey(providerId);
+      inMemoryKeyring.delete(providerId);
     } catch (err) {
       logger.warn("SecureStorage", `Failed to delete key for ${providerId}: ${err}`);
+      throw new Error("The API key could not be deleted from secure storage.");
     }
   },
 

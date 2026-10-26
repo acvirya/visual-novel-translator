@@ -39,8 +39,8 @@ export const useTranslationStore = create<TranslationState>((set) => {
   const savedThreshold = scriptManagerService.getMatchThreshold();
 
   const initialContext: LlmContextSettings = {
-    maxContextLines: translationSettings.maxContextLines || 10,
-    retainContextLines: translationSettings.retainContextLines || 3,
+    maxContextLines: translationSettings.maxContextLines ?? 10,
+    retainContextLines: translationSettings.retainContextLines ?? 3,
     maxCharsPerLine: translationSettings.maxCharsPerLine || 250,
   };
 
@@ -51,8 +51,8 @@ export const useTranslationStore = create<TranslationState>((set) => {
       const effort = newSettings.translation.reasoningEffort || "default";
       const scriptOnly = newSettings.translation.useScriptOnly ?? false;
       const ctx: LlmContextSettings = {
-        maxContextLines: newSettings.translation.maxContextLines || 10,
-        retainContextLines: newSettings.translation.retainContextLines || 3,
+        maxContextLines: newSettings.translation.maxContextLines ?? 10,
+        retainContextLines: newSettings.translation.retainContextLines ?? 3,
         maxCharsPerLine: newSettings.translation.maxCharsPerLine || 250,
       };
 

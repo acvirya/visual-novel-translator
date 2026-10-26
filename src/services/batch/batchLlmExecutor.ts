@@ -38,6 +38,7 @@ export async function executeBatchLlm(params: {
   abortController: AbortController | null;
   realToVirtualMap?: Map<number, number>;
 }): Promise<WholeTurnBatch> {
+  await settingsManager.ensureReady();
   const {
     items,
     apiKey,
@@ -55,10 +56,10 @@ export async function executeBatchLlm(params: {
   const resolvedKey = (
     providerId === "openrouter"
       ? (apiKey || providerCfg.apiKey)
-      : (providerCfg.apiKey || apiKey)
+      : providerCfg.apiKey
   || "").trim();
 
-  if (!resolvedKey) {
+  if (!resolvedKey && providerId !== "custom") {
     const providerDef = LlmProviderRegistry.getProvider(providerId);
     throw new Error(`${providerDef?.name || "LLM"} API Key is missing. Please configure and verify your API key in Translation Providers.`);
   }
@@ -155,7 +156,6 @@ export async function executeBatchLlm(params: {
 
   const handleStreamEvent = (event: StreamEvent) => {
     if (abortController?.signal.aborted) return;
-    if (!fileContext) return;
 
     if (event.type === "Status") {
       flushStreamState(event.data as any);
@@ -196,7 +196,25 @@ export async function executeBatchLlm(params: {
     }
   };
 
+  const streamId = `batch_${crypto.randomUUID()}`;
+  let abortHandler: (() => void) | undefined;
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelStream = () => { void TauriBridge.cancelLlmStream(streamId).catch(() => {}); };
   try {
+    if (abortController?.signal.aborted) throw new Error("Translation cancelled by user.");
+    const abortPromise = new Promise<never>((_, reject) => {
+      abortHandler = () => {
+        cancelStream();
+        reject(new Error("Translation cancelled by user."));
+      };
+      abortController?.signal.addEventListener("abort", abortHandler, { once: true });
+    });
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        cancelStream();
+        reject(new Error(`LLM stream response timed out after ${timeoutSeconds}s.`));
+      }, (timeoutSeconds + 10) * 1000);
+    });
     if (providerId !== "openrouter") {
       const reasoningCfg = settingsManager.getReasoningSettings();
       const executePromise = LlmDispatcherService.executeChat({
@@ -208,26 +226,11 @@ export async function executeBatchLlm(params: {
         excludeReasoning: false,
         timeoutSeconds,
         overrideApiKey: resolvedKey,
+        streamId,
         onEvent: handleStreamEvent,
       });
-
-      let abortHandler: (() => void) | undefined;
-      const abortPromise = new Promise<never>((_, reject) => {
-        if (abortController?.signal.aborted) {
-          return reject(new Error("Translation cancelled by user."));
-        }
-        abortHandler = () => reject(new Error("Translation cancelled by user."));
-        abortController?.signal.addEventListener("abort", abortHandler, { once: true });
-      });
-
-      let nativeRes: any;
-      try {
-        nativeRes = await Promise.race([executePromise, abortPromise]);
-      } finally {
-        if (abortHandler && abortController?.signal) {
-          abortController.signal.removeEventListener("abort", abortHandler);
-        }
-      }
+      const nativeRes = await Promise.race([executePromise, abortPromise, timeoutPromise]);
+      flushStreamState("validating");
 
       if (nativeRes && nativeRes.content) {
         content = nativeRes.content.trim();
@@ -250,28 +253,9 @@ export async function executeBatchLlm(params: {
         timeoutSeconds,
         providers: activeProviders.length > 0 ? activeProviders : undefined,
         reasoning: reasoningPayload,
+        streamId,
         onEvent: channel,
       });
-
-      const abortPromise = new Promise<never>((_, reject) => {
-        if (abortController?.signal.aborted) {
-          return reject(new Error("Translation cancelled by user."));
-        }
-        abortController?.signal.addEventListener(
-          "abort",
-          () => reject(new Error("Translation cancelled by user.")),
-          { once: true }
-        );
-      });
-
-      let timeoutTimer: any = null;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutTimer = setTimeout(() => {
-          reject(new Error(`LLM stream response timed out after ${timeoutSeconds}s.`));
-        }, (timeoutSeconds + 10) * 1000);
-      });
-
-      try {
         const nativeRes = await Promise.race([invokePromise, abortPromise, timeoutPromise]);
         flushStreamState("validating");
 
@@ -283,9 +267,6 @@ export async function executeBatchLlm(params: {
           exactCost = nativeRes.cost || 0;
           hasExactUsage = exactPromptTokens > 0;
         }
-      } finally {
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-      }
     }
   } catch (e: any) {
     if (flushTimer) {
@@ -334,6 +315,8 @@ export async function executeBatchLlm(params: {
 
     throw new Error(lastErr);
   } finally {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    if (abortHandler) abortController?.signal.removeEventListener("abort", abortHandler);
     if (flushTimer) {
       clearTimeout(flushTimer);
       flushTimer = null;
@@ -467,7 +450,8 @@ export async function executeBatchLlm(params: {
   for (const item of items) {
     // Lookup by assigned virtual ID first, then fallback to real ID
     const virtualId = realToVirtualMap ? realToVirtualMap.get(item.id) ?? item.id : item.id;
-    const found = parsedMap.get(virtualId) ?? parsedMap.get(item.id);
+    // A real ID can collide with another row's virtual ID; never mix namespaces.
+    const found = parsedMap.get(virtualId);
     if (!found) {
       missingIds.push(item.id);
       continue;

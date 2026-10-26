@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from "lucide-react";
 
 export type ToastType = "success" | "error" | "warning" | "info";
@@ -40,8 +40,12 @@ export function useToast(): ToastContextValue {
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => () => { timers.current.forEach(clearTimeout); timers.current.clear(); }, []);
 
   const dismissToast = useCallback((id: string) => {
+    clearTimeout(timers.current.get(id));
+    timers.current.delete(id);
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
@@ -53,9 +57,9 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setToasts((prev) => [newToast, ...prev].slice(0, 5));
 
       if (durationMs > 0) {
-        setTimeout(() => {
+        timers.current.set(id, setTimeout(() => {
           dismissToast(id);
-        }, durationMs);
+        }, durationMs));
       }
     },
     [dismissToast]
@@ -106,8 +110,10 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const context = useMemo(() => ({ showToast, success, error, warning, info, dismissToast }), [showToast, success, error, warning, info, dismissToast]);
+
   return (
-    <ToastContext.Provider value={{ showToast, success, error, warning, info, dismissToast }}>
+    <ToastContext.Provider value={context}>
       {children}
       {/* Toast Container Floating Top-Right */}
       <div
@@ -120,7 +126,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           flexDirection: "column",
           gap: "8px",
           maxWidth: "380px",
-          width: "100%",
+          width: "calc(100% - 32px)",
           pointerEvents: "none",
         }}
       >
@@ -129,6 +135,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return (
             <div
               key={toast.id}
+              role={toast.type === "error" ? "alert" : "status"}
               style={{
                 pointerEvents: "auto",
                 display: "flex",

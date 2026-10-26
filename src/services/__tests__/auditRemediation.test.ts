@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { settingsManager } from "../settingsManager";
 import { scriptManagerService } from "../scriptManagerService";

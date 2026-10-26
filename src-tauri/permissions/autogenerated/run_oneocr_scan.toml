@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-oneocr-scan"
+description = "Enables the run_oneocr_scan command without any pre-configured scope."
+commands.allow = ["run_oneocr_scan"]
+
+[[permission]]
+identifier = "deny-run-oneocr-scan"
+description = "Denies the run_oneocr_scan command without any pre-configured scope."
+commands.deny = ["run_oneocr_scan"]

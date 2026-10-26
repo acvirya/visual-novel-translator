@@ -1,3 +1,4 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
 import React, { useState, useEffect } from "react";
 import { Trash2, Search, Filter, Terminal } from "lucide-react";
 import { logger, AppLogEntry } from "../../services/loggerService";
@@ -5,6 +6,7 @@ import { logger, AppLogEntry } from "../../services/loggerService";
 import { settingsManager } from "../../services/settingsManager";
 
 export const LogsView: React.FC = () => {
+  const confirm = useConfirmation();
   const [logs, setLogs] = useState<AppLogEntry[]>(() => logger.getLogs());
   const [filterLevel, setFilterLevel] = useState<string>(() => {
     const saved = settingsManager.getLogs().filterLevel;
@@ -57,6 +59,7 @@ export const LogsView: React.FC = () => {
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <Filter size={14} style={{ color: "var(--text-muted)" }} />
             <select
+              aria-label="Filter log level"
               className="select-field"
               value={filterLevel}
               onChange={(e) => setFilterLevel(e.target.value)}
@@ -74,6 +77,7 @@ export const LogsView: React.FC = () => {
             <input
               type="text"
               className="input-field"
+              aria-label="Search application logs"
               placeholder="Filter log text / source..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -87,7 +91,7 @@ export const LogsView: React.FC = () => {
             Total: <strong style={{ color: "var(--text-primary)" }}>{logs.length}</strong>
           </span>
 
-          <button onClick={() => logger.clear()} className="btn-secondary" style={{ padding: "5px 10px", fontSize: "12px" }}>
+          <button onClick={() => confirm({ title: "Clear application logs?", message: "Remove all displayed system logs?", confirmText: "Clear logs" }, () => logger.clear())} className="btn-secondary" style={{ padding: "5px 10px", fontSize: "12px" }}>
             <Trash2 size={13} />
             <span>Clear Logs</span>
           </button>
@@ -97,7 +101,7 @@ export const LogsView: React.FC = () => {
       {/* Terminal-like Log Container */}
       <div
         style={{
-          minHeight: "450px",
+          minHeight: "min(450px, 50vh)",
           backgroundColor: "var(--bg-app)",
           border: "1px solid var(--border-subtle)",
           borderRadius: "var(--radius-md)",
@@ -125,7 +129,7 @@ export const LogsView: React.FC = () => {
           </div>
         ) : (
           filteredLogs.map((log) => (
-            <div key={log.id} style={{ display: "flex", gap: "12px", alignItems: "baseline", borderBottom: "1px solid rgba(255,255,255,0.03)", padding: "2px 0" }}>
+            <div key={log.id} className="system-log-row">
               <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>[{log.time}]</span>
               <span
                 style={{
@@ -142,7 +146,7 @@ export const LogsView: React.FC = () => {
               >
                 {log.level}
               </span>
-              <span style={{ color: "var(--text-secondary)", width: "160px", flexShrink: 0, fontWeight: 600 }}>
+              <span className="system-log-source">
                 [{log.source}]
               </span>
               <span style={{ color: log.level === "ERROR" ? "var(--accent-danger)" : "var(--text-primary)", wordBreak: "break-all" }}>

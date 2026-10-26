@@ -1,4 +1,4 @@
-/**
+/*!
  * Shared OpenRouter and LLM Payload Construction (ARCH-05)
  * Centralizes request payload assembly and fallback manipulation.
  */

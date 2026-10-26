@@ -6,6 +6,7 @@
 
 import { TauriBridge } from "./tauriBridge";
 import type { ManagedService } from "./appContainer";
+import { redactSecrets, redactSecretText } from "../utils/redactSecrets";
 
 export type AiUsageStatus =
   | "completed"
@@ -54,14 +55,20 @@ class UsageLogService implements ManagedService {
   private logs: AiUsageLogEntry[] = [];
   private listeners: Set<(logs: AiUsageLogEntry[]) => void> = new Set();
   private isLoaded = false;
+  private loadPromise: Promise<void> | null = null;
+  private writeQueue: Promise<void> = Promise.resolve();
+  private historyGeneration = 0;
 
   public async init(): Promise<void> {
     if (this.isLoaded) return;
-    await this.loadHistory();
-    this.isLoaded = true;
+    if (!this.loadPromise) {
+      this.loadPromise = this.loadHistory().then(() => { this.isLoaded = true; }).finally(() => { this.loadPromise = null; });
+    }
+    await this.loadPromise;
   }
 
-  public dispose(): void {
+  public async dispose(): Promise<void> {
+    await this.writeQueue;
     this.listeners.clear();
   }
 
@@ -88,6 +95,7 @@ class UsageLogService implements ManagedService {
    * Load previous logs from disk on startup
    */
   public async loadHistory(): Promise<void> {
+    const generation = this.historyGeneration;
     try {
       const rawLines = await TauriBridge.readDebugLog(LOG_FILE_NAME, MAX_IN_MEMORY_LOGS);
       if (Array.isArray(rawLines) && rawLines.length > 0) {
@@ -95,7 +103,8 @@ class UsageLogService implements ManagedService {
         for (const line of rawLines) {
           try {
             const parsed = JSON.parse(line.trim());
-            if (parsed && parsed.id && parsed.timestamp) {
+            if (parsed && typeof parsed.id === "string" && Number.isFinite(parsed.timestamp)
+              && [parsed.cost, parsed.totalTokens, parsed.latencyMs, parsed.promptTokens, parsed.completionTokens].every((value) => Number.isFinite(value) && value >= 0)) {
               loaded.push(parsed);
             }
           } catch {
@@ -104,7 +113,9 @@ class UsageLogService implements ManagedService {
         }
         // Sort newest first
         loaded.sort((a, b) => b.timestamp - a.timestamp);
-        this.logs = loaded.slice(0, MAX_IN_MEMORY_LOGS);
+        if (generation !== this.historyGeneration) return;
+        const merged = new Map([...loaded, ...this.logs].map((entry) => [entry.id, entry]));
+        this.logs = [...merged.values()].sort((a, b) => b.timestamp - a.timestamp).slice(0, MAX_IN_MEMORY_LOGS);
         this.notify();
       }
     } catch {
@@ -146,9 +157,10 @@ class UsageLogService implements ManagedService {
       hour12: false,
     });
 
-    const promptTokens = Math.max(0, Math.round(params.promptTokens || 0));
-    const completionTokens = Math.max(0, Math.round(params.completionTokens || 0));
-    const cachedTokens = Math.max(0, Math.round(params.cachedTokens || 0));
+    const nonnegative = (value: number | undefined) => Number.isFinite(value) ? Math.max(0, value!) : 0;
+    const promptTokens = Math.round(nonnegative(params.promptTokens));
+    const completionTokens = Math.round(nonnegative(params.completionTokens));
+    const cachedTokens = Math.min(promptTokens, Math.round(nonnegative(params.cachedTokens)));
     const totalTokens = promptTokens + completionTokens;
 
     const entry: AiUsageLogEntry = {
@@ -158,17 +170,17 @@ class UsageLogService implements ManagedService {
       mode: params.mode,
       modelId: params.modelId,
       provider: params.provider || (params.modelId.includes("/") ? params.modelId.split("/")[0] : "LLM"),
-      cost: Number(params.cost) || 0,
-      latencyMs: Math.max(0, Math.round(params.latencyMs || 0)),
+      cost: nonnegative(params.cost),
+      latencyMs: Math.round(nonnegative(params.latencyMs)),
       promptTokens,
       completionTokens,
       cachedTokens,
       totalTokens,
       status: params.status,
-      statusMessage: params.statusMessage,
+      statusMessage: params.statusMessage && redactSecretText(params.statusMessage),
       inputSnippet: params.inputSnippet ? params.inputSnippet.slice(0, 500) : undefined,
       outputSnippet: params.outputSnippet ? params.outputSnippet.slice(0, 500) : undefined,
-      metadata: params.metadata,
+      metadata: redactSecrets(params.metadata) as Record<string, unknown> | undefined,
     };
 
     // Prepend (newest first)
@@ -177,7 +189,8 @@ class UsageLogService implements ManagedService {
 
     // Asynchronously append to disk log
     try {
-      TauriBridge.appendDebugLog(LOG_FILE_NAME, JSON.stringify(entry) + "\n").catch(() => {});
+      const line = JSON.stringify(entry) + "\n";
+      this.writeQueue = this.writeQueue.then(() => TauriBridge.appendDebugLog(LOG_FILE_NAME, line)).catch(() => {});
     } catch {
       // Non-blocking disk persist fallback
     }
@@ -189,10 +202,13 @@ class UsageLogService implements ManagedService {
    * Clear all usage logs both in-memory and on-disk
    */
   public async clearLogs(): Promise<void> {
+    this.historyGeneration++;
     this.logs = [];
     this.notify();
     try {
-      await TauriBridge.clearDebugLog(LOG_FILE_NAME);
+      const clear = this.writeQueue.then(() => TauriBridge.clearDebugLog(LOG_FILE_NAME));
+      this.writeQueue = clear.catch(() => {});
+      await clear;
     } catch (err) {
       console.warn("[UsageLogService] Failed to clear disk log:", err);
     }
@@ -257,12 +273,16 @@ class UsageLogService implements ManagedService {
       "Status_Message",
     ];
 
+    const csvText = (value: string) => {
+      const safe = /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
     const rows = this.logs.map((l) => [
       l.timestamp,
-      `"${l.formattedTime}"`,
+      csvText(l.formattedTime),
       l.mode,
-      `"${l.modelId}"`,
-      `"${l.provider}"`,
+      csvText(l.modelId),
+      csvText(l.provider),
       l.status,
       l.cost.toFixed(6),
       l.latencyMs,
@@ -270,7 +290,7 @@ class UsageLogService implements ManagedService {
       l.completionTokens,
       l.cachedTokens,
       l.totalTokens,
-      `"${(l.statusMessage || "").replace(/"/g, '""')}"`,
+      csvText(l.statusMessage || ""),
     ]);
 
     return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");

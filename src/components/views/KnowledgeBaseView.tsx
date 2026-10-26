@@ -14,20 +14,20 @@ export const KnowledgeBaseView: React.FC = () => {
   const tabOptions: SegmentedOption<"glossary" | "script">[] = [
     {
       id: "glossary",
-      label: "Character Glossary & Terms",
+      label: "Glossary & terms",
       icon: <BookOpen size={14} />,
     },
     {
       id: "script",
-      label: "Offline Script Memory & Cache",
+      label: "Script memory",
       icon: <Database size={14} />,
     },
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", maxWidth: "1200px", margin: "0 auto" }}>
+    <div className="workspace-view">
       {/* Sub-tab Navigation in Center */}
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", padding: "0 0 12px 0", flexShrink: 0 }}>
+      <div className="workspace-tabs">
         <SegmentedControl<"glossary" | "script">
           options={tabOptions}
           value={activeTab}
@@ -37,7 +37,7 @@ export const KnowledgeBaseView: React.FC = () => {
       </div>
 
       {/* Main Tab Content */}
-      <div style={{ flex: 1, minHeight: 0, position: "relative", width: "100%" }}>
+      <div className="workspace-body">
         {activeTab === "glossary" ? <GlossaryManagerView /> : <ScriptManagerView />}
       </div>
     </div>

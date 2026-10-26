@@ -156,7 +156,7 @@ export const TextractorAdvancedSettingsCard: React.FC = () => {
               <span>Custom Memory Hook Code Injection</span>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px", alignItems: "flex-end" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))", gap: "10px", alignItems: "flex-end" }}>
               <div>
                 <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "3px" }}>
                   Popular Engine Preset
@@ -269,7 +269,7 @@ export const TextractorAdvancedSettingsCard: React.FC = () => {
               <span>Timing & Dual-Thread Synchronization</span>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "16px" }}>
               {/* 1. Typewriter Debounce Slider */}
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
@@ -323,7 +323,7 @@ export const TextractorAdvancedSettingsCard: React.FC = () => {
               <span>Text Hook Deduplication & Filtering</span>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px", alignItems: "flex-start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "16px", alignItems: "flex-start" }}>
               {/* 1. Consecutive Character Deduplication Number Input */}
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", alignItems: "center" }}>

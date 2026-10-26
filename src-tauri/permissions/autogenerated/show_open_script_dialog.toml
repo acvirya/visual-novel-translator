@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-open-script-dialog"
+description = "Enables the show_open_script_dialog command without any pre-configured scope."
+commands.allow = ["show_open_script_dialog"]
+
+[[permission]]
+identifier = "deny-show-open-script-dialog"
+description = "Denies the show_open_script_dialog command without any pre-configured scope."
+commands.deny = ["show_open_script_dialog"]

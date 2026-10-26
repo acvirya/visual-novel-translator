@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "region-selector",
+  "description": "OCR capture and one-shot translation without file or process commands",
+  "windows": [
+    "region-selector"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-get-monitors",
+    "allow-get-window-monitor",
+    "allow-load-app-settings",
+    "allow-save-app-settings",
+    "allow-get-secure-key",
+    "allow-set-secure-key",
+    "allow-delete-secure-key",
+    "allow-append-debug-log",
+    "allow-read-debug-log",
+    "allow-close-region-selector-overlay",
+    "allow-detect-oneocr-path",
+    "allow-capture-regions-preview",
+    "allow-run-oneocr-scan",
+    "allow-translate-free-mt",
+    "allow-openrouter-chat-completion",
+    "allow-openrouter-stream-chat-completion",
+    "allow-llm-chat-completion",
+    "allow-llm-stream-chat-completion",
+    "allow-cancel-llm-stream"
+  ]
+}

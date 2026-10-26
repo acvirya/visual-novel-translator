@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-find-textractor-installation"
+description = "Enables the find_textractor_installation command without any pre-configured scope."
+commands.allow = ["find_textractor_installation"]
+
+[[permission]]
+identifier = "deny-find-textractor-installation"
+description = "Denies the find_textractor_installation command without any pre-configured scope."
+commands.deny = ["find_textractor_installation"]

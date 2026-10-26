@@ -1,4 +1,3 @@
-import deepmerge from "deepmerge";
 import { cloneDeep } from "lodash-es";
 import { z } from "zod";
 import {
@@ -11,11 +10,12 @@ import {
   BatchSettings,
 } from "../types";
 import { DEFAULT_PREPROCESSING_PIPELINE, invalidateCustomRulesCache, registerCustomRulesProvider } from "../utils/textPreprocessor";
-import { OVERLAY_PRESETS, TemplatePreset } from "../utils/overlayTemplateEngine";
+import { OVERLAY_PRESETS, TemplatePreset } from "../constants/overlayPresets";
 import { StoredProviderConfig } from "./providers/llmProviderRegistry";
 import { SecureStorageService } from "./secureStorageService";
 import { TauriBridge } from "./tauriBridge";
 import type { ManagedService } from "./appContainer";
+import { sanitizeSettings } from "./settingsValidation";
 
 export interface GeneralSettings {
   sourceLang: string;
@@ -301,19 +301,22 @@ const AppSettingsSanitizerSchema = z
   })
   .passthrough();
 
-class SettingsManager implements ManagedService {
+export class SettingsManager implements ManagedService {
   public readonly id = "settingsManager";
   private cache: AppSettings;
   private listeners: Set<(settings: AppSettings) => void> = new Set();
   private saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private isSecureStorageInitialized = false;
   private readyPromise: Promise<void>;
+  private secureInitPromise: Promise<void> | null = null;
+  private diskSaveQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     this.cache = this.loadFromStorage();
     registerCustomRulesProvider(() => this.cache.textPreprocessing?.pipeline);
     this.readyPromise = this.initSecureStorage().catch((err) => {
       console.warn("[SettingsManager] Failed initial secure keys load:", err);
+      throw err;
     });
   }
 
@@ -321,48 +324,79 @@ class SettingsManager implements ManagedService {
     return this.readyPromise;
   }
 
+  public async init(): Promise<void> {
+    await this.ensureReady();
+  }
+
   public async getApiKey(providerId: string): Promise<string> {
     await this.readyPromise;
     return this.cache.llmProviders?.[providerId]?.apiKey || "";
   }
 
-  public async initSecureStorage(): Promise<void> {
+  public initSecureStorage(): Promise<void> {
+    if (this.secureInitPromise) return this.secureInitPromise;
+    this.secureInitPromise = this.hydrateSettings().finally(() => {
+      this.secureInitPromise = null;
+    });
+    return this.secureInitPromise;
+  }
+
+  private async hydrateSettings(readDisk = true): Promise<void> {
     if (!this.cache.llmProviders) {
       this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
     }
     let hasChanges = false;
+    const beforeHydration = this.clone(this.cache);
 
     // 1. Desktop file-based persistence: sync settings from AppData if running in desktop app
     try {
-      const diskContent = await TauriBridge.loadAppSettings();
+      const diskContent = readDisk ? await TauriBridge.loadAppSettings() : null;
       if (diskContent) {
         const parsed = JSON.parse(diskContent);
         const validationResult = AppSettingsSanitizerSchema.safeParse(parsed);
         if (validationResult.success && validationResult.data) {
-          this.cache = this.mergeSettings(this.cache, validationResult.data);
+          const merged = this.mergeSettings(this.cache, validationResult.data);
+          // Preserve edits made while disk I/O was pending.
+          for (const key of Object.keys(beforeHydration) as (keyof AppSettings)[]) {
+            if (JSON.stringify(this.cache[key]) !== JSON.stringify(beforeHydration[key])) {
+              (merged as Record<keyof AppSettings, unknown>)[key] = this.cache[key];
+            }
+          }
+          this.cache = merged;
           hasChanges = true;
         }
       } else {
         // First run on desktop: seed disk file with initial settings
-        this.persistToDisk(this.cache).catch(() => {});
+        hasChanges = true;
       }
     } catch {
       // Non-Tauri fallback (e.g. webview preview or headless unit tests)
     }
 
     // 2. Load secure API keys from OS Keyring
+    let migrationFailed = false;
     for (const pid of Object.keys(this.cache.llmProviders)) {
+      const legacyKey = this.cache.llmProviders[pid].apiKey || beforeHydration.llmProviders[pid]?.apiKey;
       try {
         const secureKey = await SecureStorageService.getApiKey(pid);
         if (secureKey) {
           this.cache.llmProviders[pid].apiKey = secureKey;
           hasChanges = true;
+        } else if (legacyKey) {
+          await SecureStorageService.setApiKey(pid, legacyKey);
+          this.cache.llmProviders[pid].apiKey = legacyKey.trim();
+          hasChanges = true;
         }
       } catch (err) {
         console.warn(`[SettingsManager] Could not load secure key for ${pid}:`, err);
+        if (legacyKey) migrationFailed = true;
       }
     }
+    if (migrationFailed) {
+      throw new Error("Saved credentials could not be migrated to secure storage. Existing settings were preserved; please check access to the system credential store and restart.");
+    }
     this.isSecureStorageInitialized = true;
+    this.cache.overlay.config.isEnabled = false;
     if (hasChanges) {
       this.saveToStorage(true);
       this.notifyListeners();
@@ -377,23 +411,9 @@ class SettingsManager implements ManagedService {
     return cloneDeep(val);
   }
 
-  private mergeSettings(target: AppSettings, source: any): AppSettings {
-    const customArrayMerge = (destinationArray: any[], sourceArray: any[]): any[] => {
-      const hasId = (arr: any[]) => arr.some((item) => item && typeof item === "object" && "id" in item);
-      if (hasId(destinationArray) || hasId(sourceArray)) {
-        const merged = [...sourceArray];
-        const sourceIds = new Set(sourceArray.map((i: any) => i?.id).filter(Boolean));
-        for (const item of destinationArray) {
-          if (item?.id && !sourceIds.has(item.id)) {
-            merged.push(item);
-          }
-        }
-        return merged;
-      }
-      return sourceArray.length > 0 ? sourceArray : destinationArray;
-    };
-
-    return deepmerge(target, source, { arrayMerge: customArrayMerge }) as AppSettings;
+  private mergeSettings(target: AppSettings, source: unknown): AppSettings {
+    // Persisted arrays represent the user's complete selection, including [] and deletions.
+    return sanitizeSettings(target, source);
   }
 
   private loadFromStorage(): AppSettings {
@@ -408,7 +428,7 @@ class SettingsManager implements ManagedService {
         // TD-11: Validate data structure using Zod before merging
         const validationResult = AppSettingsSanitizerSchema.safeParse(parsed);
         const safeData = validationResult.success ? validationResult.data : {};
-        // CRIT-02 & TD-07: Industry-standard deepmerge with smart array preservation
+        // Persisted arrays are complete user selections, including empty arrays.
         loaded = this.mergeSettings(DEFAULT_APP_SETTINGS, safeData);
       } else {
         loaded = this.clone(DEFAULT_APP_SETTINGS);
@@ -427,33 +447,37 @@ class SettingsManager implements ManagedService {
   }
 
   private executeSave(): void {
-    if (typeof localStorage === "undefined") return;
+    if (!this.isSettingsWriter()) return;
+    const cacheToPersist = this.sanitizedSnapshot(this.cache);
     try {
-      const cacheToPersist = this.clone(this.cache);
-      if (cacheToPersist.overlay?.config) {
-        cacheToPersist.overlay.config.isEnabled = false;
-      }
-      // Never store sensitive API keys in localStorage - all keys are managed via OS Keyring
-      if (cacheToPersist.llmProviders) {
-        for (const pid of Object.keys(cacheToPersist.llmProviders)) {
-          if (cacheToPersist.llmProviders[pid]) {
-            cacheToPersist.llmProviders[pid].apiKey = "";
-          }
-        }
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheToPersist));
-      this.persistToDisk(cacheToPersist).catch(() => {});
+      if (typeof localStorage !== "undefined") localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheToPersist));
     } catch (e) {
       console.error("Failed to save settings to localStorage:", e);
     }
+    // A full localStorage must not prevent durable desktop persistence.
+    this.diskSaveQueue = this.diskSaveQueue.catch(() => {}).then(() => this.persistToDisk(cacheToPersist));
+    void this.diskSaveQueue.catch((error) => console.error("Failed to persist application settings:", error));
+  }
+
+  private isSettingsWriter(): boolean {
+    if (typeof window === "undefined" || !window.location) return true;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("overlay") !== "true" && params.get("regionSelector") !== "true";
+  }
+
+  private sanitizedSnapshot(settings: AppSettings): AppSettings {
+    const snapshot = this.clone(settings);
+    snapshot.overlay.config.isEnabled = false;
+    for (const provider of Object.values(snapshot.llmProviders)) provider.apiKey = "";
+    return snapshot;
   }
 
   private async persistToDisk(settingsToPersist: AppSettings): Promise<void> {
     try {
-      const json = JSON.stringify(settingsToPersist, null, 2);
+      const json = JSON.stringify(this.sanitizedSnapshot(settingsToPersist), null, 2);
       await TauriBridge.saveAppSettings(json);
-    } catch {
-      // Silently ignore if running in test / non-Tauri environment
+    } catch (error) {
+      if (SecureStorageService.isTauriEnvironment()) throw error;
     }
   }
 
@@ -483,11 +507,34 @@ class SettingsManager implements ManagedService {
 
   public async dispose(): Promise<void> {
     this.flush();
+    await this.diskSaveQueue;
+  }
+
+  public async flushPendingSaves(): Promise<void> {
+    await this.ensureReady();
+    this.flush();
+    await this.diskSaveQueue;
+  }
+
+  /** Auxiliary windows live across many opens; use the latest shared snapshot
+   * and reload credentials before they capture or translate again.
+   */
+  public async refreshAuxiliarySettings(): Promise<void> {
+    await this.ensureReady();
+    if (this.isSettingsWriter()) return;
+    this.cache = this.loadFromStorage();
+    invalidateCustomRulesCache();
+    // localStorage is already current; an older queued disk write must not win.
+    this.readyPromise = this.hydrateSettings(false);
+    await this.readyPromise;
+    this.notifyListeners();
   }
 
   private notifyListeners() {
     const snapshot = this.getSettings();
-    this.listeners.forEach((listener) => listener(snapshot));
+    this.listeners.forEach((listener) => {
+      try { listener(snapshot); } catch (err) { console.error("Settings subscriber failed:", err); }
+    });
   }
 
   public getSettings(): AppSettings {
@@ -519,11 +566,11 @@ class SettingsManager implements ManagedService {
   }
 
   public getTranslation(): TranslationSettings {
-    return { ...this.cache.translation };
+    return this.clone(this.cache.translation);
   }
 
   public getGlossary(): GlossarySettings {
-    return { ...this.cache.glossary, terms: [...(this.cache.glossary.terms || [])] };
+    return this.clone(this.cache.glossary);
   }
 
   public getScriptManager(): ScriptManagerSettings {
@@ -543,11 +590,7 @@ class SettingsManager implements ManagedService {
   }
 
   public getOverlay(): OverlaySettings {
-    return {
-      ...this.cache.overlay,
-      config: { ...this.cache.overlay.config },
-      userCustomPresets: [...(this.cache.overlay.userCustomPresets || [])],
-    };
+    return this.clone(this.cache.overlay);
   }
 
   public getTextPreprocessing(): TextPreprocessingSettings {
@@ -562,7 +605,7 @@ class SettingsManager implements ManagedService {
   }
 
   public getBatch(): BatchSettings {
-    return { ...(this.cache.batch || DEFAULT_BATCH_SETTINGS) };
+    return this.clone(this.cache.batch || DEFAULT_BATCH_SETTINGS);
   }
 
   public getLlmProviders(): Record<string, StoredProviderConfig> {
@@ -578,17 +621,20 @@ class SettingsManager implements ManagedService {
   }
 
   public async saveLlmProvider(config: StoredProviderConfig): Promise<void> {
+    await this.ensureReady();
     if (!this.cache.llmProviders) {
       this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
     }
-    this.cache.llmProviders[config.id] = this.clone(config);
     if (config.apiKey !== undefined) {
       await SecureStorageService.setApiKey(config.id, config.apiKey);
     }
+    this.cache.llmProviders[config.id] = { ...this.clone(config), apiKey: (config.apiKey || "").trim() };
     this.saveToStorage();
   }
 
   public async setLlmApiKey(providerId: string, apiKey: string): Promise<void> {
+    await this.ensureReady();
+    await SecureStorageService.setApiKey(providerId, apiKey);
     if (!this.cache.llmProviders) {
       this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
     }
@@ -599,8 +645,7 @@ class SettingsManager implements ManagedService {
         baseUrl: undefined,
       };
     }
-    this.cache.llmProviders[providerId].apiKey = apiKey;
-    await SecureStorageService.setApiKey(providerId, apiKey);
+    this.cache.llmProviders[providerId].apiKey = apiKey.trim();
     this.saveToStorage();
   }
 
@@ -720,7 +765,7 @@ class SettingsManager implements ManagedService {
   public reloadFromStorage(): void {
     this.cache = this.loadFromStorage();
     invalidateCustomRulesCache();
-    this.initSecureStorage().catch((err) => {
+    this.readyPromise = this.initSecureStorage().catch((err) => {
       console.warn("[SettingsManager] Secure storage reload error:", err);
     });
     this.notifyListeners();

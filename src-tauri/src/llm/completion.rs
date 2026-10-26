@@ -1,11 +1,21 @@
-use std::collections::HashMap;
-use crate::http::{format_reqwest_error, get_http_client};
 use super::types::OpenRouterCompletionResponse;
+use crate::http::{
+    format_reqwest_error, get_http_client, parse_request_payload, validate_provider_url,
+};
+use std::collections::HashMap;
 
-pub fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> Result<OpenRouterCompletionResponse, String> {
+pub fn parse_openrouter_payload(
+    parsed: &serde_json::Value,
+    raw_body: &str,
+) -> Result<OpenRouterCompletionResponse, String> {
     if let Some(err_obj) = parsed.get("error") {
-        let msg = err_obj["message"].as_str().unwrap_or("Unknown upstream API error");
-        let code = err_obj["code"].as_i64().or_else(|| err_obj["code"].as_str().and_then(|s| s.parse().ok())).unwrap_or(0);
+        let msg = err_obj["message"]
+            .as_str()
+            .unwrap_or("Unknown upstream API error");
+        let code = err_obj["code"]
+            .as_i64()
+            .or_else(|| err_obj["code"].as_str().and_then(|s| s.parse().ok()))
+            .unwrap_or(0);
         if code > 0 {
             return Err(format!("Upstream Provider Error ({}): {}", code, msg));
         } else {
@@ -16,18 +26,6 @@ pub fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> R
     let content = if let Some(content) = parsed["choices"][0]["message"]["content"].as_str() {
         if !content.trim().is_empty() {
             Some(content.trim().to_string())
-        } else {
-            None
-        }
-    } else if let Some(reasoning) = parsed["choices"][0]["message"]["reasoning"].as_str() {
-        if !reasoning.trim().is_empty() {
-            Some(reasoning.trim().to_string())
-        } else {
-            None
-        }
-    } else if let Some(reasoning_content) = parsed["choices"][0]["message"]["reasoning_content"].as_str() {
-        if !reasoning_content.trim().is_empty() {
-            Some(reasoning_content.trim().to_string())
         } else {
             None
         }
@@ -101,6 +99,7 @@ pub fn parse_openrouter_payload(parsed: &serde_json::Value, raw_body: &str) -> R
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Named arguments are part of the public Tauri IPC contract.
 pub async fn openrouter_chat_completion(
     api_key: String,
     model_id: String,
@@ -136,7 +135,10 @@ pub async fn openrouter_chat_completion(
             .timeout(timeout_duration)
             .header("Authorization", format!("Bearer {}", api_key.trim()))
             .header("Content-Type", "application/json")
-            .header("HTTP-Referer", "https://github.com/acvirya/visual-novel-translator")
+            .header(
+                "HTTP-Referer",
+                "https://github.com/acvirya/visual-novel-translator",
+            )
             .header("X-Title", "VN Translator Desktop")
             .json(&payload)
             .send()
@@ -146,7 +148,8 @@ pub async fn openrouter_chat_completion(
             Err(e) => {
                 last_error = format_reqwest_error("Failed to connect to OpenRouter API", &e);
                 if attempt < max_attempts {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
                     continue;
                 }
                 return Err(last_error);
@@ -159,7 +162,8 @@ pub async fn openrouter_chat_completion(
             Err(e) => {
                 last_error = format_reqwest_error("Failed to read OpenRouter response bytes", &e);
                 if attempt < max_attempts {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
                     continue;
                 }
                 return Err(last_error);
@@ -177,26 +181,47 @@ pub async fn openrouter_chat_completion(
                     || body_text.contains("schema"));
 
             if is_format_error {
+                last_error = format!("OpenRouter API error (HTTP {}): {}", status, body_text);
                 super::payload::remove_format_from_payload(&mut payload);
                 continue;
             }
             let status_code = status.as_u16();
-            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504 || body_text.contains("unreachable") || body_text.contains("temporarily unavailable") || body_text.contains("high demand");
+            let is_transient = status_code == 429
+                || status_code == 500
+                || status_code == 502
+                || status_code == 503
+                || status_code == 504
+                || body_text.contains("unreachable")
+                || body_text.contains("temporarily unavailable")
+                || body_text.contains("high demand");
             if is_transient && attempt < max_attempts {
                 last_error = format!("OpenRouter API error (HTTP {}): {}", status, body_text);
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 continue;
             }
-            return Err(format!("OpenRouter API error (HTTP {}): {}", status, body_text));
+            return Err(format!(
+                "OpenRouter API error (HTTP {}): {}",
+                status, body_text
+            ));
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(&body_text)
-            .map_err(|e| format!("Failed to parse OpenRouter response: {} (raw body: {})", e, body_text))?;
+        let parsed: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+            format!(
+                "Failed to parse OpenRouter response: {} (raw body: {})",
+                e, body_text
+            )
+        })?;
 
         match parse_openrouter_payload(&parsed, &body_text) {
             Ok(res) => return Ok(res),
             Err(e) => {
-                let is_transient = e.contains("502") || e.contains("503") || e.contains("429") || e.contains("queue-time") || e.contains("rate limit") || e.contains("unreachable") || e.contains("temporarily unavailable");
+                let is_transient = e.contains("502")
+                    || e.contains("503")
+                    || e.contains("429")
+                    || e.contains("queue-time")
+                    || e.contains("rate limit")
+                    || e.contains("unreachable")
+                    || e.contains("temporarily unavailable");
                 if is_transient && attempt < max_attempts {
                     last_error = e;
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -217,11 +242,11 @@ pub async fn llm_chat_completion(
     payload_json: String,
     timeout_seconds: Option<u64>,
 ) -> Result<OpenRouterCompletionResponse, String> {
+    validate_provider_url(&url)?;
     let client = get_http_client().map_err(|e| e.to_string())?;
     let timeout_duration = std::time::Duration::from_secs(timeout_seconds.unwrap_or(600));
 
-    let payload: serde_json::Value = serde_json::from_str(&payload_json)
-        .map_err(|e| format!("Invalid payload JSON: {}", e))?;
+    let payload = parse_request_payload(&payload_json)?;
 
     let max_attempts = 3;
     let mut last_error = String::new();
@@ -236,9 +261,11 @@ pub async fn llm_chat_completion(
         let resp = match send_res {
             Ok(r) => r,
             Err(e) => {
-                last_error = format_reqwest_error(&format!("Failed to connect to LLM API ({})", url), &e);
+                last_error =
+                    format_reqwest_error(&format!("Failed to connect to LLM API ({})", url), &e);
                 if attempt < max_attempts {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
                     continue;
                 }
                 return Err(last_error);
@@ -251,7 +278,8 @@ pub async fn llm_chat_completion(
             Err(e) => {
                 last_error = format_reqwest_error("Failed to read response body", &e);
                 if attempt < max_attempts {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
                     continue;
                 }
                 return Err(last_error);
@@ -262,7 +290,11 @@ pub async fn llm_chat_completion(
 
         if !status.is_success() {
             let status_code = status.as_u16();
-            let is_transient = status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503 || status_code == 504;
+            let is_transient = status_code == 429
+                || status_code == 500
+                || status_code == 502
+                || status_code == 503
+                || status_code == 504;
             if is_transient && attempt < max_attempts {
                 last_error = format!("LLM API error (HTTP {}): {}", status, body_text);
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -271,13 +303,21 @@ pub async fn llm_chat_completion(
             return Err(format!("LLM API error (HTTP {}): {}", status, body_text));
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(&body_text)
-            .map_err(|e| format!("Failed to parse response JSON: {} (raw body: {})", e, body_text))?;
+        let parsed: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+            format!(
+                "Failed to parse response JSON: {} (raw body: {})",
+                e, body_text
+            )
+        })?;
 
         match parse_openrouter_payload(&parsed, &body_text) {
             Ok(res) => return Ok(res),
             Err(e) => {
-                let is_transient = e.contains("502") || e.contains("503") || e.contains("429") || e.contains("queue-time") || e.contains("rate limit");
+                let is_transient = e.contains("502")
+                    || e.contains("503")
+                    || e.contains("429")
+                    || e.contains("queue-time")
+                    || e.contains("rate limit");
                 if is_transient && attempt < max_attempts {
                     last_error = e;
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -296,15 +336,22 @@ pub async fn test_llm_connection(
     url: String,
     headers: HashMap<String, String>,
 ) -> Result<String, String> {
+    validate_provider_url(&url)?;
     let client = get_http_client().map_err(|e| e.to_string())?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(15));
     for (k, v) in headers {
         req = req.header(&k, &v);
     }
 
-    let resp = req.send().await.map_err(|e| format_reqwest_error("Connection failed", &e))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format_reqwest_error("Connection failed", &e))?;
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| format_reqwest_error("Failed to read body", &e))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format_reqwest_error("Failed to read body", &e))?;
     let body = String::from_utf8_lossy(&bytes).to_string();
 
     if status.is_success() {

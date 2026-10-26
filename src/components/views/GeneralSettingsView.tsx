@@ -133,19 +133,9 @@ export const GeneralSettingsView: React.FC = () => {
       keysToClear.forEach((k) => localStorage.removeItem(k));
       settingsManager.resetSettings();
 
-      setSourceLang("ja");
-      setTargetLang("en");
-      setHotkeyLockOverlay("Ctrl+Shift+L");
-      setHotkeyTogglePause("Ctrl+Shift+P");
-      setHotkeyOcrScan("F9");
 
       toast.success("All settings reset to default. Please reload or reopen tabs.", "Reset Complete");
     } else if (resetCategory === "general") {
-      setSourceLang("ja");
-      setTargetLang("en");
-      setHotkeyLockOverlay("Ctrl+Shift+L");
-      setHotkeyTogglePause("Ctrl+Shift+P");
-      setHotkeyOcrScan("F9");
       settingsManager.resetSettings("general");
       toast.success("General settings reset to defaults.", "Reset Success");
     } else if (resetCategory === "glossary") {
@@ -197,7 +187,7 @@ export const GeneralSettingsView: React.FC = () => {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "16px" }}>
           <div>
             <LanguageSelectorCombobox
               label="Original Game Source Language"
@@ -227,7 +217,7 @@ export const GeneralSettingsView: React.FC = () => {
           <span className="card-subtitle">Global shortcuts accessible while game window is focused</span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "14px" }}>
           <div>
             <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
               One-Shot OCR Snipping Translate (In-Place)
@@ -311,7 +301,7 @@ export const GeneralSettingsView: React.FC = () => {
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px", marginTop: "6px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))", gap: "10px", marginTop: "6px" }}>
           {[
             { id: "general", label: "Reset General & Hotkeys", icon: <Globe size={13} /> },
             { id: "glossary", label: "Reset Glossary Terms", icon: <BookOpen size={13} /> },

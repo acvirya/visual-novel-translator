@@ -24,7 +24,10 @@ pub fn get_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
             .into_iter()
             .enumerate()
             .map(|(idx, m)| {
-                let name = m.name().cloned().unwrap_or_else(|| format!("Monitor {}", idx + 1));
+                let name = m
+                    .name()
+                    .cloned()
+                    .unwrap_or_else(|| format!("Monitor {}", idx + 1));
                 let is_primary = primary_name.as_ref() == Some(&name);
                 let size = m.size();
                 let pos = m.position();
@@ -51,11 +54,18 @@ pub fn get_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
 #[tauri::command]
 pub fn get_window_monitor(app: AppHandle, label: String) -> Result<MonitorInfo, String> {
     if let Some(win) = app.get_webview_window(&label) {
-        let monitor = win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten());
+        let monitor = win
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| win.primary_monitor().ok().flatten());
         if let Some(m) = monitor {
             let primary = win.primary_monitor().ok().flatten();
             let primary_name = primary.and_then(|p| p.name().cloned());
-            let name = m.name().cloned().unwrap_or_else(|| "Target Monitor".to_string());
+            let name = m
+                .name()
+                .cloned()
+                .unwrap_or_else(|| "Target Monitor".to_string());
             let is_primary = primary_name.as_ref() == Some(&name);
             let size = m.size();
             let pos = m.position();
@@ -97,15 +107,19 @@ fn resolve_target_monitor(
     if let Some(name) = monitor_name {
         let trimmed = name.trim();
         // 1. Direct exact name match (e.g. "\\\\.\\DISPLAY1")
-        if let Some(m) = monitors.iter().find(|m| m.name().map(|n| n.as_str()) == Some(trimmed)) {
+        if let Some(m) = monitors
+            .iter()
+            .find(|m| m.name().map(|n| n.as_str()) == Some(trimmed))
+        {
             return Some(m.clone());
         }
 
         // 2. Case-insensitive name match
         let lower = trimmed.to_lowercase();
-        if let Some(m) = monitors.iter().find(|m| {
-            m.name().map(|n| n.to_lowercase() == lower).unwrap_or(false)
-        }) {
+        if let Some(m) = monitors
+            .iter()
+            .find(|m| m.name().map(|n| n.to_lowercase() == lower).unwrap_or(false))
+        {
             return Some(m.clone());
         }
 
@@ -228,6 +242,7 @@ pub fn set_overlay_click_through(app: AppHandle, enable: bool) -> Result<(), Str
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Named arguments are part of the public Tauri IPC contract.
 pub fn set_overlay_edit_mode(
     app: AppHandle,
     is_editing: bool,
@@ -296,6 +311,7 @@ pub fn open_region_selector_overlay(
     mode: Option<String>,
 ) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("region-selector") {
+        let _ = overlay_win.set_resizable(true);
         if let Some(m) = resolve_target_monitor(&overlay_win, monitor_name.as_deref()) {
             let pos = m.position();
             let size = m.size();
@@ -318,7 +334,10 @@ pub fn open_region_selector_overlay(
         let _ = overlay_win.set_focus();
 
         let target_mode = mode.unwrap_or_else(|| "setup".to_string());
-        let _ = overlay_win.emit("set-selector-mode", serde_json::json!({ "mode": target_mode }));
+        let _ = overlay_win.emit(
+            "set-selector-mode",
+            serde_json::json!({ "mode": target_mode }),
+        );
 
         Ok(())
     } else {
@@ -327,7 +346,10 @@ pub fn open_region_selector_overlay(
 }
 
 #[tauri::command]
-pub fn close_region_selector_overlay(app: AppHandle, restore_main: Option<bool>) -> Result<(), String> {
+pub fn close_region_selector_overlay(
+    app: AppHandle,
+    restore_main: Option<bool>,
+) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("region-selector") {
         let _ = overlay_win.hide();
     }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-textractor"
+description = "Enables the start_textractor command without any pre-configured scope."
+commands.allow = ["start_textractor"]
+
+[[permission]]
+identifier = "deny-start-textractor"
+description = "Denies the start_textractor command without any pre-configured scope."
+commands.deny = ["start_textractor"]

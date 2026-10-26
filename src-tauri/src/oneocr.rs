@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::collections::{HashMap, VecDeque};
-use parking_lot::Mutex;
-use std::time::Instant;
 use crate::screen_capture::{resize_image, CaptureRegion};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +70,9 @@ struct MotionState {
 }
 
 static OCR_ENGINE_INSTANCE: Mutex<Option<SendOcrEngine>> = Mutex::new(None);
+// Delay-loaded imports retain function pointers for the process lifetime.
+// Keep the loaded module alive, even when the OCR engine itself is reset.
+static OCR_LIBRARY_HANDLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 static REGION_MOTION_STATES: Mutex<Option<HashMap<String, MotionState>>> = Mutex::new(None);
 
 /// Deterministic 64-bit FNV-1a Hasher
@@ -120,7 +123,7 @@ fn compute_stroke_edge_hash(img: &image::DynamicImage, sensitivity: u8) -> u64 {
 
             let grad = (current - right).abs() + (current - bottom).abs();
             if grad > threshold {
-                hasher.write_u32(((x as u32) << 16) | (y as u32));
+                hasher.write_u32((x << 16) | y);
             }
         }
     }
@@ -153,56 +156,64 @@ fn run_ocr_pipeline_on_image(
     img: &image::DynamicImage,
     offset_x: f32,
     offset_y: f32,
-    temp_dir: &Path,
-    idx: usize,
     region_name: &str,
-) -> (String, Vec<DetectedTextLine>) {
-    let slot_file = temp_dir.join(format!("vn_ocr_slot_{}_{}.png", std::process::id(), idx));
-    if let Err(e) = img.save_with_format(&slot_file, image::ImageFormat::Png) {
-        tracing::warn!("Failed to write OCR reusable slot image {}: {}", slot_file.display(), e);
-        return (String::new(), Vec::new());
-    }
+) -> Result<(String, Vec<DetectedTextLine>), String> {
+    // OneOCR supports memory buffers directly; avoid encoding and persisting private screenshots.
+    let ocr_res = engine
+        .run(img.to_rgba8().into())
+        .map_err(|e| format!("OneOCR failed on region {region_name}: {e:?}"))?;
+    let mut lines = Vec::new();
+    let mut detected_lines = Vec::new();
+    for line in &ocr_res.lines {
+        let t = line.text.trim();
+        if !t.is_empty() {
+            lines.push(t.to_string());
+            let min_x = (line
+                .bounding_box
+                .top_left
+                .x
+                .min(line.bounding_box.bottom_left.x)
+                - offset_x)
+                .max(0.0);
+            let min_y = (line
+                .bounding_box
+                .top_left
+                .y
+                .min(line.bounding_box.top_right.y)
+                - offset_y)
+                .max(0.0);
+            let max_x = (line
+                .bounding_box
+                .top_right
+                .x
+                .max(line.bounding_box.bottom_right.x)
+                - offset_x)
+                .max(min_x + 1.0);
+            let max_y = (line
+                .bounding_box
+                .bottom_left
+                .y
+                .max(line.bounding_box.bottom_right.y)
+                - offset_y)
+                .max(min_y + 1.0);
+            let w = max_x - min_x;
+            let h = max_y - min_y;
 
-    let ocr_res_opt = match engine.run(slot_file.as_path().into()) {
-        Ok(res) => Some(res),
-        Err(e) => {
-            tracing::warn!("OneOCR pipeline failed on region {}: {:?}", region_name, e);
-            None
+            detected_lines.push(DetectedTextLine {
+                text: t.to_string(),
+                x: min_x,
+                y: min_y,
+                width: w,
+                height: h,
+            });
         }
-    };
-
-    // Reusable in-place slot buffer: do not delete on every cycle to eliminate SSD write/delete churn
-
-    if let Some(ocr_res) = ocr_res_opt {
-        let mut lines = Vec::new();
-        let mut detected_lines = Vec::new();
-        for line in &ocr_res.lines {
-            let t = line.text.trim();
-            if !t.is_empty() {
-                lines.push(t.to_string());
-                let min_x = (line.bounding_box.top_left.x.min(line.bounding_box.bottom_left.x) - offset_x).max(0.0);
-                let min_y = (line.bounding_box.top_left.y.min(line.bounding_box.top_right.y) - offset_y).max(0.0);
-                let max_x = (line.bounding_box.top_right.x.max(line.bounding_box.bottom_right.x) - offset_x).max(min_x + 1.0);
-                let max_y = (line.bounding_box.bottom_left.y.max(line.bounding_box.bottom_right.y) - offset_y).max(min_y + 1.0);
-                let w = max_x - min_x;
-                let h = max_y - min_y;
-
-                detected_lines.push(DetectedTextLine {
-                    text: t.to_string(),
-                    x: min_x,
-                    y: min_y,
-                    width: w,
-                    height: h,
-                });
-            }
-        }
-        (lines.join(""), detected_lines)
-    } else {
-        (String::new(), Vec::new())
     }
+    Ok((lines.join(""), detected_lines))
 }
 
-pub fn find_oneocr_installation(custom_path: Option<String>) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+pub fn find_oneocr_installation(
+    custom_path: Option<String>,
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
     // 1. Check custom path if provided
     if let Some(ref path_str) = custom_path {
         let p = Path::new(path_str);
@@ -213,7 +224,47 @@ pub fn find_oneocr_installation(custom_path: Option<String>) -> Result<(PathBuf,
         }
     }
 
-    // 2. Search WindowsApps for Microsoft.ScreenSketch (Snipping Tool)
+    // 2. Check current executable directory
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            if let Ok(resolved) = resolve_oneocr_files_in_dir(parent) {
+                return Ok(resolved);
+            }
+        }
+    }
+
+    // 3. Search WindowsApps via PowerShell AppxPackage (bypasses ACL restrictions)
+    use std::os::windows::process::CommandExt;
+    if let Ok(output) = std::process::Command::new("powershell")
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-AppxPackage Microsoft.ScreenSketch | Select-Object -ExpandProperty InstallLocation",
+        ])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for location in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
+                let pkg_dir = PathBuf::from(location);
+                let candidate_sub = pkg_dir.join("SnippingTool");
+                if let Ok(resolved) = resolve_oneocr_files_in_dir(&candidate_sub) {
+                    return Ok(resolved);
+                }
+                let candidate_sandbox = pkg_dir.join("SnippingToolSandbox");
+                if let Ok(resolved) = resolve_oneocr_files_in_dir(&candidate_sandbox) {
+                    return Ok(resolved);
+                }
+                if let Ok(resolved) = resolve_oneocr_files_in_dir(&pkg_dir) {
+                    return Ok(resolved);
+                }
+            }
+        }
+    }
+
+    // 4. Search WindowsApps for Microsoft.ScreenSketch (Snipping Tool)
     let program_files = std::env::var("ProgramW6432")
         .or_else(|_| std::env::var("ProgramFiles"))
         .unwrap_or_else(|_| "C:\\Program Files".to_string());
@@ -276,6 +327,16 @@ pub fn find_oneocr_installation(custom_path: Option<String>) -> Result<(PathBuf,
 }
 
 fn resolve_oneocr_files_in_dir(dir: &Path) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    resolve_oneocr_files_at_depth(dir, 0)
+}
+
+fn resolve_oneocr_files_at_depth(
+    dir: &Path,
+    depth: usize,
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    if depth > 5 {
+        return Err("OneOCR directory search depth exceeded".into());
+    }
     let dll = dir.join("oneocr.dll");
     let model = if dir.join("oneocr.onemodel").exists() {
         dir.join("oneocr.onemodel")
@@ -292,36 +353,130 @@ fn resolve_oneocr_files_in_dir(dir: &Path) -> Result<(PathBuf, PathBuf, PathBuf)
     } else {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    if let Ok(found) = resolve_oneocr_files_in_dir(&entry.path()) {
+                if entry
+                    .file_type()
+                    .is_ok_and(|t| t.is_dir() && !t.is_symlink())
+                {
+                    if let Ok(found) = resolve_oneocr_files_at_depth(&entry.path(), depth + 1) {
                         return Ok(found);
                     }
                 }
             }
         }
-        Err(format!("Required OneOCR files not found in {}", dir.display()))
+        Err(format!(
+            "Required OneOCR files not found in {}",
+            dir.display()
+        ))
     }
 }
 
 fn get_or_init_ocr_engine(custom_path: Option<String>) -> Result<(), String> {
     let mut engine_guard = OCR_ENGINE_INSTANCE.lock();
     if engine_guard.is_none() {
-        let (dll_path, _model_path, _) = find_oneocr_installation(custom_path)?;
+        let (dll_path, model_path, onnx_path) = find_oneocr_installation(custom_path)?;
         let base_dir = dll_path.parent().unwrap_or_else(|| Path::new("."));
 
         #[cfg(target_os = "windows")]
         unsafe {
             use std::os::windows::ffi::OsStrExt;
-            let wide_path: Vec<u16> = base_dir.as_os_str().encode_wide().chain(Some(0)).collect();
-            windows_sys::Win32::System::LibraryLoader::SetDllDirectoryW(wide_path.as_ptr());
+            if OCR_LIBRARY_HANDLE.get().is_none() {
+                use windows_sys::Win32::System::LibraryLoader::{
+                    LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+                };
+                let mut absolute_dll = std::fs::canonicalize(&dll_path)
+                    .map_err(|e| format!("Invalid OneOCR DLL path: {e}"))?;
+                let wide_path: Vec<u16> = absolute_dll
+                    .as_os_str()
+                    .encode_wide()
+                    .chain(Some(0))
+                    .collect();
+                let mut module = LoadLibraryExW(
+                    wide_path.as_ptr(),
+                    std::ptr::null_mut(),
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+                );
+                // WindowsApps allows reading package assets but can deny loading
+                // their DLLs into an unpackaged app. Cache only runtime DLLs in
+                // the current user's application data; keep the model in place.
+                if module.is_null() && std::io::Error::last_os_error().raw_os_error() == Some(5) {
+                    absolute_dll = cache_oneocr_runtime(&dll_path, &onnx_path)?;
+                    let cached_path: Vec<u16> = absolute_dll
+                        .as_os_str()
+                        .encode_wide()
+                        .chain(Some(0))
+                        .collect();
+                    module = LoadLibraryExW(
+                        cached_path.as_ptr(),
+                        std::ptr::null_mut(),
+                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+                    );
+                }
+                if module.is_null() {
+                    return Err(format!(
+                        "Failed to load OneOCR or its dependencies: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                let _ = OCR_LIBRARY_HANDLE.set(module as usize);
+            }
         }
 
-        let engine = oneocr_rs::OcrEngine::new()
-            .map_err(|e| format!("Failed to initialize OneOCR engine from {}: {:?}", base_dir.display(), e))?;
+        let engine = oneocr_rs::OcrEngine::new_with_model_path(
+            oneocr_rs::OcrOptions::default(),
+            &model_path,
+        )
+        .map_err(|e| {
+            format!(
+                "Failed to initialize OneOCR engine from {}: {:?}",
+                base_dir.display(),
+                e
+            )
+        })?;
 
         *engine_guard = Some(SendOcrEngine(engine));
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn cache_oneocr_runtime(dll: &Path, onnx: &Path) -> Result<PathBuf, String> {
+    use std::hash::{Hash, Hasher};
+    let mut version = std::collections::hash_map::DefaultHasher::new();
+    for path in [dll, onnx] {
+        path.hash(&mut version);
+        let metadata =
+            fs::metadata(path).map_err(|e| format!("Cannot read OCR runtime metadata: {e}"))?;
+        metadata.len().hash(&mut version);
+        metadata.modified().ok().hash(&mut version);
+    }
+    let root =
+        std::env::var_os("LOCALAPPDATA").ok_or("Cannot resolve the OCR runtime cache directory")?;
+    let cache = PathBuf::from(root)
+        .join("visual-novel-translator")
+        .join("oneocr-cache")
+        .join(format!("{:016x}", version.finish()));
+    fs::create_dir_all(&cache).map_err(|e| format!("Cannot create the OCR runtime cache: {e}"))?;
+    for source in [dll, onnx] {
+        let name = source.file_name().ok_or("Invalid OCR runtime file name")?;
+        let target = cache.join(name);
+        if target.exists() {
+            continue;
+        }
+        let temp = cache.join(format!(
+            "{}.{}.tmp",
+            name.to_string_lossy(),
+            std::process::id()
+        ));
+        fs::copy(source, &temp).map_err(|e| format!("Cannot cache the OCR runtime: {e}"))?;
+        if let Err(error) = fs::rename(&temp, &target) {
+            let _ = fs::remove_file(&temp);
+            if !target.exists() {
+                return Err(format!("Cannot commit the OCR runtime cache: {error}"));
+            }
+        }
+    }
+    fs::canonicalize(cache.join("oneocr.dll"))
+        .map_err(|e| format!("Cannot resolve cached OCR runtime: {e}"))
 }
 
 pub fn scan_screen_regions(
@@ -331,11 +486,12 @@ pub fn scan_screen_regions(
     stability_config: Option<OcrStabilityConfig>,
 ) -> Result<OcrScanResult, String> {
     let start_instant = Instant::now();
+    if !(25..=400).contains(&scale_percent) {
+        return Err("OCR scale must be between 25 and 400 percent".into());
+    }
 
     // 1. Ensure OCR engine is loaded without holding long lock during screen capture
     get_or_init_ocr_engine(custom_path)?;
-
-    let temp_dir = std::env::temp_dir();
 
     let mut speaker_text = String::new();
     let mut dialogue_text = String::new();
@@ -346,16 +502,9 @@ pub fn scan_screen_regions(
     let stab_opt = stability_config.as_ref();
 
     // 1. Capture screen once for all regions via single-frame monitor capture (strictly confined to selected monitor)
-    let mut captured_map = match crate::screen_capture::capture_monitor_regions(&regions) {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!("[OneOCR] Single-frame capture failed: {}", e);
-            HashMap::new()
-        }
-    };
+    let mut captured_map = crate::screen_capture::capture_monitor_regions(&regions)?;
 
     struct PreparedRegion {
-        idx: usize,
         id: String,
         name: String,
         role: String,
@@ -367,12 +516,20 @@ pub fn scan_screen_regions(
     }
 
     let mut prepared_list = Vec::new();
-    for (idx, region) in regions.iter().enumerate() {
+    for region in &regions {
         let captured = match captured_map.remove(&region.id) {
             Some(cap) => cap,
             None => continue,
         };
 
+        let scaled_pixels = u64::from(captured.dynamic_image.width())
+            * u64::from(captured.dynamic_image.height())
+            * u64::from(scale_percent)
+            * u64::from(scale_percent)
+            / 10_000;
+        if scaled_pixels > 64 * 1024 * 1024 {
+            return Err("Scaled OCR region exceeds the 64 megapixel limit".into());
+        }
         let scaled_img = resize_image(&captured.dynamic_image, scale_percent);
         let (prepared_img, offset_x, offset_y) = prepare_image_for_oneocr(&scaled_img);
         let edge_hash = if let Some(stab) = stab_opt {
@@ -395,7 +552,6 @@ pub fn scan_screen_regions(
         };
 
         prepared_list.push(PreparedRegion {
-            idx,
             id: region.id.clone(),
             name: region.name.clone(),
             role: region.role.clone(),
@@ -420,25 +576,29 @@ pub fn scan_screen_regions(
         let state_map = state_guard.get_or_insert_with(HashMap::new);
 
         // Evict motion states for regions that no longer exist (prevent static memory leak)
-        let active_ids: std::collections::HashSet<&String> = regions.iter().map(|r| &r.id).collect();
+        let active_ids: std::collections::HashSet<&String> =
+            regions.iter().map(|r| &r.id).collect();
         state_map.retain(|id, _| active_ids.contains(id));
 
         for prep in prepared_list {
             if stab.enable_motion_detection {
                 let is_new = !state_map.contains_key(&prep.id);
-                let motion = state_map.entry(prep.id.clone()).or_insert_with(|| MotionState {
-                    last_edge_hash: prep.edge_hash,
-                    last_change_time: now,
-                    history_hashes: VecDeque::from([prep.edge_hash]),
-                    cached_text: String::new(),
-                    is_settled: false,
-                });
+                let motion = state_map
+                    .entry(prep.id.clone())
+                    .or_insert_with(|| MotionState {
+                        last_edge_hash: prep.edge_hash,
+                        last_change_time: now,
+                        history_hashes: VecDeque::from([prep.edge_hash]),
+                        cached_text: String::new(),
+                        is_settled: false,
+                    });
 
                 if is_new || motion.cached_text.is_empty() {
                     // Initial scan: run OCR immediately so text appears right away
                     actions.push((prep, ScanAction::RunOcr));
                 } else {
-                    let is_cyclic = stab.ignore_blinking_prompt && motion.history_hashes.contains(&prep.edge_hash);
+                    let is_cyclic = stab.ignore_blinking_prompt
+                        && motion.history_hashes.contains(&prep.edge_hash);
                     let edge_changed = !is_cyclic && prep.edge_hash != motion.last_edge_hash;
 
                     if edge_changed {
@@ -454,27 +614,34 @@ pub fn scan_screen_regions(
 
                         actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
                     } else {
-                        let duration_still_ms = now.duration_since(motion.last_change_time).as_millis() as u64;
+                        let duration_still_ms =
+                            now.duration_since(motion.last_change_time).as_millis() as u64;
                         if duration_still_ms >= stab.settle_time_ms {
                             if !motion.is_settled {
                                 actions.push((prep, ScanAction::RunOcr));
                             } else {
-                                actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                                actions.push((
+                                    prep,
+                                    ScanAction::ReturnCached(motion.cached_text.clone()),
+                                ));
                             }
                         } else {
                             all_regions_settled = false;
-                            actions.push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
+                            actions
+                                .push((prep, ScanAction::ReturnCached(motion.cached_text.clone())));
                         }
                     }
                 }
             } else {
-                let motion = state_map.entry(prep.id.clone()).or_insert_with(|| MotionState {
-                    last_edge_hash: prep.pixel_hash,
-                    last_change_time: now,
-                    history_hashes: VecDeque::new(),
-                    cached_text: String::new(),
-                    is_settled: true,
-                });
+                let motion = state_map
+                    .entry(prep.id.clone())
+                    .or_insert_with(|| MotionState {
+                        last_edge_hash: prep.pixel_hash,
+                        last_change_time: now,
+                        history_hashes: VecDeque::new(),
+                        cached_text: String::new(),
+                        is_settled: true,
+                    });
 
                 if motion.last_edge_hash != prep.pixel_hash || motion.cached_text.is_empty() {
                     actions.push((prep, ScanAction::RunOcr));
@@ -502,11 +669,21 @@ pub fn scan_screen_regions(
                 let (text, mut lines) = {
                     let engine_guard = OCR_ENGINE_INSTANCE.lock();
                     let engine = &engine_guard.as_ref().unwrap().0;
-                    run_ocr_pipeline_on_image(engine, &prep.prepared_img, prep.offset_x, prep.offset_y, temp_dir.as_path(), prep.idx, &prep.name)
+                    run_ocr_pipeline_on_image(
+                        engine,
+                        &prep.prepared_img,
+                        prep.offset_x,
+                        prep.offset_y,
+                        &prep.name,
+                    )?
                 };
                 all_detected_lines.append(&mut lines);
                 let hash = if let Some(stab) = stab_opt {
-                    if stab.enable_motion_detection { prep.edge_hash } else { prep.pixel_hash }
+                    if stab.enable_motion_detection {
+                        prep.edge_hash
+                    } else {
+                        prep.pixel_hash
+                    }
                 } else {
                     0
                 };
@@ -574,7 +751,9 @@ pub fn scan_screen_regions(
 
 fn chrono_lite_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     format!("{}.{:03}", dur.as_secs(), dur.subsec_millis())
 }
 
@@ -595,5 +774,30 @@ fn prepare_image_for_oneocr(img: &image::DynamicImage) -> (image::DynamicImage, 
         (image::DynamicImage::ImageRgb8(canvas), offset_x, offset_y)
     } else {
         (image::DynamicImage::ImageRgb8(rgb_img), 0.0, 0.0)
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "Requires an installed Microsoft OneOCR runtime and model"]
+    fn installed_oneocr_processes_in_memory_image() {
+        get_or_init_ocr_engine(None).expect("OneOCR initialization with detected model path");
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            320,
+            120,
+            image::Rgba([255, 255, 255, 255]),
+        ));
+        let guard = OCR_ENGINE_INSTANCE.lock();
+        let engine = &guard.as_ref().expect("initialized engine").0;
+        let (text, lines) = run_ocr_pipeline_on_image(engine, &image, 0.0, 0.0, "synthetic-test")
+            .expect("in-memory OCR succeeds");
+        assert!(
+            text.trim().is_empty(),
+            "Blank image should contain no dialogue"
+        );
+        assert!(lines.is_empty());
     }
 }

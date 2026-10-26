@@ -15,25 +15,25 @@ export const UnifiedSettingsView: React.FC = () => {
   const settingOptions: SegmentedOption<SettingsSubTab>[] = [
     {
       id: "providers",
-      label: "AI Models & Prompts",
+      label: "Providers & prompts",
       icon: <KeyRound size={14} />,
     },
     {
       id: "custom_rules",
-      label: "Custom Replacement Rules",
+      label: "Text replacements",
       icon: <Code size={14} />,
     },
     {
       id: "general",
-      label: "General & Hotkeys",
+      label: "General & shortcuts",
       icon: <Sliders size={14} />,
     },
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", maxWidth: "1200px", margin: "0 auto" }}>
+    <div className="workspace-view">
       {/* Settings Sub-tabs Header in Center */}
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", padding: "0 0 12px 0", flexShrink: 0 }}>
+      <div className="workspace-tabs">
         <SegmentedControl<SettingsSubTab>
           options={settingOptions}
           value={activeSubTab}
@@ -43,7 +43,7 @@ export const UnifiedSettingsView: React.FC = () => {
       </div>
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
+      <div className="workspace-body">
         {activeSubTab === "providers" && <TranslationProvidersView />}
         {activeSubTab === "custom_rules" && <CustomReplacementRulesView />}
         {activeSubTab === "general" && <GeneralSettingsView />}

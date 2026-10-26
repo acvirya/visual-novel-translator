@@ -1,4 +1,5 @@
 import React from "react";
+import { SafeTemplateFrame } from "../../overlay/SafeTemplateFrame";
 import { OverlayConfig } from "../../../types";
 import { TemplatePreset, isBuiltInPreset } from "../../../utils/overlayTemplateEngine";
 import { SegmentedControl } from "../../common/SegmentedControl";
@@ -183,7 +184,9 @@ export const OverlayPreviewCard: React.FC<OverlayPreviewCardProps> = ({
         }}
       >
         {/* Rendered Overlay Box */}
-        <div key={previewAnimTick} style={{ width: "100%", maxWidth: "800px", overflow: "visible" }} dangerouslySetInnerHTML={{ __html: compiledPreviewHtml }} />
+        <div style={{ width: "100%", maxWidth: "800px", minWidth: 0 }}>
+          <SafeTemplateFrame html={compiledPreviewHtml} animation={config.textAnimation} animationKey={previewAnimTick} durationMs={config.animationSpeedMs || 250} height={Math.min(360, Math.max(160, config.height))} interactive />
+        </div>
       </div>
 
       {/* Display Fields & Font Adjustments Row (Under Preview) */}

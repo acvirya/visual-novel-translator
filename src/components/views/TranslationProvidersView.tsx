@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from "react";
+import { useConfirmation } from "../common/ConfirmationProvider";
+import React, { useState, useEffect, useRef } from "react";
+import { FreeMtCard } from "./providers/FreeMtCard";
 import {
   testOpenRouterKey,
   OpenRouterKeyInfo,
@@ -33,6 +35,7 @@ import { settingsManager } from "../../services/settingsManager";
 import { StylePresetsCard } from "./providers/StylePresetsCard";
 
 export const TranslationProvidersView: React.FC = () => {
+  const confirm = useConfirmation();
   const toast = useToast();
 
   // OpenRouter Stats State
@@ -58,13 +61,34 @@ export const TranslationProvidersView: React.FC = () => {
     return map;
   });
 
-  const updateProviderConfig = (providerId: string, updates: Partial<StoredProviderConfig>) => {
-    setProviderConfigs((prev) => {
-      const existing = prev[providerId] || { id: providerId, apiKey: "" };
-      const merged = { ...existing, ...updates };
-      LlmProviderRegistry.saveProviderConfig(merged);
-      return { ...prev, [providerId]: merged };
-    });
+  const providerConfigsRef = useRef(providerConfigs);
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  const editProviderConfig = (providerId: string, updates: Partial<StoredProviderConfig>) => {
+    const current = providerConfigsRef.current;
+    const merged = { ...current[providerId], id: providerId, ...updates };
+    providerConfigsRef.current = { ...current, [providerId]: merged };
+    setProviderConfigs(providerConfigsRef.current);
+    setTestFeedback(null);
+  };
+
+  const updateProviderConfig = async (providerId: string, updates: Partial<StoredProviderConfig>): Promise<boolean> => {
+    const merged = { ...providerConfigsRef.current[providerId], id: providerId, ...updates };
+    // Serialize writes so an earlier blur cannot overwrite a later verified key.
+    const save = saveQueueRef.current.then(() => LlmProviderRegistry.saveProviderConfig(merged));
+    saveQueueRef.current = save.catch(() => {});
+    try {
+      await save;
+      const current = providerConfigsRef.current[providerId];
+      if (current?.apiKey === merged.apiKey && current?.baseUrl === merged.baseUrl) {
+        providerConfigsRef.current = { ...providerConfigsRef.current, [providerId]: merged };
+        setProviderConfigs(providerConfigsRef.current);
+      }
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error), "Could not save provider");
+      return false;
+    }
   };
 
   // Hyperparameters
@@ -95,58 +119,55 @@ export const TranslationProvidersView: React.FC = () => {
     settingsManager.updateTranslation({ temperature });
   }, [temperature]);
 
-  // Test Provider Connection
-  const handleTestProvider = async (providerId: string) => {
-    const cfg = providerConfigs[providerId];
-    if (!cfg || !cfg.apiKey.trim()) {
-      toast.error("Please enter an API key first.", "Missing Key");
+  // Verify the current draft, then mark it verified only after secure storage succeeds.
+  const performProviderTest = async (providerId: string) => {
+    const cfg = providerConfigsRef.current[providerId];
+    if (!cfg?.apiKey.trim()) {
+      toast.error("Please enter an API key first.", "Missing key");
       return;
     }
-
     setIsTesting(true);
     setTestFeedback(null);
-
-    if (providerId === "openrouter") {
-      const result = await testOpenRouterKey(cfg.apiKey);
-      setIsTesting(false);
-
-      if (result.isValid) {
-        updateProviderConfig("openrouter", { isVerified: true });
-        setKeyInfo(result.keyInfo || null);
-        setTestFeedback({ isSuccess: true, message: result.message });
-        if (result.keyInfo) {
-          localStorage.setItem("vn_provider_openrouter_key_info", JSON.stringify(result.keyInfo));
-        }
-        toast.success("OpenRouter API Key verified successfully!", "Key Active");
-      } else {
-        updateProviderConfig("openrouter", { isVerified: false });
-        setKeyInfo(null);
-        setTestFeedback({ isSuccess: false, message: result.message });
-        localStorage.removeItem("vn_provider_openrouter_key_info");
-        toast.error(result.message || "Failed to verify API Key.", "Validation Error");
+    try {
+      if (!await updateProviderConfig(providerId, { isVerified: false })) return;
+      const result = providerId === "openrouter"
+        ? await testOpenRouterKey(cfg.apiKey)
+        : await LlmDispatcherService.testProviderConnection(providerId, cfg.apiKey, cfg.baseUrl);
+      if (!await updateProviderConfig(providerId, { isVerified: result.isValid })) return;
+      setTestFeedback({ isSuccess: result.isValid, message: result.message });
+      if (providerId === "openrouter") {
+        const info = "keyInfo" in result ? result.keyInfo as OpenRouterKeyInfo | undefined : undefined;
+        setKeyInfo(info || null);
+        if (info) localStorage.setItem("vn_provider_openrouter_key_info", JSON.stringify(info));
+        else localStorage.removeItem("vn_provider_openrouter_key_info");
       }
-      return;
-    }
-
-    // Direct provider test via LlmDispatcherService
-    const res = await LlmDispatcherService.testProviderConnection(providerId, cfg.apiKey, cfg.baseUrl);
-    setIsTesting(false);
-    if (res.isValid) {
-      updateProviderConfig(providerId, { isVerified: true });
-      setTestFeedback({ isSuccess: true, message: res.message });
-      toast.success(res.message, "Connected");
-      // Fetch models dynamically in background
-      LlmDispatcherService.fetchProviderModels(providerId, cfg.apiKey, cfg.baseUrl).then((fetched) => {
-        if (fetched && fetched.length > 0) {
-          updateProviderConfig(providerId, { customModels: fetched });
-        }
-      });
-    } else {
-      updateProviderConfig(providerId, { isVerified: false });
-      setTestFeedback({ isSuccess: false, message: res.message });
-      toast.error(res.message, "Connection Failed");
+      if (!result.isValid) {
+        toast.error(result.message, "Connection failed");
+        return;
+      }
+      toast.success(result.message, "Provider saved & verified");
+      const models = await LlmDispatcherService.fetchProviderModels(providerId, cfg.apiKey, cfg.baseUrl);
+      if (models.length > 0) await updateProviderConfig(providerId, { customModels: models });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setTestFeedback({ isSuccess: false, message });
+      toast.error(message, "Could not verify provider");
+    } finally {
+      setIsTesting(false);
     }
   };
+
+  const confirmProviderChange = (providerId: string, action: () => void | Promise<void>) => {
+    const saved = LlmProviderRegistry.getProviderConfig(providerId);
+    const draft = providerConfigsRef.current[providerId];
+    const replacingKey = Boolean(saved.apiKey && saved.apiKey !== draft?.apiKey.trim());
+    const changingEndpoint = Boolean(saved.apiKey && (saved.baseUrl || "") !== (draft?.baseUrl || ""));
+    if (replacingKey || changingEndpoint) {
+      confirm({ title: draft?.apiKey.trim() ? "Replace provider configuration?" : "Remove saved API key?", message: draft?.apiKey.trim() ? "Replace the saved API key or endpoint with these edited values?" : "Delete this provider's saved API key from secure storage?", confirmText: draft?.apiKey.trim() ? "Save changes" : "Remove key", variant: "warning" }, action);
+    } else void action();
+  };
+  const handleTestProvider = (providerId: string) => confirmProviderChange(providerId, () => performProviderTest(providerId));
+  const saveProviderDraft = (providerId: string) => confirmProviderChange(providerId, async () => { await updateProviderConfig(providerId, {}); });
 
   const allPresets = getAllStylePresets(userPresets);
 
@@ -161,26 +182,30 @@ export const TranslationProvidersView: React.FC = () => {
 
   // Handle Reset to Preset Default
   const handleResetPreset = () => {
-    const found = allPresets.find((p) => p.id === activePresetId);
-    if (found) {
-      setStyleInstructions(found.instructions);
-      localStorage.setItem("vn_active_style_instructions", found.instructions);
-      toast.success(`Reset style instructions to "${found.name}" default.`, "Reset Success");
-    }
+    confirm({ title: "Reset style instructions?", message: "Replace your edited instructions with this preset default?", confirmText: "Reset instructions", variant: "warning" }, () => {
+      const found = allPresets.find((p) => p.id === activePresetId);
+      if (found) {
+        setStyleInstructions(found.instructions);
+        localStorage.setItem("vn_active_style_instructions", found.instructions);
+        toast.success(`Reset style instructions to "${found.name}" default.`, "Reset Success");
+      }
+    });
   };
 
   // Handle Delete Custom Preset
   const handleDeleteCustomPreset = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const updated = userPresets.filter((p) => p.id !== id);
-    setUserPresets(updated);
-    saveUserStylePresets(updated);
-    if (activePresetId === id) {
-      const defaultPreset = BUILTIN_STYLE_PRESETS[0];
-      setActivePresetId(defaultPreset.id);
-      setStyleInstructions(defaultPreset.instructions);
-    }
-    toast.info("Custom style preset deleted.", "Preset Removed");
+    confirm({ title: "Delete style preset?", message: "Remove this custom translation style? This cannot be undone.", confirmText: "Delete preset" }, () => {
+      const updated = userPresets.filter((p) => p.id !== id);
+      setUserPresets(updated);
+      saveUserStylePresets(updated);
+      if (activePresetId === id) {
+        const defaultPreset = BUILTIN_STYLE_PRESETS[0];
+        setActivePresetId(defaultPreset.id);
+        setStyleInstructions(defaultPreset.instructions);
+      }
+      toast.info("Custom style preset deleted.", "Preset Removed");
+    });
   };
 
   return (
@@ -198,7 +223,7 @@ export const TranslationProvidersView: React.FC = () => {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "16px" }}>
           <div>
             <LanguageSelectorCombobox
               label="Original Game Source Language"
@@ -265,7 +290,7 @@ export const TranslationProvidersView: React.FC = () => {
                   borderRadius: "var(--radius-sm)",
                   border: isSelected ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
                   backgroundColor: isSelected ? "var(--accent-primary)" : "var(--bg-app)",
-                  color: isSelected ? "#fff" : "var(--text-main)",
+                  color: isSelected ? "#fff" : "var(--text-primary)",
                   cursor: "pointer",
                 }}
               >
@@ -308,7 +333,7 @@ export const TranslationProvidersView: React.FC = () => {
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)" }}>
+                  <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>
                     {currentDef.name}
                   </span>
                   <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "capitalize" }}>
@@ -398,8 +423,13 @@ export const TranslationProvidersView: React.FC = () => {
                       type={showApiKey ? "text" : "password"}
                       placeholder={currentDef.apiKeyPlaceholder}
                       value={currentCfg.apiKey || ""}
+                      aria-label="Provider API key"
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={isTesting}
+                      onBlur={() => saveProviderDraft(activeProviderTab)}
                       onChange={(e) => {
-                        updateProviderConfig(activeProviderTab, { apiKey: e.target.value, isVerified: false });
+                        editProviderConfig(activeProviderTab, { apiKey: e.target.value, isVerified: false });
                         setTestFeedback(null);
                       }}
                       style={{
@@ -411,6 +441,7 @@ export const TranslationProvidersView: React.FC = () => {
                     />
                     <button
                       type="button"
+                      aria-label={showApiKey ? "Hide API key" : "Show API key"}
                       onClick={() => setShowApiKey(!showApiKey)}
                       style={{
                         position: "absolute",
@@ -460,8 +491,11 @@ export const TranslationProvidersView: React.FC = () => {
                     type="text"
                     placeholder={currentDef.defaultBaseUrl}
                     value={currentCfg.baseUrl || ""}
+                    aria-label="Provider API base URL"
+                    disabled={isTesting}
+                    onBlur={() => saveProviderDraft(activeProviderTab)}
                     onChange={(e) => {
-                      updateProviderConfig(activeProviderTab, { baseUrl: e.target.value });
+                      editProviderConfig(activeProviderTab, { baseUrl: e.target.value, isVerified: false });
                     }}
                     style={{
                       flex: 1,
@@ -471,7 +505,11 @@ export const TranslationProvidersView: React.FC = () => {
                   />
                   {currentCfg.baseUrl && currentCfg.baseUrl !== currentDef.defaultBaseUrl && (
                     <button
-                      onClick={() => updateProviderConfig(activeProviderTab, { baseUrl: undefined })}
+                      disabled={isTesting}
+                      onClick={() => confirm({ title: "Reset provider endpoint?", message: "Replace this API base URL with the provider default?", confirmText: "Reset endpoint", variant: "warning" }, async () => {
+                        editProviderConfig(activeProviderTab, { baseUrl: undefined, isVerified: false });
+                        await updateProviderConfig(activeProviderTab, {});
+                      })}
                       className="btn-secondary"
                       style={{ fontSize: "11px", padding: "4px 8px" }}
                     >
@@ -506,7 +544,7 @@ export const TranslationProvidersView: React.FC = () => {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
                     gap: "10px",
                     backgroundColor: "var(--bg-app)",
                     padding: "10px 14px",
@@ -577,6 +615,8 @@ export const TranslationProvidersView: React.FC = () => {
           />
         </div>
       </div>
+
+      <FreeMtCard />
 
       {/* 4. Style & Presets */}
       <StylePresetsCard

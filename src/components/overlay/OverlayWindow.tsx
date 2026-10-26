@@ -5,7 +5,9 @@ import {
   OverlayDialogueMessage,
   OverlayEvent,
 } from "../../utils/overlayChannel";
-import { compileOverlayTemplate, getOverlayAnimationCss } from "../../utils/overlayTemplateEngine";
+import { compileOverlayTemplate, getOverlayAnimationCss, sanitizeCustomCss } from "../../utils/overlayTemplateEngine";
+import { SafeTemplateFrame } from "./SafeTemplateFrame";
+import { clampRegion } from "./regionGeometry";
 import { TauriBridge } from "../../services/tauriBridge";
 import { Check, X, Move, AlertTriangle } from "lucide-react";
 
@@ -80,6 +82,8 @@ export const OverlayWindow: React.FC = () => {
   });
 
   const highestIdRef = useRef<number>(0);
+  const configRef = useRef(config);
+  configRef.current = config;
 
   // Sync with main app via BroadcastChannel
   useEffect(() => {
@@ -96,7 +100,7 @@ export const OverlayWindow: React.FC = () => {
         setIsEditing(event.isEditing);
         if (event.isEditing) {
           const fresh = overlayChannel.getSavedConfig();
-          const active = fresh || config;
+          const active = fresh || configRef.current;
           setConfig(active);
           setBoxRect({
             x: active.x,
@@ -109,14 +113,10 @@ export const OverlayWindow: React.FC = () => {
         highestIdRef.current = 0;
       } else if (event.type === "DIALOGUE_UPDATE") {
         const msgId = typeof event.dialogue.id === "number" ? event.dialogue.id : 0;
-        // Rule 6: Only accept packets with the highest ID (discard older packets to eliminate race conditions)
-        // If msgId drops significantly, upstream sequence has been reset (e.g. game restarted / re-attached)
+        // Sequence resets are explicit; a slow old request must never replace a
+        // newer subtitle, regardless of how far behind it is.
         if (msgId > 0 && highestIdRef.current > 0 && msgId < highestIdRef.current) {
-          if (highestIdRef.current - msgId > 5) {
-            highestIdRef.current = msgId;
-          } else {
-            return;
-          }
+          return;
         }
         if (msgId > 0 && msgId >= highestIdRef.current) {
           highestIdRef.current = msgId;
@@ -140,32 +140,16 @@ export const OverlayWindow: React.FC = () => {
     });
   }, [config.x, config.y, config.width, config.height]);
 
-  // Global Escape key listener to safely exit edit mode
-  useEffect(() => {
-    if (!isEditing) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        handleCancelPosition();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isEditing, config]);
-
   // Handle Save
   const handleSavePosition = async () => {
     setIsEditing(false);
+    const bounded = clampRegion(boxRect, window.innerWidth, window.innerHeight);
     const updated = {
       ...config,
-      x: Math.round(boxRect.x),
-      y: Math.round(boxRect.y),
-      width: Math.round(boxRect.width),
-      height: Math.round(boxRect.height),
+      x: Math.round(bounded.x),
+      y: Math.round(bounded.y),
+      width: Math.round(bounded.width),
+      height: Math.round(bounded.height),
     };
     setConfig(updated);
 
@@ -229,6 +213,7 @@ export const OverlayWindow: React.FC = () => {
     if (!isEditing) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector("dialog[open]")) return;
       if (e.key === "Enter") {
         e.preventDefault();
         handleSavePosition();
@@ -244,7 +229,7 @@ export const OverlayWindow: React.FC = () => {
 
   // Pointer Handlers for Draw, Move & Resize
   const handleBackdropMouseDown = (e: React.MouseEvent) => {
-    if (!isEditing) return;
+    if (!isEditing || e.button !== 0) return;
     // Only allow drawing a new box from scratch if user explicitly holds Shift or Alt
     // to prevent accidental clicks on the background from destroying/resizing the box
     if (e.shiftKey || e.altKey) {
@@ -259,7 +244,7 @@ export const OverlayWindow: React.FC = () => {
   };
 
   const handleBoxMouseDown = (e: React.MouseEvent) => {
-    if (!isEditing) return;
+    if (!isEditing || e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
     e.stopPropagation();
     setInteractionMode("dragging");
     dragStartRef.current = {
@@ -293,11 +278,11 @@ export const OverlayWindow: React.FC = () => {
       const y = Math.min(dragStartRef.current.mouseY, e.clientY);
       const width = Math.max(80, Math.abs(dx));
       const height = Math.max(50, Math.abs(dy));
-      setBoxRect({ x, y, width, height });
+      setBoxRect(clampRegion({ x, y, width, height }, window.innerWidth, window.innerHeight));
     } else if (interactionMode === "dragging") {
       const x = Math.max(0, initialBox.x + dx);
       const y = Math.max(0, initialBox.y + dy);
-      setBoxRect({ ...initialBox, x, y });
+      setBoxRect(clampRegion({ ...initialBox, x, y }, window.innerWidth, window.innerHeight));
     } else if (interactionMode === "resizing") {
       let newX = initialBox.x;
       let newY = initialBox.y;
@@ -325,7 +310,7 @@ export const OverlayWindow: React.FC = () => {
         }
       }
 
-      setBoxRect({ x: newX, y: newY, width: newW, height: newH });
+      setBoxRect(clampRegion({ x: newX, y: newY, width: newW, height: newH }, window.innerWidth, window.innerHeight));
     }
   };
 
@@ -403,6 +388,7 @@ export const OverlayWindow: React.FC = () => {
     <div
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
       onMouseDown={isEditing ? handleBackdropMouseDown : undefined}
       style={{
         position: isEditing ? "fixed" : "relative",
@@ -524,45 +510,21 @@ export const OverlayWindow: React.FC = () => {
           }}
         >
           {config.useCustomTemplate ? (
-            /* Custom Component Template Engine Mode */
-            <div
-              id="vn-overlay-scope-root"
-              className="vn-overlay-scope-root overlay-no-scrollbar"
-              style={{
-                width: "100%",
-                height: "100%",
-                overflowY: "auto",
-                overflowX: "hidden",
-                scrollbarWidth: "none",
-                msOverflowStyle: "none",
-                // @ts-ignore
-                "--speaker-font-size": `${config.speakerFontSize || 16}px`,
-                // @ts-ignore
-                "--message-font-size": `${config.messageFontSize || config.fontSize || 20}px`,
-                // @ts-ignore
-                "--overlay-font-size": `${config.fontSize || 20}px`,
-              }}
-            >
-              {/* Inject Scoped CSS & Animation Keyframes */}
-              <style
-                dangerouslySetInnerHTML={{
-                  __html: `${getOverlayAnimationCss(config.textAnimation, config.animationSpeedMs)}\n${config.customTemplateCss || ""}`,
-                }}
-              />
-              {/* Render Compiled Template HTML with reactive config */}
-              <div
-                key={animTick}
-                className={config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : ""}
-                style={{ width: "100%", minHeight: "100%" }}
-                dangerouslySetInnerHTML={{
-                  __html: compileOverlayTemplate(config.customTemplateHtml, activeDialogue, config),
-                }}
-              />
-            </div>
+            <>
+            {activeDialogue.isError && <div role="alert" style={{ color: "#fca5a5", background: "rgba(120, 20, 20, 0.85)", padding: "6px 10px", borderRadius: 4, fontSize: 12 }}>
+              {activeDialogue.errorMessage || "Translation failed. Check the live translation log."}
+            </div>}
+            <SafeTemplateFrame
+              html={`<style>:root { --speaker-font-size: ${config.speakerFontSize || 16}px; --message-font-size: ${config.messageFontSize || config.fontSize || 20}px; --overlay-font-size: ${config.fontSize || 20}px; }${getOverlayAnimationCss(config.textAnimation, config.animationSpeedMs)}\n${sanitizeCustomCss(config.customTemplateCss || "")}</style><div class="vn-anim-${config.textAnimation === "fade" || config.textAnimation === "blur" ? config.textAnimation : "none"}">${compileOverlayTemplate(config.customTemplateHtml, activeDialogue, config)}</div>`}
+              animation={isEditing ? "none" : config.textAnimation}
+              animationKey={animTick}
+              durationMs={config.animationSpeedMs || 250}
+              interactive={!isEditing && !config.isClickThrough}
+            />
+            </>
           ) : (
             /* Standard Configurable Subtitle Box */
             <div
-              key={animTick}
               className={`overlay-no-scrollbar ${config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : ""}`}
               style={{
                 display: "flex",
@@ -645,6 +607,7 @@ export const OverlayWindow: React.FC = () => {
               {/* Message (Source Text / Dialogue) */}
               {(config.showMessage || !activeDialogue.translatedMessage) && activeDialogue.message && (
                 <div
+                  key={`source-${animTick}`}
                   className="vn-text-anim-target"
                   style={{
                     fontSize: `${config.messageFontSize || config.fontSize}px`,
@@ -662,6 +625,7 @@ export const OverlayWindow: React.FC = () => {
               {/* Translated Message */}
               {config.showTranslatedMessage && activeDialogue.translatedMessage && (
                 <div
+                  key={`translation-${animTick}`}
                   className="vn-text-anim-target"
                   style={{
                     fontSize: `${config.messageFontSize || config.fontSize}px`,

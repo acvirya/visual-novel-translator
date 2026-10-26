@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-secure-key"
+description = "Enables the get_secure_key command without any pre-configured scope."
+commands.allow = ["get_secure_key"]
+
+[[permission]]
+identifier = "deny-get-secure-key"
+description = "Denies the get_secure_key command without any pre-configured scope."
+commands.deny = ["get_secure_key"]

@@ -109,7 +109,7 @@ export const StylePresetsCard: React.FC<StylePresetsCardProps> = ({
         </div>
 
         {/* Preset Selector Cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px", marginBottom: "14px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "10px", marginBottom: "14px" }}>
           {allPresets.map((preset) => {
             const isSelected = activePresetId === preset.id;
             return (
@@ -263,7 +263,7 @@ export const StylePresetsCard: React.FC<StylePresetsCardProps> = ({
           isOpen={showAddModal}
           onClose={() => setShowAddModal(false)}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px", minWidth: "380px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px", minWidth: 0 }}>
             <div>
               <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
                 Preset Name:

@@ -13,6 +13,8 @@ class ShortcutService implements ManagedService {
   private isOverlayClickThrough = true;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private registeredShortcuts = new Set<string>();
+  private unsubscribeSettings: (() => void) | null = null;
+  private reloadQueue: Promise<void> = Promise.resolve();
   private lastRegisteredKeys = { lockKey: "", pauseKey: "", ocrKey: "", snippingKey: "" };
 
   public async init() {
@@ -26,7 +28,7 @@ class ShortcutService implements ManagedService {
     }
 
     // Subscribe to settings changes to auto-update shortcuts with 300ms debounce
-    settingsManager.subscribe(() => {
+    this.unsubscribeSettings = settingsManager.subscribe(() => {
       const general = settingsManager.getGeneral();
       const currentKeys = {
         lockKey: general.hotkeyLockOverlay?.trim() || "",
@@ -61,6 +63,12 @@ class ShortcutService implements ManagedService {
   }
 
   public async reloadShortcuts() {
+    const operation = this.reloadQueue.then(() => this.reloadShortcutsInternal());
+    this.reloadQueue = operation.catch(() => {});
+    await operation;
+  }
+
+  private async reloadShortcutsInternal() {
     try {
       // Unregister previously registered shortcuts individually to avoid clearing global shortcuts owned by other components
       for (const key of this.registeredShortcuts) {
@@ -205,10 +213,13 @@ class ShortcutService implements ManagedService {
   }
 
   public async dispose() {
+    this.unsubscribeSettings?.();
+    this.unsubscribeSettings = null;
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    await this.reloadQueue;
     for (const key of this.registeredShortcuts) {
       try {
         await unregister(key);

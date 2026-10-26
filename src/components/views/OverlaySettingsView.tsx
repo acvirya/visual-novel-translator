@@ -1,3 +1,4 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
 import React, { useState, useEffect, useRef } from "react";
 import { OverlayConfig } from "../../types";
 import {
@@ -7,6 +8,7 @@ import {
 import {
   OVERLAY_PRESETS,
   compileOverlayTemplate,
+  sanitizeCustomCss,
   getOverlayAnimationCss,
   TemplatePreset,
   loadUserCustomPresets,
@@ -60,6 +62,7 @@ const INITIAL_OVERLAY_CONFIG: OverlayConfig = {
 };
 
 export const OverlaySettingsView: React.FC = () => {
+  const confirm = useConfirmation();
   const [config, setConfig] = useState<OverlayConfig>(() => {
     const saved = settingsManager.getOverlay().config || overlayChannel.getSavedConfig();
     return {
@@ -216,33 +219,37 @@ export const OverlaySettingsView: React.FC = () => {
 
   // Save / Update Current Custom Preset
   const handleUpdateCurrentPreset = () => {
-    if (isCurrentBuiltIn) return;
-    const updatedList = customPresets.map((p) => {
-      if (p.id === activePresetId) {
-        return {
-          ...p,
-          html: config.customTemplateHtml || "",
-          css: config.customTemplateCss || "",
-        };
-      }
-      return p;
+    confirm({ title: "Replace saved overlay preset?", message: "Overwrite this preset with the current HTML and CSS?", confirmText: "Replace preset", variant: "warning" }, () => {
+      if (isCurrentBuiltIn) return;
+      const updatedList = customPresets.map((p) => {
+        if (p.id === activePresetId) {
+          return {
+            ...p,
+            html: config.customTemplateHtml || "",
+            css: config.customTemplateCss || "",
+          };
+        }
+        return p;
     });
     setCustomPresets(updatedList);
     saveUserCustomPresets(updatedList);
     settingsManager.updateOverlay({ userCustomPresets: updatedList });
     showFeedbackNotification("Preset changes saved successfully!");
+    });
   };
 
   // Delete Current Custom Preset
   const handleDeleteCurrentPreset = () => {
-    if (isCurrentBuiltIn) return;
-    const updatedList = customPresets.filter((p) => p.id !== activePresetId);
-    setCustomPresets(updatedList);
-    saveUserCustomPresets(updatedList);
-    settingsManager.updateOverlay({ userCustomPresets: updatedList });
+    confirm({ title: "Delete overlay preset?", message: "Remove this custom HTML/CSS preset? This cannot be undone.", confirmText: "Delete preset" }, () => {
+      if (isCurrentBuiltIn) return;
+      const updatedList = customPresets.filter((p) => p.id !== activePresetId);
+      setCustomPresets(updatedList);
+      saveUserCustomPresets(updatedList);
+      settingsManager.updateOverlay({ userCustomPresets: updatedList });
 
-    handleApplyPreset(OVERLAY_PRESETS[0]);
-    showFeedbackNotification("Custom preset deleted.");
+      handleApplyPreset(OVERLAY_PRESETS[0]);
+      showFeedbackNotification("Custom preset deleted.");
+    });
   };
 
   const showFeedbackNotification = (msg: string) => {
@@ -430,7 +437,7 @@ export const OverlaySettingsView: React.FC = () => {
     previewDialogue,
     config
   );
-  const compiledCss = config.customTemplateCss || OVERLAY_PRESETS[0].css;
+  const compiledCss = sanitizeCustomCss(config.customTemplateCss || OVERLAY_PRESETS[0].css);
   const animCss = getOverlayAnimationCss(config.textAnimation, config.animationSpeedMs);
   const rootVars = `:root { --speaker-font-size: ${speakerSize}px; --message-font-size: ${messageSize}px; --font-size: ${messageSize}px; }`;
   const animClass = config.textAnimation && config.textAnimation !== "none" && config.textAnimation !== "typewriter" ? `vn-anim-${config.textAnimation}` : "";

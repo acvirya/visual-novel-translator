@@ -12,38 +12,20 @@ export const LogsHubView: React.FC = () => {
   const logOptions: SegmentedOption<LogsSubTab>[] = [
     {
       id: "usage",
-      label: "AI Usage Logs",
+      label: "Translation usage",
       icon: <Bot size={14} />,
     },
     {
       id: "system",
-      label: "System & Debug Logs",
+      label: "Application logs",
       icon: <Terminal size={14} />,
     },
   ];
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        width: "100%",
-        maxWidth: "1200px",
-        margin: "0 auto",
-      }}
-    >
+    <div className="workspace-view">
       {/* Sub-tabs Header Centered */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          width: "100%",
-          padding: "0 0 12px 0",
-          flexShrink: 0,
-        }}
-      >
+      <div className="workspace-tabs">
         <SegmentedControl<LogsSubTab>
           options={logOptions}
           value={activeSubTab}
@@ -53,7 +35,7 @@ export const LogsHubView: React.FC = () => {
       </div>
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
+      <div className="workspace-body">
         {activeSubTab === "usage" && <AiUsageLogsView />}
         {activeSubTab === "system" && <LogsView />}
       </div>

@@ -1,4 +1,6 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
 import React, { useState, useEffect } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import {
   TextractorService,
   detectTextractorPath,
@@ -16,6 +18,7 @@ interface TextractorInputViewProps {
 export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
   onOpenPreprocessingSettings,
 }) => {
+  const confirm = useConfirmation();
   const {
     exePath,
     arch,
@@ -47,8 +50,9 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
 
   // Initialize Textractor listener and process list on mount
   useEffect(() => {
-    TextractorService.initListener();
-    TextractorService.listProcesses();
+    if (!isTauri()) return;
+    void TextractorService.initListener().catch((error: unknown) => console.warn("Could not initialize Textractor listener:", error));
+    void TextractorService.listProcesses();
   }, []);
 
   // Auto-select first thread if none inspected
@@ -155,7 +159,7 @@ export const TextractorInputView: React.FC<TextractorInputViewProps> = ({
         threadLogs={threadLogs}
         onSelectInspectedThread={setInspectedThreadId}
         onToggleCaptureThread={handleToggleCaptureThread}
-        onClearThreadLogs={(threadId) => TextractorService.clearLogs(threadId)}
+        onClearThreadLogs={(threadId) => confirm({ title: "Clear hook thread logs?", message: "Remove the captured dialogue history for this thread?", confirmText: "Clear logs" }, () => TextractorService.clearLogs(threadId))}
       />
 
       {/* 4. Advanced Hook Settings (Collapsible Accordion) */}

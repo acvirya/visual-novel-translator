@@ -1,4 +1,6 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
 import React, { useState, useEffect } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import {
   Crosshair,
   Activity,
@@ -23,6 +25,7 @@ import { OcrService } from "../../services/ocrService";
 import { formatMonitorLabel } from "../../utils/monitorUtils";
 import { TauriBridge } from "../../services/tauriBridge";
 import { useOcrStore } from "../../stores/useOcrStore";
+import { settingsManager } from "../../services/settingsManager";
 
 interface OcrInputViewProps {
   onOpenPreprocessingSettings?: () => void;
@@ -31,6 +34,7 @@ interface OcrInputViewProps {
 export const OcrInputView: React.FC<OcrInputViewProps> = ({
   onOpenPreprocessingSettings,
 }) => {
+  const confirm = useConfirmation();
   // Pull state from Zustand store
   const {
     engineStatus,
@@ -66,6 +70,12 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
 
   const [isCheckingEngine, setIsCheckingEngine] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+  const [modalPreview, setModalPreview] = useState<{
+    name: string;
+    url: string;
+    width?: number;
+    height?: number;
+  } | null>(null);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([
     { name: "Monitor 1 (Primary)", width: 1920, height: 1080, x: 0, y: 0, scale_factor: 1.0, is_primary: true },
   ]);
@@ -73,8 +83,11 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
   // Check OneOCR engine status
   const checkEngine = async (path?: string) => {
     setIsCheckingEngine(true);
-    await OcrService.detectOneOcrPath(path !== undefined ? path : customPath);
-    setIsCheckingEngine(false);
+    try {
+      await OcrService.detectOneOcrPath(path !== undefined ? path : customPath);
+    } finally {
+      setIsCheckingEngine(false);
+    }
   };
 
   const refreshSnapshots = async (targetRegions: OcrRegion[] = regions) => {
@@ -83,13 +96,14 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
   };
 
   useEffect(() => {
+    if (!isTauri()) return;
     checkEngine();
     refreshSnapshots();
   }, []);
 
   // Load monitors from Tauri backend and sync OCR regions across windows
   useEffect(() => {
-    TauriBridge.getMonitors()
+    if (isTauri()) TauriBridge.getMonitors()
       .then((m) => {
         if (m && m.length > 0) {
           setMonitors(m);
@@ -111,13 +125,10 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
 
     const handleFocus = () => {
       try {
-        const saved = localStorage.getItem("vn_ocr_regions");
+        const saved = settingsManager.getOcr().regions;
         if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setRegions(parsed);
-            refreshSnapshots(parsed);
-          }
+          setRegions(saved);
+          refreshSnapshots(saved);
         }
       } catch {}
     };
@@ -152,7 +163,9 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
 
   // Delete Region
   const handleDeleteRegion = (id: string) => {
-    setRegions((prev) => prev.filter((r) => r.id !== id));
+    confirm({ title: "Delete capture region?", message: "Remove this OCR capture area from your settings?", confirmText: "Delete region" }, () => {
+      setRegions((prev) => prev.filter((r) => r.id !== id));
+    });
   };
 
   const toggleAutoScan = () => {
@@ -360,7 +373,7 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
             No screen regions configured yet. Click <strong>Select Region on Screen</strong> above to drag and select game dialogue areas.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "8px", marginBottom: "12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "8px", marginBottom: "12px" }}>
             {regions.map((region) => (
               <div
                 key={region.id}
@@ -379,24 +392,35 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
                 <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
                   {/* Thumbnail Preview */}
                   <div
+                    onClick={() =>
+                      regionSnapshots[region.id] &&
+                      setModalPreview({
+                        name: region.name,
+                        url: regionSnapshots[region.id],
+                        width: region.physicalWidth,
+                        height: region.physicalHeight,
+                      })
+                    }
+                    title={regionSnapshots[region.id] ? "Click to view full-size captured snapshot preview" : "No preview snapshot"}
                     style={{
-                      width: "48px",
-                      height: "32px",
-                      backgroundColor: "rgba(0, 0, 0, 0.4)",
-                      borderRadius: "3px",
+                      width: "56px",
+                      height: "36px",
+                      backgroundColor: "rgba(0, 0, 0, 0.6)",
+                      borderRadius: "4px",
                       overflow: "hidden",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       border: "1px solid var(--border-subtle)",
                       flexShrink: 0,
+                      cursor: regionSnapshots[region.id] ? "zoom-in" : "default",
                     }}
                   >
                     {regionSnapshots[region.id] ? (
                       <img
                         src={regionSnapshots[region.id]}
                         alt={region.name}
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        style={{ width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" }}
                       />
                     ) : (
                       <Camera size={12} color="var(--text-muted)" />
@@ -417,9 +441,19 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
                         {region.name}
                       </strong>
                     </div>
-                    <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
-                      {Math.round(region.width)}x{Math.round(region.height)}px
-                    </span>
+                    {(() => {
+                      const dispW = region.physicalWidth != null && region.physicalWidth > 0 ? region.physicalWidth : Math.round(region.width);
+                      const dispH = region.physicalHeight != null && region.physicalHeight > 0 ? region.physicalHeight : Math.round(region.height);
+                      const isScaled = region.physicalWidth != null && region.physicalWidth !== Math.round(region.width);
+                      return (
+                        <span
+                          style={{ fontSize: "10.5px", color: "var(--text-muted)" }}
+                          title={`Physical Screen Capture: ${dispW}×${dispH}px | CSS Logical: ${Math.round(region.width)}×${Math.round(region.height)}px`}
+                        >
+                          {dispW}×{dispH}px {isScaled ? `(${Math.round(region.width)}×${Math.round(region.height)})` : ""}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -611,7 +645,7 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
               </div>
 
               {/* Sliders Grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "14px" }}>
                 {/* Scan Interval */}
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
@@ -705,6 +739,98 @@ export const OcrInputView: React.FC<OcrInputViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Full Preview Snapshot Modal */}
+      {modalPreview && (
+        <div
+          onClick={() => setModalPreview(null)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100vw",
+            height: "100vh",
+            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: "var(--bg-surface, #161b22)",
+              border: "1px solid var(--border-subtle, #30363d)",
+              borderRadius: "10px",
+              padding: "16px",
+              maxWidth: "92vw",
+              maxHeight: "92vh",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+              boxShadow: "0 16px 40px rgba(0,0,0,0.6)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <Camera size={16} color="var(--accent-primary)" />
+                <strong style={{ fontSize: "13px", color: "var(--text-primary)" }}>{modalPreview.name}</strong>
+                {modalPreview.width && modalPreview.height && (
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                    ({modalPreview.width} × {modalPreview.height} physical pixels)
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => setModalPreview(null)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: "4px",
+                  borderRadius: "4px",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+                title="Close preview"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div
+              style={{
+                borderRadius: "6px",
+                overflow: "auto",
+                maxHeight: "75vh",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "#050505",
+                border: "1px solid var(--border-subtle, #21262d)",
+                padding: "8px",
+              }}
+            >
+              <img
+                src={modalPreview.url}
+                alt={modalPreview.name}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "70vh",
+                  objectFit: "contain",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
+                }}
+              />
+            </div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", textAlign: "center" }}>
+              Exact cropped region captured by the backend for OCR text extraction.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

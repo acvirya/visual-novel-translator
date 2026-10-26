@@ -3642,8 +3642,6 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "oneocr-rs"
 version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a439cc0bd270ca5b894f55002b5a76498ee4bd220cff25c41c1c39cbbc484ab6"
 dependencies = [
  "image",
  "serde",

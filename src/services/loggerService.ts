@@ -4,6 +4,7 @@
  */
 
 import { TauriBridge } from "./tauriBridge";
+import { redactSecrets, redactSecretText } from "../utils/redactSecrets";
 
 export interface AppLogEntry {
   id: string;
@@ -18,6 +19,7 @@ class LoggerService {
   private logs: AppLogEntry[] = [];
   private listeners: Set<(logs: AppLogEntry[]) => void> = new Set();
   private maxLogs = 500;
+  private removeGlobalHandlers: (() => void) | null = null;
 
   constructor() {
     this.info("System", "VN Translator logging service initialized.");
@@ -27,21 +29,27 @@ class LoggerService {
   private attachGlobalErrorHandlers() {
     if (typeof window === "undefined") return;
 
-    window.addEventListener("error", (event) => {
+    const onError = (event: ErrorEvent) => {
       this.error("GlobalRuntime", event.message || "Uncaught window error", {
         filename: event.filename,
         lineno: event.lineno,
         colno: event.colno,
         stack: event.error?.stack,
       });
-    });
+    };
 
-    window.addEventListener("unhandledrejection", (event) => {
+    const onRejection = (event: PromiseRejectionEvent) => {
       const reason = event.reason;
       const message = reason instanceof Error ? reason.message : String(reason);
       const stack = reason instanceof Error ? reason.stack : undefined;
       this.error("UnhandledPromise", message, { stack, raw: reason });
-    });
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    this.removeGlobalHandlers = () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
   }
 
   public subscribe(callback: (logs: AppLogEntry[]) => void) {
@@ -54,10 +62,15 @@ class LoggerService {
 
   private notify() {
     const list = [...this.logs];
-    this.listeners.forEach((cb) => cb(list));
+    this.listeners.forEach((cb) => {
+      try { cb(list); } catch { /* A failing log view must not break application work. */ }
+    });
   }
 
   public log(level: "INFO" | "WARN" | "ERROR" | "DEBUG", source: string, message: string, details?: any) {
+    source = redactSecretText(source);
+    message = redactSecretText(message);
+    details = redactSecrets(details);
     const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? `log_${crypto.randomUUID()}`
       : `log_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -124,6 +137,8 @@ class LoggerService {
   }
 
   public dispose() {
+    this.removeGlobalHandlers?.();
+    this.removeGlobalHandlers = null;
     this.listeners.clear();
     this.logs = [];
   }

@@ -5,7 +5,7 @@ import {
   ScriptDatabaseState,
 } from "../../services/scriptManagerService";
 import { useToast } from "../common/ToastProvider";
-import { ConfirmDialog } from "../common/ConfirmDialog";
+import { useConfirmation } from "../common/ConfirmationProvider";
 import {
   Database,
   FolderOpen,
@@ -18,8 +18,6 @@ import {
   X,
   Plus,
   BookOpen,
-  Sparkles,
-  CheckCircle2,
   FileDown,
   ChevronLeft,
   ChevronRight,
@@ -30,10 +28,10 @@ import {
 
 export const ScriptManagerView: React.FC = () => {
   const toast = useToast();
+  const confirm = useConfirmation();
   const [dbState, setDbState] = useState<ScriptDatabaseState>(() => scriptManagerService.getState());
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [showAddForm, setShowAddForm] = useState<boolean>(false);
-  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
 
   // Pagination State for Maximum Performance on 20,000+ lines
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -90,11 +88,7 @@ export const ScriptManagerView: React.FC = () => {
   };
 
   const handleImportFromScripts = async () => {
-    if (!dbState.activeFileName) {
-      // If no script is currently open, create a new one first
-      const createRes = await scriptManagerService.createNewScriptNative("imported_script.jsonl");
-      if (!createRes.success) return;
-    }
+    if (!dbState.activeFileName) return;
 
     const res = await scriptManagerService.importEntriesFromScriptsNative();
     setDbState(scriptManagerService.getState());
@@ -143,32 +137,33 @@ export const ScriptManagerView: React.FC = () => {
   const handleSaveEdit = (id: string) => {
     if (!editMessage.trim() || !editTranslatedMessage.trim()) return;
 
-    scriptManagerService.updateEntry(id, {
+    const patch = {
       speaker: editSpeaker.trim() || undefined,
       translated_speaker: editTranslatedSpeaker.trim() || undefined,
       message: editMessage.trim(),
       translated_message: editTranslatedMessage.trim(),
+    };
+    confirm({ title: "Save script entry changes?", message: "Replace the saved dialogue and translation in the active script?", confirmText: "Save changes", variant: "primary" }, () => {
+        scriptManagerService.updateEntry(id, patch);
+        setEditingId(null);
+        toast.success("Script entry updated.");
     });
-
-    setEditingId(null);
-    toast.success("Script entry updated.", "Entry Updated");
   };
 
   const handleCancelEdit = () => {
     setEditingId(null);
   };
 
-  const handleDeleteEntry = (id: string) => {
+  const handleDeleteEntry = (id: string) => confirm({ title: "Delete script entry?", message: "Remove this dialogue entry from the active script? This cannot be undone.", confirmText: "Delete entry" }, () => {
     scriptManagerService.deleteEntry(id);
     toast.info("Script entry deleted.");
-  };
+  });
 
-  const handleClearAll = () => {
+  const handleClearAll = () => confirm({ title: "Clear all script entries?", message: `Delete all ${dbState.entries.length} entries from the active script? This cannot be undone.`, confirmText: "Delete all entries" }, () => {
     scriptManagerService.clearEntries();
     setDbState(scriptManagerService.getState());
-    setShowClearConfirm(false);
-    toast.success("All entries deleted from active script.", "Script Cleared");
-  };
+    toast.success("All entries deleted from active script.");
+  });
 
   // Filter entries based on search query (Memoized)
   const filteredEntries = useMemo(() => {
@@ -215,173 +210,22 @@ export const ScriptManagerView: React.FC = () => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "14px" }}>
-      {/* Top Header Card */}
-      <div
-        style={{
-          backgroundColor: "var(--bg-surface)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-md)",
-          padding: "12px 16px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: "12px",
-        }}
-      >
-        {/* Left Side: Active Script Info or None */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <Database size={18} style={{ color: dbState.activeFileName ? "var(--accent-cyan)" : "var(--text-muted)" }} />
-            <div>
-              <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)", letterSpacing: "0.5px" }}>
-                Active Script Database
-              </div>
-              <div
-                style={{ fontSize: "14px", fontWeight: 700, color: dbState.activeFileName ? "var(--text-primary)" : "var(--text-muted)" }}
-                title={dbState.activeFilePath || undefined}
-              >
-                {dbState.activeFileName || "No active script loaded"}
-              </div>
-            </div>
-          </div>
-
-          {dbState.activeFileName && (
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  fontSize: "11.5px",
-                  fontWeight: 600,
-                  backgroundColor: "rgba(63, 185, 80, 0.12)",
-                  color: "var(--accent-success)",
-                  padding: "3px 8px",
-                  borderRadius: "var(--radius-sm)",
-                  border: "1px solid rgba(63, 185, 80, 0.3)",
-                }}
-              >
-                <CheckCircle2 size={12} /> Autosave Active
-              </span>
-
-              <label
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  color: dbState.autoAppend ? "var(--accent-gold)" : "var(--text-secondary)",
-                  backgroundColor: dbState.autoAppend ? "rgba(227, 179, 65, 0.12)" : "var(--bg-surface-elevated)",
-                  padding: "4px 8px",
-                  borderRadius: "var(--radius-sm)",
-                  border: dbState.autoAppend ? "1px solid rgba(227, 179, 65, 0.3)" : "1px solid var(--border-subtle)",
-                  cursor: "pointer",
-                }}
-                title="Automatically append newly translated game lines into this active script"
-              >
-                <input
-                  type="checkbox"
-                  checked={dbState.autoAppend}
-                  onChange={(e) => scriptManagerService.setAutoAppend(e.target.checked)}
-                />
-                <Sparkles size={12} /> Auto-Append Translations
-              </label>
-
-              {/* Match Similarity Threshold Slider */}
-              <div
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  backgroundColor: "var(--bg-surface-elevated)",
-                  padding: "4px 8px",
-                  borderRadius: "var(--radius-sm)",
-                  border: "1px solid var(--border-subtle)",
-                }}
-                title="Similarity threshold required to trigger an offline script match (50% - 100%)"
-              >
-                <Sliders size={12} style={{ color: "var(--accent-cyan)" }} />
-                <span style={{ color: "var(--text-secondary)", fontSize: "11.5px" }}>Threshold:</span>
-                <input
-                  type="range"
-                  min="0.50"
-                  max="1.00"
-                  step="0.05"
-                  value={dbState.matchThreshold ?? 0.85}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    scriptManagerService.setMatchThreshold(val);
-                    setDbState(scriptManagerService.getState());
-                  }}
-                  style={{ width: "65px", cursor: "pointer" }}
-                />
-                <span style={{ color: "var(--accent-cyan)", minWidth: "30px", textAlign: "right", fontSize: "11.5px" }}>
-                  {Math.round((dbState.matchThreshold ?? 0.85) * 100)}%
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right Side: Action Buttons (Create, Open, Close) */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <button
-            type="button"
-            onClick={handleCreateNewScript}
-            className="btn-primary"
-            style={{ padding: "6px 12px", fontSize: "12px" }}
-          >
-            <PlusCircle size={14} />
-            <span>Create New Script</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleOpenScript}
-            className="btn-secondary"
-            style={{ padding: "6px 12px", fontSize: "12px" }}
-          >
-            <FolderOpen size={14} />
-            <span>Open Script</span>
-          </button>
-
-          {dbState.activeFileName && (
-            <button
-              type="button"
-              onClick={handleImportFromScripts}
-              className="btn-secondary"
-              style={{
-                padding: "6px 12px",
-                fontSize: "12px",
-                color: "var(--accent-gold)",
-                borderColor: "rgba(234, 179, 8, 0.3)",
-                backgroundColor: "rgba(234, 179, 8, 0.08)",
-              }}
-              title="Import and append dialogue lines from one or more script files into this active script"
-            >
-              <FileDown size={14} />
-              <span>Import Entries from Scripts</span>
-            </button>
-          )}
-
-          {dbState.activeFileName && (
-            <button
-              type="button"
-              onClick={handleCloseScript}
-              className="btn-secondary"
-              style={{ padding: "6px 12px", fontSize: "12px", color: "var(--accent-danger)" }}
-              title="Close current active script"
-            >
-              <XCircle size={14} />
-              <span>Close</span>
-            </button>
-          )}
-        </div>
-      </div>
+      <header className="script-memory-header">
+        <div className="script-memory-file"><Database size={18} /><div><h2>{dbState.activeFileName || "Script memory"}</h2><p title={dbState.activeFilePath || undefined}>{dbState.activeFilePath || (dbState.activeFileName ? "Dialogue and translations for the active script." : "Open an existing script or create a new one to build translation memory.")}</p></div></div>
+        {dbState.activeFileName && <div className="knowledge-actions">
+          <button className="btn-secondary" onClick={handleCreateNewScript}><PlusCircle size={14} /> New script</button>
+          <button className="btn-secondary" onClick={handleOpenScript}><FolderOpen size={14} /> Open script</button>
+          {dbState.activeFileName && <>
+            <button className="btn-secondary" onClick={handleImportFromScripts} title="Append entries from other scripts to the active file"><FileDown size={14} /> Import entries</button>
+            <button className="icon-button" onClick={handleCloseScript} title="Close active script" aria-label="Close active script"><XCircle size={16} /></button>
+          </>}
+        </div>}
+      </header>
+      {dbState.activeFileName && <div className="script-memory-options">
+        <label><input type="checkbox" checked={dbState.autoAppend} onChange={(event) => scriptManagerService.setAutoAppend(event.target.checked)} /> Auto-append translations</label>
+        <label><Sliders size={13} /> Match threshold <input aria-label="Script match threshold" type="range" min="0.50" max="1.00" step="0.05" value={dbState.matchThreshold ?? 0.85} onChange={(event) => scriptManagerService.setMatchThreshold(Number(event.target.value))} /><span>{Math.round((dbState.matchThreshold ?? 0.85) * 100)}%</span></label>
+        {!dbState.canAutoSave && <span className="knowledge-footnote">Export to save changes to this imported format.</span>}
+      </div>}
 
       {/* Main Content Area */}
       {!dbState.activeFileName ? (
@@ -407,7 +251,7 @@ export const ScriptManagerView: React.FC = () => {
               No Script Database Loaded
             </h3>
             <p style={{ fontSize: "13px", lineHeight: "1.5", color: "var(--text-muted)" }}>
-              Create a new script file, open an existing <code>.json</code> / <code>.jsonl</code> script, or import dialogue entries to enable offline matching, translation memory, and file autosave.
+              Create a new script file, open an existing <code>.json</code> / <code>.jsonl</code> script, to enable offline matching, translation memory, and file autosave.
             </p>
           </div>
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "center" }}>
@@ -426,19 +270,6 @@ export const ScriptManagerView: React.FC = () => {
             >
               <FolderOpen size={15} />
               <span>Open Existing Script</span>
-            </button>
-            <button
-              onClick={handleImportFromScripts}
-              className="btn-secondary"
-              style={{
-                padding: "8px 16px",
-                fontSize: "13px",
-                color: "var(--accent-gold)",
-                borderColor: "rgba(234, 179, 8, 0.3)",
-              }}
-            >
-              <FileDown size={15} />
-              <span>Import from Scripts</span>
             </button>
           </div>
         </div>
@@ -477,7 +308,7 @@ export const ScriptManagerView: React.FC = () => {
             </div>
 
             {/* Total Lines & Action Buttons */}
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
               <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
                 Entries: <strong style={{ color: "var(--text-primary)" }}>{dbState.entries.length}</strong>
               </span>
@@ -526,7 +357,7 @@ export const ScriptManagerView: React.FC = () => {
               </div>
 
               {/* Speaker Row (Optional) */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "10px" }}>
                 <div>
                   <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "4px" }}>
                     Speaker (Optional):
@@ -556,7 +387,7 @@ export const ScriptManagerView: React.FC = () => {
               </div>
 
               {/* Message Row (Required) */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "10px" }}>
                 <div>
                   <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "4px" }}>
                     Message / Dialogue (Required):
@@ -643,7 +474,7 @@ export const ScriptManagerView: React.FC = () => {
                         gap: "8px",
                       }}
                     >
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "8px" }}>
                         <input
                           type="text"
                           className="input-field"
@@ -661,7 +492,7 @@ export const ScriptManagerView: React.FC = () => {
                           style={{ fontSize: "12px" }}
                         />
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "8px" }}>
                         <textarea
                           className="input-field"
                           rows={2}
@@ -901,16 +732,6 @@ export const ScriptManagerView: React.FC = () => {
         </div>
       )}
 
-      {/* Clear All Confirmation Modal */}
-      <ConfirmDialog
-        isOpen={showClearConfirm}
-        onClose={() => setShowClearConfirm(false)}
-        onConfirm={handleClearAll}
-        title="Clear All Script Entries"
-        variant="danger"
-        confirmText="Delete All Entries"
-        message="Are you sure you want to delete all entries from the currently active script? This action cannot be undone."
-      />
     </div>
   );
 };

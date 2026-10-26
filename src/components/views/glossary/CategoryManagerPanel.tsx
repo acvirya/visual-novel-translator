@@ -1,117 +1,35 @@
-import React, { useState } from "react";
-import { Plus, X, Trash2 } from "lucide-react";
-import { GlossaryCategory } from "../GlossaryManagerView";
+import { useState } from "react";
+import { Plus, Trash2, X } from "lucide-react";
+import type { GlossaryCategory } from "../GlossaryManagerView";
 
-interface CategoryManagerPanelProps {
+interface Props {
   isOpen: boolean;
   onClose: () => void;
   categories: GlossaryCategory[];
-  onAddCategory: (name: string, description: string) => void;
-  onDeleteCategory: (categoryId: string) => void;
+  selectedCategory: string | null;
+  counts: Record<string, number>;
+  totalCount: number;
+  onSelectCategory: (name: string | null) => void;
+  onAddCategory: (name: string, description: string) => boolean;
+  onDeleteCategory: (category: GlossaryCategory) => void;
 }
-
-export const CategoryManagerPanel: React.FC<CategoryManagerPanelProps> = ({
-  isOpen,
-  onClose,
-  categories,
-  onAddCategory,
-  onDeleteCategory,
-}) => {
-  const [newCatName, setNewCatName] = useState("");
-  const [newCatDesc, setNewCatDesc] = useState("");
-
+export function CategoryManagerPanel({ isOpen, onClose, categories, selectedCategory, counts, totalCount, onSelectCategory, onAddCategory, onDeleteCategory }: Props) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   if (!isOpen) return null;
-
-  const handleAdd = () => {
-    const trimmedName = newCatName.trim();
-    if (!trimmedName) return;
-    onAddCategory(trimmedName, newCatDesc.trim() || "-");
-    setNewCatName("");
-    setNewCatDesc("");
-  };
-
-  return (
-    <div
-      style={{
-        backgroundColor: "var(--bg-surface)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "var(--radius-md)",
-        padding: "14px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "10px",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
-          Category Management
-        </span>
-        <button
-          onClick={onClose}
-          className="btn-secondary"
-          style={{ padding: "3px 8px" }}
-        >
-          <X size={13} />
-        </button>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr auto", gap: "8px" }}>
-        <input
-          type="text"
-          className="input-field"
-          placeholder="Category Name (e.g. Artifact, Spell)..."
-          value={newCatName}
-          onChange={(e) => setNewCatName(e.target.value)}
-          style={{ fontSize: "12px", padding: "6px 10px" }}
-        />
-        <input
-          type="text"
-          className="input-field"
-          placeholder="Description (e.g. Special magic relics and weapons)..."
-          value={newCatDesc}
-          onChange={(e) => setNewCatDesc(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-          style={{ fontSize: "12px", padding: "6px 10px" }}
-        />
-        <button
-          type="button"
-          onClick={handleAdd}
-          className="btn-primary"
-          disabled={!newCatName.trim()}
-          style={{ padding: "6px 14px", fontSize: "12px" }}
-        >
-          <Plus size={13} />
-          <span>Add Category</span>
-        </button>
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "4px" }}>
-        {categories.map((cat) => (
-          <div
-            key={cat.id}
-            style={{
-              backgroundColor: "var(--bg-surface-elevated)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-sm)",
-              padding: "4px 8px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "11.5px",
-            }}
-          >
-            <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{cat.name}</span>
-            <span style={{ color: "var(--text-muted)", fontSize: "10.5px" }}>({cat.description})</span>
-            <button
-              onClick={() => onDeleteCategory(cat.id)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "1px" }}
-              title="Delete Category"
-            >
-              <Trash2 size={11} />
-            </button>
-          </div>
-        ))}
-      </div>
+  return <section className="category-panel" aria-label="Category filters and management">
+    <div className="category-panel-heading"><div><h3>Categories</h3><p>Select a category to filter terms. Closing this panel clears the filter.</p></div><button className="icon-button" aria-label="Close categories" onClick={onClose}><X size={16} /></button></div>
+    <div className="category-list">
+      <button className={`category-filter${selectedCategory === null ? " is-selected" : ""}`} aria-pressed={selectedCategory === null} onClick={() => onSelectCategory(null)}><span><strong>All terms</strong><small>Show every category</small></span><span>{totalCount}</span></button>
+      {categories.map((category) => <div className="category-row" key={category.id}>
+        <button className={`category-filter${selectedCategory === category.name ? " is-selected" : ""}`} aria-pressed={selectedCategory === category.name} onClick={() => onSelectCategory(category.name)}><span><strong>{category.name}</strong><small>{category.description}</small></span><span>{counts[category.name] || 0}</span></button>
+        {!category.id.startsWith("derived:") && category.id !== "default-term" && <button className="icon-button" aria-label={`Delete category ${category.name}`} onClick={() => onDeleteCategory(category)}><Trash2 size={13} /></button>}
+      </div>)}
     </div>
-  );
-};
+    <form className="category-add-form" onSubmit={(event) => { event.preventDefault(); if (name.trim() && onAddCategory(name.trim(), description.trim())) { setName(""); setDescription(""); } }}>
+      <input type="text" aria-label="New category name" placeholder="Category name" required value={name} onChange={(event) => setName(event.target.value)} />
+      <input type="text" aria-label="New category description" placeholder="Description (optional)" value={description} onChange={(event) => setDescription(event.target.value)} />
+      <button className="btn-secondary" type="submit" disabled={!name.trim()}><Plus size={14} /> Add category</button>
+    </form>
+  </section>;
+}

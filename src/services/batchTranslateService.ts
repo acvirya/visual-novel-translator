@@ -1,4 +1,3 @@
-import { TauriBridge } from "./tauriBridge";
 import { parseScriptContentAsBatchItems } from "../utils/scriptFileParser";
 import { cleanSpeakerName, executePreprocessingPipeline } from "../utils/textPreprocessor";
 import { logger } from "./loggerService";
@@ -153,6 +152,7 @@ class BatchTranslateService implements ManagedService {
     useBatchStore.getState().transitionTo("running");
 
     try {
+      await settingsManager.ensureReady();
       const apiKey = settingsManager.getOpenRouterApiKey();
       const concurrency = Math.max(1, Math.min(32, settings.concurrency || 2));
 
@@ -298,7 +298,9 @@ class BatchTranslateService implements ManagedService {
           { length: Math.min(concurrency, uncompletedFiles.length) },
           (_, i) => worker(i + 1)
         );
-        await Promise.all(workerPromises);
+        const results = await Promise.allSettled(workerPromises);
+        const rejected = results.find((result) => result.status === "rejected");
+        if (rejected?.status === "rejected") throw rejected.reason;
 
         if (this.abortController?.signal.aborted) break;
 
@@ -436,7 +438,11 @@ class BatchTranslateService implements ManagedService {
     }
 
     for (let bIdx = 0; bIdx < batchChunks.length; bIdx++) {
-      if (this.abortController?.signal.aborted) return;
+      if (this.abortController?.signal.aborted) {
+        fileHalted = true;
+        lastErrorMessage = "Translation cancelled by user.";
+        break;
+      }
 
       const chunk = batchChunks[bIdx];
       const chunkItems = chunk.chunkItems;
@@ -476,6 +482,7 @@ class BatchTranslateService implements ManagedService {
               );
               await this.acquireDispatchSlot(pacingDelay, this.abortController?.signal);
             }
+            if (this.abortController?.signal.aborted) throw new Error("Translation cancelled by user.");
 
             const resultTurn = await this.translateBatchLlm(
               chunkItems,
@@ -678,11 +685,6 @@ class BatchTranslateService implements ManagedService {
     }
     if (this.abortController) {
       this.abortController.abort();
-    }
-    try {
-      await TauriBridge.cancelAllLlmStreams();
-    } catch (err) {
-      logger.warn("BatchTranslate", `Failed to cancel LLM streams: ${err}`);
     }
     useBatchStore.getState().clearAllStreamingStates();
     logger.info("BatchTranslate", "Batch translation cancellation completed.");

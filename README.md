@@ -1,8 +1,6 @@
-<div align="center">
-
 # 🌸 Visual Novel Translator
 
-**A next-generation desktop application for translating untranslated Visual Novels in real-time with transparent subtitles, zero-latency script knowledge base, and dynamic AI reasoning models.**
+**A Windows desktop application for translating visual novels while you play. Capture dialogue with Textractor or screen OCR, translate it using machine translation or a configured LLM, and read the result in a customizable in-game overlay.**
 
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2.0-24C8D5?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
@@ -10,180 +8,144 @@
 [![Rust](https://img.shields.io/badge/Rust-1.75+-DEA584?style=flat-square&logo=rust&logoColor=black)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat-square)](LICENSE)
 
-<br />
+## Features
 
-[**⬇️ Download Latest Release**](https://github.com/acvirya/visual-novel-translator/releases/latest) • [**📖 Quickstart Guide**](#-how-to-use) • [**💡 Best Practice Workflow**](#-recommended-workflow) • [**⌨️ Hotkeys**](#%EF%B8%8F-global-hotkeys)
+- **Live translation:** provides dialogue history, provider selection, conversation context, and session usage counters. OCR shortcuts also feed the live log.
+- **Two capture methods:** Textractor hooks for supported engines, or OneOCR for screen regions and one-shot snipping.
+- **In-game overlay:** custom HTML/CSS presets, click-through positioning, and text-only typewriter, fade, or blur animations.
+- **Batch script translation:** configurable chunking, concurrency, retries, cancellation, and resume from compatible saved output.
+- **Glossary:** shared terminology for LLM prompts, VNDB character import, and category filtering
+- **Script memory:** reuse translations offline, edit JSON/JSONL dialogue, and append entries from other scripts into the active file.
+- **Provider configuration:** Google machine translation, DeepL API Free, and configurable LLM providers or OpenAI-compatible endpoints.
+- **Local credentials:** desktop API keys are stored in the operating system credential store, outside the settings JSON.
 
-</div>
+## Requirements
 
----
+The native application targets **Windows**. OneOCR requires compatible Microsoft Snipping Tool runtime/model files; other features can start without them.
 
-> [!NOTE]
-> **Active Development**: Visual Novel Translator is under active development. New features, UI polish, and performance optimizations are continuously added. Feedback, suggestions, and issue reports are warmly welcomed!
+For development:
 
----
+- Node.js **22.13+** or **24**, with npm.
+- Current stable Rust with the **Windows MSVC** toolchain.
+- Microsoft C++ Build Tools with **Desktop development with C++** and a Windows SDK.
+- Microsoft Edge **WebView2 Runtime**.
 
-## 💡 What is Visual Novel Translator?
+See the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows) for platform setup. Textractor and provider credentials are optional and configured separately in the application.
 
-**Visual Novel Translator** allows you to read untranslated Japanese Visual Novels smoothly **without modifying game archives or binary files**.
+## Run from source
 
-Unlike traditional romhacking or script repacking tools (which require unpacking archive files, manipulating script bytecodes, and repacking everything), this application operates **alongside your running game**:
-1. **Live Game Capture**: Reads dialogue in real-time as you play via **Textractor Memory Hooking** (32-bit & 64-bit) or **High-Speed Screen OCR** (Windows 10 & 11).
-2. **Transparent HUD Overlay**: Displays smooth, customizable subtitles directly over your visual novel with click-through support.
-3. **Instant Script Knowledge Base**: Matches lines against pre-loaded script files in $< 0.1\text{ms}$ with zero network latency and perfect story consistency.
-4. **State-of-the-Art AI Translation**: Leverages advanced LLMs and reasoning models (DeepSeek R1, OpenAI o1/o3, Claude 3.7 Sonnet, Gemini Flash) with custom style presets and multi-turn context memory.
+```powershell
+git clone <repository-url>
+cd vn-translator
+npm ci
+npm run tauri dev
+```
 
----
+For a browser-only UI preview:
 
-## 🌟 Key Capabilities
+```powershell
+npm run dev
+```
 
-### 1. 🪟 Transparent Subtitle Overlay (In-Game HUD)
-- **Click-Through Mode (`Ctrl + Shift + L`)**: Seamlessly pass mouse clicks directly to the underlying game without interrupting choices or menu navigation.
-- **Interactive Move & Resize**: Toggle interactive mode to position, resize, and fine-tune your subtitle HUD with a visual drag handle.
-- **Built-in Aesthetic Presets**: Choose from curated themes (*Visual Novel Classic*, *Glassmorphism*, *Cyberpunk*, *Cinematic Widescreen*, *RPG Dialogue Box*) or create custom designs.
-- **Full Customization & Custom CSS**: Adjust fonts, outline thickness, text shadows, background blur, and inject custom CSS styles.
+Open the local URL printed by Vite, normally `http://localhost:1420`. Native hooks, screen capture, OS shortcuts, and credential persistence require the Tauri application. Browser-preview credentials last only for that session.
 
-### 2. 🎮 Multi-Source Game Capture
-- **Textractor Memory Hook (32-bit & 64-bit)**: Hooks directly into the visual novel process memory for instant, artifact-free text extraction.
-  - Supports combined speaker/dialogue streams (e.g. `【智代】「おはよう」`).
-  - Supports separate thread pairing (capturing character name thread as **👤 Speaker** and text thread as **💬 Dialogue** with automatic synchronization).
-- **Native Windows OCR (Windows 10 & 11)**: High-speed screen OCR for non-hookable titles (browser games, emulators, engines with anti-hook protection).
-  - Dual region selection for dialogue box and speaker nameplate.
-  - Auto-scan timer or manual capture via hotkey (`F9`).
+## Getting started
 
-### 3. 🧠 Dynamic Model-Specific Reasoning & Thinking Tokens
-- **Adaptive OpenRouter Reasoning Engine**: Automatically inspects model metadata to detect reasoning capabilities (*Supported Efforts*, *Mandatory Reasoning*, *Token Budgeting*, or *Binary Toggle*).
-- **Nested Hover Submenu Selector**: Select model and effort level in **1 click** via an intuitive flyout submenu (*Default*, *Off*, *Minimal*, *Low*, *Medium*, *High*, *Max*).
-- **Per-Model Preferred Effort Persistence**: Remembers your preferred thinking effort individually for each model (e.g., `Low` for o3-mini, `Medium` for Gemini Flash Thinking, `Max` for o3-max).
+1. Open **Settings** and choose the source and target languages. Configure an LLM provider if needed, or select Google Translate for translation without an API key. DeepL API Free requires its own key.
+2. Open **Live translation → Capture setup**. Connect Textractor to a supported game process, or select screen OCR and configure the dialogue/speaker regions.
+3. Choose a translation engine in **Live translation**. New dialogue and shortcut results appear at the top of the log; translation failures are displayed as errors.
+4. Configure **In-game overlay**, position it over the game, and enable it. Animations affect the text while the dialogue backdrop stays in place.
+5. Add names and terminology in **Knowledge base → Glossary & terms**. Use **Categories** to filter or manage categories; closing that panel restores the full list. Lock terms you want to keep when clearing the glossary.
 
-### 4. 🎭 Translation Style & Tone Presets + Real-Time Preview
-- **Curated Tone Presets**:
-  - *Standard Visual Novel*: Natural flow balancing character nuance and readability.
-  - *Light Novel & Expressive*: Vivid emotional delivery and character vocal quirks.
-  - *Erudite & Historical*: Classic literature tone for period pieces and heavy lore.
-  - *Casual & Modern Slang*: Conversational tone with contemporary natural dialogue.
-  - *Literal & Nuanced*: Precise fidelity preserving original Japanese sentence structures.
-- **Custom User Presets & Variable Engine**: Create and save your own translation system prompts with dynamic variable interpolation (`{{TARGET_LANG}}`, `{{STYLE_INSTRUCTIONS}}`, `{{GLOSSARY}}`).
-- **Live Interactive Preview**: Test system prompts against mock dialogue lines in real-time before playing.
+### Textractor
 
-### 5. 📚 Zero-Latency Script Knowledge Base & Auto-Learning
-- **Sub-Millisecond In-Memory Lookup ($< 0.1\text{ms}$)**: Pre-load translated script files (`.json`, `.jsonl`, `.txt`, `.csv`) into memory. Matching dialogue lines appear instantly on the overlay without making online API requests.
-- **Multi-Tier Fuzzy & Canonical Matching**: Compensates for line wraps, punctuation differences, and character prologue aliases (e.g. matching prologue alias *「クラスメイト」* with character name *「章吾」*).
-- **Auto-Learning Stream**: Translations processed during your gameplay session can be automatically learned and saved to your local database for future playthroughs.
+Install a compatible Textractor build, select its executable in Capture setup, choose the game's process and architecture, and inspect the available hook threads. Hook support depends on the game engine; screen OCR is an alternative when a suitable hook is unavailable.
 
-### 6. ⚡ High-Throughput Batch Script Translator
-- **Pre-Translate Entire Games**: Translate extracted script files in bulk before playing.
-- **Concurrency & Resilient Retries**: Multi-worker concurrent processing, automatic rate-limit backoff, and live token usage metrics.
-- **Auto-Save & Resume**: Periodic checkpointing ensures long translation jobs never lose progress on unexpected interruptions.
+### OneOCR
 
-### 7. 📖 Character Glossary & 1-Click VNDB Scraper
-- **Terminology Consistency**: Enforce strict character names, gender references, and route-specific terms across your entire playthrough.
-- **1-Click VNDB Import**: Enter any VNDB Visual Novel ID (e.g. `v17` for *Steins;Gate*, `v4` for *Fate/stay night*) to instantly import official character names, aliases, and gender tags into your glossary.
+The application searches for compatible Snipping Tool files and also accepts a custom runtime directory in OCR settings. The directory must contain `oneocr.dll`, its matching model (`oneocr.onemodel` or `oneocr.model`), and the runtime dependencies required by that DLL.
 
-### 8. 🛠️ Custom Text Replacement & Preprocessing Pipeline
-- **Furigana & Ruby Annotation Stripper**: Automatically cleans pronunciation readings like `私(わたし)`, `漢字[かんじ]`, and `<ruby>` tags so the translator receives clean raw text.
-- **Engine Formatting & Control Code Cleaner**: Removes game engine formatting tags (e.g. `\c[2]`, `\v[1]`, color/font codes), escape sequences, and null bytes.
-- **Unicode NFKC & Japanese Punctuation Normalization**: Standardizes half-width katakana, full-width characters, ellipses (`……` → `…`), quotes, and strips decorative noise symbols (`♪`, `♥`, `★`).
-- **Custom Regex & Plain-Text Rules**: Create custom replacement rules with source-specific targeting (*Textractor*, *OCR*, *Batch*, *Manual*) and test them live in the built-in interactive sandbox.
+Microsoft runtime/model files are **not included in this repository**. On systems that deny direct loading from WindowsApps, the application caches runtime DLLs in the current user's local application data. Captured images are processed in memory.
 
-### 9. 🌐 Flexible Translation Providers
-- **Free Zero-Cost Translation**: Instant out-of-the-box translation using Google Translate Web Stream and DeepL Free scraper (no API keys required).
-- **OpenRouter AI Gateway**: Connect your OpenRouter API key to access 200+ state-of-the-art models with custom provider routing.
+### Script memory and batch files
 
----
+- **Open script** opens a file as the active translation memory.
+- **Import entries** appends entries from other scripts to that active file. It is available after a file is open.
+- JSON/JSONL memory files save edits automatically. Imports in other supported formats remain in memory until exported.
+- Batch translation writes JSONL output using the configured folder and filename suffix. Resume reuses existing translations only when the source text still matches.
 
-## 🚀 How to Use
+Example JSONL record:
 
-### 🎮 Method A: Playing with Game Memory Hook (Recommended)
-1. Launch your Visual Novel game.
-2. Open **Visual Novel Translator** and navigate to **🎮 Textractor Input** in the sidebar.
-3. Click **Refresh Process List**, choose your visual novel process, and click **Attach Process**.
-4. Advance dialogue in your game to populate the **Detected Threads** list:
-   - If the thread contains both speaker and dialogue (e.g. `【遥月】「おはよう」`), set role to **✨ Combined**.
-   - If speaker and dialogue appear on separate threads, assign one to **👤 Speaker** and the other to **💬 Dialogue**.
-5. Enable the **In-Game Overlay** (press `Ctrl + Shift + L` to reposition or resize).
-6. Read smoothly! Subtitles update in real-time as you advance in-game dialogue.
+```json
+{"id":1,"speaker":"Tomoyo","message":"Original dialogue","translated_speaker":"Tomoyo","translated_message":"Translated dialogue"}
+```
 
----
-
-### 📷 Method B: Playing with Screen OCR
-1. Launch your game.
-2. Navigate to **📷 OCR Input** in the sidebar.
-3. Click **Select Dialogue Region** and drag a bounding box over the game's text area.
-4. *(Optional)* Click **Select Speaker Region** if character names appear in a separate nameplate box.
-5. Set scan mode to **Auto-Scan (Timer)** or press **`F9`** for instant manual capture.
-6. Open the **In-Game Overlay** and enjoy.
-
----
-
-## 💡 Recommended Workflow: The "Zero-Latency" Advantage
-
-For the ultimate reading experience with zero translation delay and maximum AI quality:
-1. **Extract** game script files to `.txt`, `.json`, or `.jsonl` using extraction tools for your game engine.
-2. Open **⚡ Batch Translate** to translate the script files using an AI model of your choice.
-3. Open **📚 Script Database**, click **Import Scripts**, and add your translated files into the database.
-4. Launch your game and play with **Textractor Hook**:
-   - Every line of dialogue instantly matches your local database ($< 0.1\text{ms}$) with **zero API cost** and **no network lag**.
-   - Any unscripted lines gracefully fall back to live AI / MT translation.
-
----
-
-## ⌨️ Global Hotkeys
+### Default shortcuts
 
 | Shortcut | Action |
-|---|---|
-| `Ctrl + Shift + L` | Toggle Overlay Click-Through / Interactive Move & Resize Mode |
-| `Ctrl + Shift + P` | Pause / Resume Live Translation Stream |
-| `F9` | Trigger Instant Manual OCR Scan |
+| --- | --- |
+| `Alt+L` | Toggle overlay click-through |
+| `Alt+P` | Pause or resume live translation |
+| `Alt+O` | Scan the configured OCR regions |
+| `Alt+S` | Open one-shot OCR snipping |
 
-*(Hotkeys can be customized under Settings → General Settings)*
+Change shortcuts in **Settings → General & shortcuts**. Registration can fail if another application already owns the same combination.
 
----
+## Build and validate
 
-## 🛠️ Build from Source (For Developers)
+```powershell
+npm run check
+npx playwright install chromium
+npm run test:ui
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+```
 
-<details>
-<summary>Click to expand developer build instructions</summary>
+Optional integration checks use installed OCR files or a live network connection:
 
-### Prerequisites
-- **Node.js** (v18.0 or newer)
-- **Rust & Cargo** (v1.75 or newer)
-- **C++ Build Tools** (Visual Studio Desktop Development with C++)
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --lib installed_oneocr -- --ignored
+cargo test --manifest-path src-tauri/Cargo.toml --lib google_translates_japanese_sample -- --ignored
+```
 
-### Local Setup & Compilation
+Create a production bundle:
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/acvirya/visual-novel-translator.git
-   cd visual-novel-translator
-   ```
+```powershell
+npm run tauri build
+```
 
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+Tauri writes bundle artifacts under `src-tauri/target/release/bundle/`. Test installers on a clean Windows environment before distributing them.
 
-3. **Run in development mode**:
-   ```bash
-   npm run tauri dev
-   ```
+## Data and privacy
 
-4. **Run automated test harness**:
-   ```bash
-   npx vitest run
-   ```
+- Settings and script memory are local. Desktop API keys use the OS credential store; settings snapshots omit those keys.
+- Online translation sends selected text to the selected provider. Provider availability, pricing, and limits apply. Google MT uses public endpoints that may become unavailable or rate limited; a failed DeepL request does not switch to Google.
+- Application, batch-debug, and usage logs can contain dialogue or request snippets. Treat exported logs and scripts as potentially sensitive.
+- Overlay templates are restricted to presentation markup. Frame scripts, forms, and external resource requests are blocked; template CSS stays separate from the application UI.
+- Locked glossary terms are protected from Clear all and direct deletion. A confirmed factory reset still resets the glossary, including locked terms.
 
-5. **Build production bundle (`.exe` / `.msi`)**:
-   ```bash
-   npm run tauri build
-   ```
+## Project structure
 
-</details>
+```text
+src/
+  components/       Desktop UI, capture editors, and overlay windows
+  services/         Translation, provider, OCR, settings, and logging logic
+  stores/           Shared frontend state
+  utils/            Parsing, preprocessing, and overlay rendering
+src-tauri/
+  src/              Native capture, hooks, HTTP, files, and credentials
+  capabilities/     Permissions for each native window
+  vendor/oneocr-rs/  MIT-licensed binding with an explicit model-path patch
+e2e/                Browser regression tests
+```
 
----
+The local OneOCR dependency patch is documented in [PATCHES.md](src-tauri/vendor/oneocr-rs/PATCHES.md). The repository audit and subsequent fixes are recorded in [LAPORAN_PERBAIKAN.md](LAPORAN_PERBAIKAN.md).
 
-## 📄 License
+## Contributing
 
-Distributed under the **GNU General Public License v3.0 (GPL-3.0)**. See [`LICENSE`](LICENSE) for full details.
+Keep changes focused and include regression coverage for behavior changes. Run the validation commands before submitting a pull request. For bug reports, include the app version, Windows version, capture method, selected provider, reproduction steps, and redacted logs. Never include API keys or private game content in a public report.
 
-Copyright © 2026 **Anggatha Chandra Virya**. All rights reserved.
+## License
+
+Copyright Anggatha Chandra Virya. Distributed under [GPL-3.0-or-later](LICENSE). Third-party dependencies retain their respective licenses; the vendored OneOCR binding includes its [MIT license](src-tauri/vendor/oneocr-rs/LICENSE).

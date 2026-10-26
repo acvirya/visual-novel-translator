@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-append-debug-log"
+description = "Enables the append_debug_log command without any pre-configured scope."
+commands.allow = ["append_debug_log"]
+
+[[permission]]
+identifier = "deny-append-debug-log"
+description = "Denies the append_debug_log command without any pre-configured scope."
+commands.deny = ["append_debug_log"]

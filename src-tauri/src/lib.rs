@@ -9,8 +9,8 @@ mod screen_capture;
 mod textractor;
 mod window_manager;
 
-use textractor::TextractorState;
 use tauri::Manager;
+use textractor::TextractorState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,18 +30,20 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(TextractorState::new())
         .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { .. } => {
-                    if window.label() == "main" {
-                        window.app_handle().exit(0);
-                    } else if window.label() == "overlay" || window.label() == "region-selector" {
-                        if let Some(main) = window.app_handle().get_webview_window("main") {
-                            let _ = main.show();
-                            let _ = main.set_focus();
-                        }
+            if matches!(event, tauri::WindowEvent::Destroyed) && window.label() == "main" {
+                window.app_handle().exit(0);
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // The main webview awaits pending saves before destroying itself.
+                if window.label() == "overlay" || window.label() == "region-selector" {
+                    // Keep auxiliary windows reusable after Alt+F4 / native close.
+                    api.prevent_close();
+                    let _ = window.hide();
+                    if let Some(main) = window.app_handle().get_webview_window("main") {
+                        let _ = main.show();
+                        let _ = main.set_focus();
                     }
                 }
-                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

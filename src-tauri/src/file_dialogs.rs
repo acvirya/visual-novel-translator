@@ -1,7 +1,64 @@
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
+static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const MAX_SCRIPT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Keep the old file intact until a complete, flushed replacement is ready.
+fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create output directory: {e}"))?;
+    let name = path
+        .file_name()
+        .ok_or("Invalid output file name")?
+        .to_string_lossy();
+    let temp = parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        SAVE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|e| format!("Failed to create temporary file: {e}"))?;
+        file.write_all(content)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| format!("Failed to write file: {e}"))?;
+        drop(file);
+        std::fs::rename(&temp, path).map_err(|e| format!("Failed to commit file: {e}"))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+fn read_script(path: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open script: {e}"))?;
+    let mut content = String::new();
+    file.take(MAX_SCRIPT_BYTES + 1)
+        .read_to_string(&mut content)
+        .map_err(|e| format!("Failed to read script: {e}"))?;
+    if content.len() as u64 > MAX_SCRIPT_BYTES {
+        return Err("Script exceeds the 64 MiB limit".into());
+    }
+    Ok(content)
+}
+
 #[tauri::command]
-pub async fn show_save_script_dialog(default_name: Option<String>) -> Result<Option<String>, String> {
+pub async fn show_save_script_dialog(
+    default_name: Option<String>,
+) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Create New Script File")
@@ -18,7 +75,7 @@ pub async fn show_save_script_dialog(default_name: Option<String>) -> Result<Opt
         if let Some(path) = dialog.save_file() {
             let path_str = path.to_string_lossy().to_string();
             if !path.exists() {
-                let _ = std::fs::write(&path, "");
+                atomic_write(&path, b"")?;
             }
             Ok(Some(path_str))
         } else {
@@ -40,7 +97,7 @@ pub async fn show_open_script_dialog() -> Result<Option<(String, String)>, Strin
 
         if let Some(path) = file {
             let path_str = path.to_string_lossy().to_string();
-            let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read script file: {}", e))?;
+            let content = read_script(&path)?;
             Ok(Some((path_str, content)))
         } else {
             Ok(None)
@@ -58,13 +115,7 @@ pub async fn save_script_file(path: String, content: String) -> Result<(), Strin
             return Err("Invalid or empty file path".to_string());
         }
         let p = std::path::Path::new(trimmed);
-        if let Some(parent) = p.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-        }
-        std::fs::write(p, content).map_err(|e| format!("Failed to write script file: {}", e))?;
-        Ok(())
+        atomic_write(p, content.as_bytes())
     })
     .await
     .map_err(|e| format!("File save task failed: {}", e))?
@@ -79,7 +130,7 @@ pub async fn read_script_file_by_path(path: String) -> Result<Option<String>, St
         }
         let p = std::path::Path::new(trimmed);
         if p.exists() && p.is_file() {
-            let content = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+            let content = read_script(p)?;
             Ok(Some(content))
         } else {
             Ok(None)
@@ -94,7 +145,10 @@ pub async fn show_pick_files_dialog() -> Result<Vec<(String, String, u64)>, Stri
     tokio::task::spawn_blocking(move || {
         let files = rfd::FileDialog::new()
             .set_title("Select Script Files to Batch Translate")
-            .add_filter("Script Files (*.jsonl, *.json, *.txt)", &["jsonl", "json", "txt"])
+            .add_filter(
+                "Script Files (*.jsonl, *.json, *.txt)",
+                &["jsonl", "json", "txt"],
+            )
             .add_filter("All Files (*.*)", &["*"])
             .pick_files();
 
@@ -102,10 +156,9 @@ pub async fn show_pick_files_dialog() -> Result<Vec<(String, String, u64)>, Stri
             let mut results = Vec::new();
             for path in paths {
                 let path_str = path.to_string_lossy().to_string();
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                    results.push((path_str, content, size));
-                }
+                let content = read_script(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let size = content.len() as u64;
+                results.push((path_str, content, size));
             }
             Ok(results)
         } else {
@@ -133,43 +186,38 @@ pub async fn show_pick_directory_dialog() -> Result<Option<String>, String> {
     .map_err(|e| format!("Pick directory task failed: {}", e))?
 }
 
-pub fn resolve_safe_log_path(file_name: &str) -> Result<std::path::PathBuf, String> {
-    let p = std::path::Path::new(file_name);
-
-    // Disallow path traversal components ('..')
-    for component in p.components() {
-        if component == std::path::Component::ParentDir {
-            return Err("Invalid file path: path traversal is not permitted".to_string());
-        }
-    }
-
-    if p.is_absolute() {
-        let p_str = p.to_string_lossy().to_lowercase();
-        if p_str.contains("windows\\system32") || p_str.contains("windows\\syswow64") {
-            return Err("Access to system directories is prohibited".to_string());
-        }
-        Ok(p.to_path_buf())
-    } else {
-        // If relative path, write to workspace root (parent of src-tauri) to prevent triggering Tauri dev file watcher
-        if let Ok(cwd) = std::env::current_dir() {
-            if cwd.ends_with("src-tauri") {
-                if let Some(parent) = cwd.parent() {
-                    return Ok(parent.join(file_name));
-                }
-            }
-            Ok(cwd.join(file_name))
-        } else {
-            Ok(std::env::temp_dir().join(file_name))
-        }
+fn validate_log_name(file_name: &str) -> Result<(), String> {
+    match file_name {
+        "app_system_logs.jsonl" | "ai_usage_logs.jsonl" | "batch_debug_log.jsonl" => Ok(()),
+        _ => Err("Only application log file names are permitted".into()),
     }
 }
 
+fn resolve_safe_log_path(app: &tauri::AppHandle, file_name: &str) -> Result<PathBuf, String> {
+    validate_log_name(file_name)?;
+    let directory = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to resolve log directory: {e}"))?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|e| format!("Failed to create log directory: {e}"))?;
+    let path = directory.join(file_name);
+    if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("Log files cannot be symbolic links".into());
+    }
+    Ok(path)
+}
+
 #[tauri::command]
-pub fn append_debug_log(file_name: String, content: String) -> Result<(), String> {
+pub fn append_debug_log(
+    app: tauri::AppHandle,
+    file_name: String,
+    content: String,
+) -> Result<(), String> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
-    let final_path = resolve_safe_log_path(&file_name)?;
+    let final_path = resolve_safe_log_path(&app, &file_name)?;
 
     if let Some(parent) = final_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -196,11 +244,15 @@ pub fn append_debug_log(file_name: String, content: String) -> Result<(), String
 }
 
 #[tauri::command]
-pub fn read_debug_log(file_name: String, max_lines: Option<usize>) -> Result<Vec<String>, String> {
+pub fn read_debug_log(
+    app: tauri::AppHandle,
+    file_name: String,
+    max_lines: Option<usize>,
+) -> Result<Vec<String>, String> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
-    let final_path = resolve_safe_log_path(&file_name)?;
+    let final_path = resolve_safe_log_path(&app, &file_name)?;
     if !final_path.exists() {
         return Ok(Vec::new());
     }
@@ -209,24 +261,23 @@ pub fn read_debug_log(file_name: String, max_lines: Option<usize>) -> Result<Vec
         .map_err(|e| format!("Failed to open log file {:?}: {}", final_path, e))?;
     let reader = BufReader::new(file);
 
-    let lines: Vec<String> = reader
-        .lines()
-        .map_while(Result::ok)
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-
-    if let Some(limit) = max_lines {
-        if lines.len() > limit {
-            return Ok(lines[lines.len() - limit..].to_vec());
+    let limit = max_lines.unwrap_or(10_000).min(100_000);
+    let mut lines = std::collections::VecDeque::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read log: {e}"))?;
+        if limit > 0 && !line.trim().is_empty() {
+            if lines.len() == limit {
+                lines.pop_front();
+            }
+            lines.push_back(line);
         }
     }
-
-    Ok(lines)
+    Ok(lines.into_iter().collect())
 }
 
 #[tauri::command]
-pub fn clear_debug_log(file_name: String) -> Result<(), String> {
-    let final_path = resolve_safe_log_path(&file_name)?;
+pub fn clear_debug_log(app: tauri::AppHandle, file_name: String) -> Result<(), String> {
+    let final_path = resolve_safe_log_path(&app, &file_name)?;
     if final_path.exists() {
         std::fs::remove_file(&final_path)
             .map_err(|e| format!("Failed to clear log file {:?}: {}", final_path, e))?;
@@ -236,7 +287,7 @@ pub fn clear_debug_log(file_name: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_file_in_default_app(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
-    let final_path = resolve_safe_log_path(&path)?;
+    let final_path = resolve_safe_log_path(&app_handle, &path)?;
 
     if !final_path.exists() {
         if let Some(parent) = final_path.parent() {
@@ -244,7 +295,11 @@ pub fn open_file_in_default_app(app_handle: tauri::AppHandle, path: String) -> R
                 let _ = std::fs::create_dir_all(parent);
             }
         }
-        let _ = std::fs::write(&final_path, "[BATCH TRANSLATE DEBUG LOG INITIALIZED]\nNo errors recorded yet.\n");
+        std::fs::write(
+            &final_path,
+            "[BATCH TRANSLATE DEBUG LOG INITIALIZED]\nNo errors recorded yet.\n",
+        )
+        .map_err(|e| format!("Failed to initialize log: {e}"))?;
     }
 
     let path_str = final_path.to_string_lossy().to_string();
@@ -256,7 +311,6 @@ pub fn open_file_in_default_app(app_handle: tauri::AppHandle, path: String) -> R
 
 #[tauri::command]
 pub fn load_app_settings(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri::Manager;
     let config_dir = app_handle
         .path()
         .app_config_dir()
@@ -272,20 +326,53 @@ pub fn load_app_settings(app_handle: tauri::AppHandle) -> Result<Option<String>,
 
 #[tauri::command]
 pub fn save_app_settings(app_handle: tauri::AppHandle, json_content: String) -> Result<(), String> {
-    use tauri::Manager;
     let config_dir = app_handle
         .path()
         .app_config_dir()
         .map_err(|e| format!("Failed to get app config dir: {}", e))?;
-    if !config_dir.exists() {
-        let _ = std::fs::create_dir_all(&config_dir);
+    let value: serde_json::Value =
+        serde_json::from_str(&json_content).map_err(|e| format!("Invalid settings JSON: {e}"))?;
+    if !value.is_object() {
+        return Err("Settings must be a JSON object".into());
     }
     let settings_path = config_dir.join("settings.json");
-    let temp_path = config_dir.join("settings.json.tmp");
-    std::fs::write(&temp_path, json_content.as_bytes())
-        .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
-    let _ = std::fs::remove_file(&settings_path);
-    std::fs::rename(&temp_path, &settings_path)
-        .map_err(|e| format!("Failed to commit settings file: {}", e))?;
-    Ok(())
+    atomic_write(&settings_path, json_content.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logs_reject_absolute_paths_traversal_and_other_files() {
+        for path in [
+            "../app_system_logs.jsonl",
+            "C:\\secret.txt",
+            "settings.json",
+            "app_system_logs.jsonl:stream",
+            "",
+        ] {
+            assert!(validate_log_name(path).is_err(), "accepted {path}");
+        }
+        assert!(validate_log_name("ai_usage_logs.jsonl").is_ok());
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_file_and_preserves_it_on_failure() {
+        let dir = std::env::temp_dir().join(format!(
+            "vn-save-test-{}-{}",
+            std::process::id(),
+            SAVE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("settings.json");
+        atomic_write(&target, b"old").unwrap();
+        atomic_write(&target, b"new").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        let blocked = dir.join("directory");
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(atomic_write(&blocked, b"replacement").is_err());
+        assert!(blocked.is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

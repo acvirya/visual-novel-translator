@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "overlay",
+  "description": "Translation overlay state and geometry",
+  "windows": [
+    "overlay"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-get-monitors",
+    "allow-get-window-monitor",
+    "allow-load-app-settings",
+    "allow-save-app-settings",
+    "allow-get-secure-key",
+    "allow-set-secure-key",
+    "allow-delete-secure-key",
+    "allow-append-debug-log",
+    "allow-read-debug-log",
+    "allow-set-overlay-edit-mode",
+    "allow-update-overlay-bounds",
+    "allow-hide-overlay",
+    "allow-set-overlay-click-through"
+  ]
+}

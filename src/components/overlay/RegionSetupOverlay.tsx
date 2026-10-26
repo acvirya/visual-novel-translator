@@ -1,11 +1,14 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
 import React, { useState, useEffect, useRef } from "react";
 import { OcrRegion, OcrRegionRole, MonitorInfo } from "../../types";
 import { OcrService } from "../../services/ocrService";
 import { TauriBridge } from "../../services/tauriBridge";
 import { settingsManager } from "../../services/settingsManager";
 import { Check, X, Trash2, MessageSquare, User, Crosshair } from "lucide-react";
+import { clampRegion, drawRegion } from "./regionGeometry";
 
 export const RegionSetupOverlay: React.FC = () => {
+  const confirm = useConfirmation();
   const [currentMonitor, setCurrentMonitor] = useState<MonitorInfo | null>(null);
   const currentMonitorRef = useRef<MonitorInfo | null>(null);
 
@@ -93,7 +96,7 @@ export const RegionSetupOverlay: React.FC = () => {
           const monX = mon.x || 0;
           const monY = mon.y || 0;
 
-          const aligned = parsed.map((r) => {
+          const aligned = parsed.slice(0, 2).map((r) => {
             if (r.physicalX != null && r.physicalY != null && r.physicalWidth != null && r.physicalHeight != null) {
               const logicalX = Math.round((r.physicalX - monX) / scale);
               const logicalY = Math.round((r.physicalY - monY) / scale);
@@ -108,7 +111,7 @@ export const RegionSetupOverlay: React.FC = () => {
               };
             }
             return r;
-          });
+          }).map((r) => clampRegion(r, window.innerWidth, window.innerHeight));
 
           setRegions(aligned);
           initialRegionsRef.current = JSON.parse(JSON.stringify(aligned));
@@ -147,7 +150,7 @@ export const RegionSetupOverlay: React.FC = () => {
     const monX = activeMonitor.x || 0;
     const monY = activeMonitor.y || 0;
 
-    return regs.map((r) => ({
+    return regs.map((r) => clampRegion(r, window.innerWidth, window.innerHeight)).map((r) => ({
       ...r,
       physicalX: Math.round(monX + r.x * scale),
       physicalY: Math.round(monY + r.y * scale),
@@ -160,6 +163,7 @@ export const RegionSetupOverlay: React.FC = () => {
   // Keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector("dialog[open]")) return;
       if (e.key === "Escape") {
         handleCancel();
       } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -191,38 +195,42 @@ export const RegionSetupOverlay: React.FC = () => {
   };
 
   const handleResetDefaults = () => {
-    const defaultRegions: OcrRegion[] = [
-      {
-        id: "region_1",
-        name: "Region 1 (Dialogue)",
-        role: "dialogue",
-        x: 350,
-        y: 750,
-        width: 1220,
-        height: 250,
-        color: "#4e73df",
-      },
-      {
-        id: "region_2",
-        name: "Region 2 (Speaker)",
-        role: "speaker",
-        x: 350,
-        y: 690,
-        width: 320,
-        height: 55,
-        color: "#f6c23e",
-      },
-    ];
-    setRegions(defaultRegions);
-    setSelectedRegionId("region_1");
+    confirm({ title: "Reset capture regions?", message: "Replace the current capture regions with the default positions?", confirmText: "Reset regions", variant: "warning" }, () => {
+      const defaultRegions: OcrRegion[] = [
+        {
+          id: "region_1",
+          name: "Region 1 (Dialogue)",
+          role: "dialogue",
+          x: 350,
+          y: 750,
+          width: 1220,
+          height: 250,
+          color: "#4e73df",
+        },
+        {
+          id: "region_2",
+          name: "Region 2 (Speaker)",
+          role: "speaker",
+          x: 350,
+          y: 690,
+          width: 320,
+          height: 55,
+          color: "#f6c23e",
+        },
+      ];
+      setRegions(defaultRegions.map((r) => clampRegion(r, window.innerWidth, window.innerHeight)));
+      setSelectedRegionId("region_1");
+    });
   };
 
   const handleDeleteRegion = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setRegions((prev) => prev.filter((r) => r.id !== id));
-    if (selectedRegionId === id) {
-      setSelectedRegionId(null);
-    }
+    confirm({ title: "Delete capture region?", message: "Remove this region from the current setup?", confirmText: "Delete region" }, () => {
+      setRegions((prev) => prev.filter((r) => r.id !== id));
+      if (selectedRegionId === id) {
+        setSelectedRegionId(null);
+      }
+    });
   };
 
   const handleToggleRole = (id: string, e: React.MouseEvent) => {
@@ -244,6 +252,7 @@ export const RegionSetupOverlay: React.FC = () => {
   };
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
     if (e.target !== e.currentTarget) return;
     if (regions.length >= 2) return;
 
@@ -280,6 +289,7 @@ export const RegionSetupOverlay: React.FC = () => {
 
   const handleBoxMouseDown = (r: OcrRegion, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
     setSelectedRegionId(r.id);
 
     setDragAction({
@@ -322,21 +332,18 @@ export const RegionSetupOverlay: React.FC = () => {
         if (r.id !== dragAction.regionId) return r;
 
         if (dragAction.type === "move") {
-          return {
+          return clampRegion({
             ...r,
             x: Math.max(0, dragAction.initialX + dx),
             y: Math.max(0, dragAction.initialY + dy),
-          };
+          }, window.innerWidth, window.innerHeight);
         }
 
         if (dragAction.type === "draw") {
-          const w = Math.max(10, e.clientX - dragAction.startX);
-          const h = Math.max(10, e.clientY - dragAction.startY);
-          return {
+          return clampRegion({
             ...r,
-            width: w,
-            height: h,
-          };
+            ...drawRegion(dragAction.startX, dragAction.startY, e.clientX, e.clientY),
+          }, window.innerWidth, window.innerHeight);
         }
 
         if (dragAction.type === "resize") {
@@ -366,13 +373,13 @@ export const RegionSetupOverlay: React.FC = () => {
             }
           }
 
-          return {
+          return clampRegion({
             ...r,
             x: Math.max(0, newX),
             y: Math.max(0, newY),
             width: newW,
             height: newH,
-          };
+          }, window.innerWidth, window.innerHeight);
         }
 
         return r;
@@ -389,6 +396,7 @@ export const RegionSetupOverlay: React.FC = () => {
       onMouseDown={handleCanvasMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
       style={{
         width: "100vw",
         height: "100vh",
@@ -413,6 +421,9 @@ export const RegionSetupOverlay: React.FC = () => {
           borderRadius: "8px",
           padding: "8px 16px",
           display: "flex",
+          flexWrap: "wrap",
+          width: "max-content",
+          maxWidth: "calc(100vw - 32px)",
           alignItems: "center",
           gap: "16px",
           boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
@@ -492,6 +503,10 @@ export const RegionSetupOverlay: React.FC = () => {
         const borderColor = region.role === "dialogue" ? "#58a6ff" : "#f6c23e";
         const roleLabel = region.role === "dialogue" ? "💬 Dialogue" : "👤 Speaker Name";
 
+        const activeScale = currentMonitor?.scale_factor || window.devicePixelRatio || 1.0;
+        const physW = Math.round(region.width * activeScale);
+        const physH = Math.round(region.height * activeScale);
+
         return (
           <div
             key={region.id}
@@ -552,8 +567,11 @@ export const RegionSetupOverlay: React.FC = () => {
                 <span>{roleLabel}</span>
               </button>
 
-              <span style={{ color: "#8b949e", fontSize: "10px" }}>
-                {Math.round(region.width)} × {Math.round(region.height)} px
+              <span
+                style={{ color: "#8b949e", fontSize: "10.5px" }}
+                title={`Physical capture size: ${physW}×${physH}px (Logical: ${Math.round(region.width)}×${Math.round(region.height)}px)`}
+              >
+                {physW} × {physH} px {activeScale !== 1.0 ? `(${Math.round(region.width)}×${Math.round(region.height)})` : ""}
               </span>
 
               {/* Delete Button */}

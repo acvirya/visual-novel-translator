@@ -1,3 +1,5 @@
+import { useConfirmation } from "../common/ConfirmationProvider";
+import { useClipboardText } from "../common/useClipboardText";
 import React, { useState, useEffect } from "react";
 import { PreprocessingStep, PreprocessingSource } from "../../types";
 import {
@@ -19,6 +21,7 @@ import {
 import { settingsManager } from "../../services/settingsManager";
 
 export const CustomReplacementRulesView: React.FC = () => {
+  const confirm = useConfirmation();
   const [customRules, setCustomRules] = useState<PreprocessingStep[]>(() => {
     const pipeline = settingsManager.getTextPreprocessing().pipeline || [];
     return pipeline.filter((r) => r.type === "custom_regex" || r.isCustom);
@@ -29,7 +32,7 @@ export const CustomReplacementRulesView: React.FC = () => {
   const [sampleInput, setSampleInput] = useState<string>(
     "\\c[2]坂上　智代\\c[0]「……あ、、あのっ……！　私(わたし)は……遅刻(ちこく)したくないの！！♪♥」"
   );
-  const [copied, setCopied] = useState<boolean>(false);
+  const { copied, copyText } = useClipboardText();
 
   // Save custom rules via settingsManager and invalidate high-speed in-memory cache
   useEffect(() => {
@@ -89,7 +92,9 @@ export const CustomReplacementRulesView: React.FC = () => {
   };
 
   const handleDeleteRule = (ruleId: string) => {
-    setCustomRules((prev) => prev.filter((r) => r.id !== ruleId));
+    confirm({ title: "Delete replacement rule?", message: "Remove this saved text replacement rule?", confirmText: "Delete rule" }, () => {
+      setCustomRules((prev) => prev.filter((r) => r.id !== ruleId));
+    });
   };
 
   const handleToggleSource = (ruleId: string, source: PreprocessingSource) => {
@@ -108,17 +113,12 @@ export const CustomReplacementRulesView: React.FC = () => {
     );
   };
 
-  const handleCopyOutput = () => {
-    if (!finalOutput) return;
-    navigator.clipboard.writeText(finalOutput);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleCopyOutput = () => { void copyText(finalOutput); };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", paddingBottom: "24px" }}>
       {/* Main Grid: Custom Rules on Left, Live Workbench on Right */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "16px", alignItems: "flex-start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: "16px", alignItems: "flex-start" }}>
         
         {/* ========================================================================= */}
         {/* LEFT CARD: Custom Replacement Rules List                                  */}
@@ -218,7 +218,7 @@ export const CustomReplacementRulesView: React.FC = () => {
                   </div>
 
                   {/* Pattern & Replacement Inputs */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "8px" }}>
                     <div>
                       <label style={{ display: "block", fontSize: "10.5px", color: "var(--text-muted)", marginBottom: "3px" }}>
                         Find Pattern {rule.options?.isRegex ? "(Regex)" : "(Plain String)"}:

@@ -16,8 +16,8 @@
         "title": "Visual Novel Translator",
         "width": 1050,
         "height": 720,
-        "minWidth": 850,
-        "minHeight": 560
+        "minWidth": 620,
+        "minHeight": 480
       },
       {
         "label": "overlay",
@@ -44,12 +44,13 @@
         "shadow": false,
         "visible": false,
         "contentProtected": true,
-        "resizable": false,
+        "resizable": true,
         "skipTaskbar": true
       }
     ],
     "security": {
-      "csp": "default-src 'self' tauri:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: tauri:; connect-src 'self' https: tauri:;"
+      "csp": "default-src 'self' tauri:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: tauri:; connect-src 'self' https: ipc: http://ipc.localhost tauri:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none';",
+      "devCsp": "default-src 'self' tauri:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: tauri:; connect-src 'self' https: ipc: http://ipc.localhost tauri: ws://localhost:1421 ws://127.0.0.1:1421; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none';"
     }
   },
   "bundle": {
