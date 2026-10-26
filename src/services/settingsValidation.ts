@@ -38,6 +38,14 @@ export function sanitizeSettings<T>(defaults: T, input: unknown): T {
             result[id] = merge({ id, apiKey: "", customModels: [] }, provider, `${path}.${id}`);
           }
         }
+        const openai = result.openai as Record<string, unknown> | undefined;
+        if (openai) {
+          openai.authMethod = openai.authMethod === "oauth" ? "oauth" : "api_key";
+          // Only a backend status check may establish a connected OAuth session.
+          delete openai.oauthConnected;
+          delete openai.oauthAccountId;
+          if (openai.authMethod === "oauth") openai.isVerified = false;
+        }
       }
       return result;
     }

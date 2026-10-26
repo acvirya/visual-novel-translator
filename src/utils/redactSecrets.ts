@@ -1,11 +1,11 @@
-const sensitiveField = /^(?:authorization|proxy-authorization|api[-_]?key|x-api-key|x-goog-api-key|token|access[-_]?token|refresh[-_]?token|password|secret)$/i;
+const sensitiveField = /^(?:authorization|proxy-authorization|api[-_]?key|x-api-key|x-goog-api-key|token|access[-_]?token|refresh[-_]?token|id[-_]?token|id_token_hint|code_verifier|code|password|secret)$/i;
 
 export function redactSecretText(text: string): string {
   return text
     .replace(/\b(Bearer\s+)[^\s,"'}]+/gi, "$1[REDACTED]")
-    .replace(/([?&](?:key|api_key|apiKey|access_token)=)[^&#\s]+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:key|api_key|apiKey|access_token|refresh_token|id_token|id_token_hint|code|code_verifier)=)[^&#\s]+/gi, "$1[REDACTED]")
     .replace(/\bsk-[a-zA-Z0-9_-]{8,}\b/g, "[REDACTED]")
-    .replace(/((?:api[_-]?key|x-api-key|x-goog-api-key|password|access_token)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]");
+    .replace(/((?:api[_-]?key|x-api-key|x-goog-api-key|password|access_token|refresh_token|id_token|id_token_hint|code_verifier)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]");
 }
 
 /** Safe to serialize: handles errors, cycles and secret-bearing metadata. */

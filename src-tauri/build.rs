@@ -57,6 +57,14 @@ fn main() {
             "get_secure_key",
             "set_secure_key",
             "delete_secure_key",
+            "openai_auth_status",
+            "openai_set_auth_method",
+            "openai_oauth_start",
+            "openai_oauth_cancel",
+            "openai_oauth_select",
+            "openai_oauth_disconnect",
+            "openai_oauth_models",
+            "openai_oauth_completion",
         ]),
     ))
     .expect("failed to build Tauri permissions");

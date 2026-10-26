@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-openai-oauth-completion"
+description = "Enables the openai_oauth_completion command without any pre-configured scope."
+commands.allow = ["openai_oauth_completion"]
+
+[[permission]]
+identifier = "deny-openai-oauth-completion"
+description = "Denies the openai_oauth_completion command without any pre-configured scope."
+commands.deny = ["openai_oauth_completion"]

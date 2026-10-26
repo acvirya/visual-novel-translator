@@ -47,7 +47,10 @@ pub fn cancel_llm_stream(stream_id: String) {
     }
 }
 
-fn register_stream(stream_id: &Option<String>, token: &CancellationToken) -> Result<(), String> {
+pub(crate) fn register_stream(
+    stream_id: &Option<String>,
+    token: &CancellationToken,
+) -> Result<(), String> {
     if let Some(id) = stream_id {
         if id.is_empty() || id.len() > 256 {
             return Err("Invalid stream ID".into());
@@ -267,7 +270,7 @@ pub fn flush_stream_content_buffer(
     ok
 }
 
-struct StreamIdGuard<'a>(&'a Option<String>);
+pub(crate) struct StreamIdGuard<'a>(pub(crate) &'a Option<String>);
 impl<'a> Drop for StreamIdGuard<'a> {
     fn drop(&mut self) {
         if let Some(ref sid) = self.0 {
@@ -836,7 +839,11 @@ pub async fn openrouter_stream_chat_completion(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Named arguments are part of the public Tauri IPC contract.
 pub async fn llm_stream_chat_completion(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::openai_oauth::OpenAiAuthState>,
+    provider_id: Option<String>,
     url: String,
     headers: HashMap<String, String>,
     payload_json: String,
@@ -845,7 +852,8 @@ pub async fn llm_stream_chat_completion(
     on_event: Channel<StreamEvent>,
 ) -> Result<OpenRouterCompletionResponse, String> {
     let parsed_url = validate_provider_url(&url)?;
-    let cancel_token = CancellationToken::new();
+    let cancel_token =
+        crate::openai_oauth::api_key_request_session(&app, &state, provider_id.as_deref()).await?;
     register_stream(&stream_id, &cancel_token)?;
     let _stream_guard = StreamIdGuard(&stream_id);
     let global_token = get_global_stream_token();

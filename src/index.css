@@ -297,3 +297,27 @@ body.overlay-window-mode *, .overlay-no-scrollbar { -ms-overflow-style: none !im
 .script-memory-options { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; padding-bottom: 14px; border-bottom: 1px solid var(--border-subtle); }
 .script-memory-options label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
 .script-memory-options input[type="range"] { width: 90px; }
+.openai-auth { display: grid; gap: 12px; min-width: 0; }
+.openai-auth-methods { display: flex; flex-wrap: wrap; gap: 10px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.openai-auth-methods legend { font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary); }
+.openai-auth-methods label { display: flex; align-items: center; gap: 10px; flex: 1 1 190px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: 8px; cursor: pointer; }
+.openai-auth-methods label:has(input:checked) { background: var(--bg-surface-elevated); border-color: var(--accent-primary); }
+.openai-auth-methods input { accent-color: var(--accent-primary); width: 15px; height: 15px; flex-shrink: 0; }
+.openai-auth-methods span { display: grid; gap: 3px; font-size: 13px; font-weight: 600; }
+.openai-auth-methods small { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.openai-oauth-panel { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); }
+.openai-oauth-heading { display: flex; align-items: flex-start; gap: 10px; }
+.openai-oauth-heading > svg { margin-top: 2px; flex-shrink: 0; color: var(--accent-primary); }
+.openai-oauth-heading strong { font-size: 13px; }
+.openai-oauth-heading p { margin: 5px 0 0; font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.openai-account-picker { display: grid; gap: 6px; min-width: 0; }
+.openai-account-picker label { font-size: 11px; color: var(--text-secondary); }
+.openai-account-picker select { width: 100%; min-width: 0; }
+.openai-auth-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.openai-auth-actions button, .openai-auth-actions > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.openai-connected { color: var(--accent-primary); margin-right: 4px; }
+.openai-usage-link { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--accent-primary); }
+.openai-auth-note { color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.openai-auth-error, .openai-auth-notice { margin: 0; padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.openai-auth-error { color: var(--accent-red, #f85149); background: rgba(248, 81, 73, .07); }
+.openai-auth-notice { color: var(--text-secondary); background: var(--bg-surface-elevated); }

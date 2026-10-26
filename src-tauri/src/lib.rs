@@ -5,6 +5,7 @@ mod keyring_store;
 mod llm;
 mod ocr_commands;
 mod oneocr;
+mod openai_oauth;
 mod screen_capture;
 mod textractor;
 mod window_manager;
@@ -29,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(TextractorState::new())
+        .manage(openai_oauth::OpenAiAuthState::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) && window.label() == "main" {
                 window.app_handle().exit(0);
@@ -87,6 +89,14 @@ pub fn run() {
             keyring_store::get_secure_key,
             keyring_store::set_secure_key,
             keyring_store::delete_secure_key,
+            openai_oauth::openai_auth_status,
+            openai_oauth::openai_set_auth_method,
+            openai_oauth::openai_oauth_start,
+            openai_oauth::openai_oauth_cancel,
+            openai_oauth::openai_oauth_select,
+            openai_oauth::openai_oauth_disconnect,
+            openai_oauth::openai_oauth_models,
+            openai_oauth::openai_oauth_completion,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

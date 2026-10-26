@@ -29,6 +29,11 @@ export interface StoredProviderConfig {
   baseUrl?: string;
   customModels?: CuratedModelInfo[];
   isVerified?: boolean;
+  /** OpenAI only; omitted values migrate to the existing API-key method. */
+  authMethod?: "api_key" | "oauth";
+  /** Runtime status from Rust, never restored from persisted browser settings. */
+  oauthConnected?: boolean;
+  oauthAccountId?: string | null;
 }
 
 export const SUPPORTED_PROVIDERS: LlmProviderDefinition[] = [
@@ -185,7 +190,7 @@ export class LlmProviderRegistry {
    */
   public static getModelsForProvider(providerId: string): CuratedModelInfo[] {
     const cfg = this.getProviderConfig(providerId);
-    if (!cfg.isVerified || !cfg.apiKey || !cfg.apiKey.trim()) {
+    if (!this.isProviderVerified(providerId)) {
       return [];
     }
     if (cfg.customModels && cfg.customModels.length > 0) {
@@ -220,17 +225,23 @@ export class LlmProviderRegistry {
       ],
     };
 
-    return DEFAULTS[providerId] || [];
+    return providerId === "openai" && cfg.authMethod === "oauth" ? [] : DEFAULTS[providerId] || [];
   }
 
   public static isProviderVerified(providerId: string): boolean {
     const cfg = this.getProviderConfig(providerId);
-    return !!(cfg.isVerified && cfg.apiKey && cfg.apiKey.trim().length > 0);
+    return !!cfg.isVerified && this.hasCredentials(providerId, cfg);
   }
 
   public static isProviderActive(providerId: string): boolean {
     const cfg = this.getProviderConfig(providerId);
-    return !!(cfg.apiKey && cfg.apiKey.trim().length > 0);
+    return this.hasCredentials(providerId, cfg);
+  }
+
+  private static hasCredentials(providerId: string, cfg: StoredProviderConfig): boolean {
+    return providerId === "openai" && cfg.authMethod === "oauth"
+      ? cfg.oauthConnected === true
+      : Boolean(cfg.apiKey?.trim());
   }
 
   /**

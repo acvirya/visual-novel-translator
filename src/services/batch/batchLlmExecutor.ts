@@ -53,13 +53,14 @@ export async function executeBatchLlm(params: {
 
   const { providerId, modelId: targetModelId } = LlmProviderRegistry.parseModelId(settings.modelId);
   const providerCfg = LlmProviderRegistry.getProviderConfig(providerId);
+  const usingOAuth = providerId === "openai" && providerCfg.authMethod === "oauth";
   const resolvedKey = (
     providerId === "openrouter"
       ? (apiKey || providerCfg.apiKey)
       : providerCfg.apiKey
   || "").trim();
 
-  if (!resolvedKey && providerId !== "custom") {
+  if (!usingOAuth && !resolvedKey && providerId !== "custom") {
     const providerDef = LlmProviderRegistry.getProvider(providerId);
     throw new Error(`${providerDef?.name || "LLM"} API Key is missing. Please configure and verify your API key in Translation Providers.`);
   }
@@ -225,7 +226,7 @@ export async function executeBatchLlm(params: {
         reasoningMaxTokens: reasoningCfg.maxTokens,
         excludeReasoning: false,
         timeoutSeconds,
-        overrideApiKey: resolvedKey,
+        overrideApiKey: usingOAuth ? undefined : resolvedKey,
         streamId,
         onEvent: handleStreamEvent,
       });

@@ -51,6 +51,14 @@
     "allow-cancel-llm-stream",
     "allow-get-secure-key",
     "allow-set-secure-key",
-    "allow-delete-secure-key"
+    "allow-delete-secure-key",
+    "allow-openai-auth-status",
+    "allow-openai-set-auth-method",
+    "allow-openai-oauth-start",
+    "allow-openai-oauth-cancel",
+    "allow-openai-oauth-select",
+    "allow-openai-oauth-disconnect",
+    "allow-openai-oauth-models",
+    "allow-openai-oauth-completion"
   ]
 }

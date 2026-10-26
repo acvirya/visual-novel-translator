@@ -424,13 +424,14 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
 
   const { providerId, modelId: targetModelId } = LlmProviderRegistry.parseModelId(modelId);
   const providerCfg = LlmProviderRegistry.getProviderConfig(providerId);
+  const usingOAuth = providerId === "openai" && providerCfg.authMethod === "oauth";
   const cleanKey = (
     providerId === "openrouter"
       ? (apiKey || providerCfg.apiKey)
       : providerCfg.apiKey
   || "").trim();
 
-  if (!cleanKey && providerId !== "custom") {
+  if (!usingOAuth && !cleanKey && providerId !== "custom") {
     const providerDef = LlmProviderRegistry.getProvider(providerId);
     const err = `${providerDef?.name || "LLM"} API Key is missing. Please set your API key in Translation Providers.`;
     logger.error("LLM::API", err);
@@ -513,7 +514,7 @@ export async function translateWithOpenRouter(options: OpenRouterTranslateOption
           reasoningEffort,
           reasoningMaxTokens,
           excludeReasoning,
-          overrideApiKey: cleanKey,
+          overrideApiKey: usingOAuth ? undefined : cleanKey,
         });
         if (res && res.content) {
           content = res.content.trim();

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { LlmProviderRegistry } from "../../services/providers/llmProviderRegistry";
 import {
   fetchModelEndpoints,
   OpenRouterEndpoint,
@@ -41,7 +42,7 @@ export const ProviderSelectorMultiSelect: React.FC<ProviderSelectorMultiSelectPr
 
   // Fetch model endpoints whenever modelId changes
   useEffect(() => {
-    if (!modelId || modelId.startsWith("mt:")) {
+    if (!modelId || LlmProviderRegistry.parseModelId(modelId).providerId !== "openrouter") {
       setEndpoints([]);
       return;
     }
@@ -78,9 +79,7 @@ export const ProviderSelectorMultiSelect: React.FC<ProviderSelectorMultiSelectPr
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, []);
 
-  const isFreeMt = modelId.startsWith("mt:");
-
-  if (isFreeMt) {
+  if (LlmProviderRegistry.parseModelId(modelId).providerId !== "openrouter") {
     return null;
   }
 

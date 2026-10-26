@@ -237,6 +237,23 @@ pub async fn openrouter_chat_completion(
 
 #[tauri::command]
 pub async fn llm_chat_completion(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::openai_oauth::OpenAiAuthState>,
+    provider_id: Option<String>,
+    url: String,
+    headers: HashMap<String, String>,
+    payload_json: String,
+    timeout_seconds: Option<u64>,
+) -> Result<OpenRouterCompletionResponse, String> {
+    let session =
+        crate::openai_oauth::api_key_request_session(&app, &state, provider_id.as_deref()).await?;
+    tokio::select! {
+        _ = session.cancelled() => Err("OpenAI authentication changed; translation cancelled.".into()),
+        result = llm_chat_completion_inner(url, headers, payload_json, timeout_seconds) => result,
+    }
+}
+
+async fn llm_chat_completion_inner(
     url: String,
     headers: HashMap<String, String>,
     payload_json: String,

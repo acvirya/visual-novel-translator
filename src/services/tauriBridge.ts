@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import type { OpenAiAuthMethod, OpenAiAuthStatus } from "../types/openaiAuth";
 import {
   TextractorProcessInfo,
   MonitorInfo,
@@ -14,6 +15,21 @@ import {
  * Type-Safe Bridge for all Backend Tauri Commands
  */
 export const TauriBridge = {
+  // OAuth credentials stay in Rust; IPC only carries account summaries and translation results.
+  openAiAuthStatus: (): Promise<OpenAiAuthStatus> => invoke("openai_auth_status"),
+  openAiSetAuthMethod: (method: OpenAiAuthMethod): Promise<void> => invoke("openai_set_auth_method", { method }),
+  openAiOAuthStart: (accountId?: string): Promise<void> => invoke("openai_oauth_start", { accountId: accountId ?? null }),
+  openAiOAuthCancel: (): Promise<void> => invoke("openai_oauth_cancel"),
+  openAiOAuthSelect: (accountId: string): Promise<void> => invoke("openai_oauth_select", { accountId }),
+  openAiOAuthDisconnect: (accountId: string): Promise<boolean> => invoke("openai_oauth_disconnect", { accountId }),
+  openAiOAuthModels: (): Promise<Array<{ id: string; name: string }>> => invoke("openai_oauth_models"),
+  openAiOAuthCompletion: (params: {
+    request: { model: string; messages: Array<{ role: string; content: string }>; reasoning_effort?: string };
+    timeoutSeconds?: number;
+    streamId?: string;
+    onEvent: Channel<StreamEvent>;
+  }): Promise<OpenRouterCompletionResponse> => invoke("openai_oauth_completion", params),
+
   // Monitor & Overlay Controls
   getMonitors: (): Promise<MonitorInfo[]> =>
     invoke<MonitorInfo[]>("get_monitors"),
@@ -162,6 +178,7 @@ export const TauriBridge = {
     }),
 
   llmChatCompletion: (params: {
+    providerId?: string;
     url: string;
     headers: Record<string, string>;
     payloadJson?: string;
@@ -169,6 +186,7 @@ export const TauriBridge = {
     timeoutSeconds?: number;
   }): Promise<OpenRouterCompletionResponse> =>
     invoke<OpenRouterCompletionResponse>("llm_chat_completion", {
+      providerId: params.providerId,
       url: params.url,
       headers: params.headers,
       payloadJson: params.payloadJson ?? params.payload_json ?? "",
@@ -176,6 +194,7 @@ export const TauriBridge = {
     }),
 
   llmStreamChatCompletion: (params: {
+    providerId?: string;
     url: string;
     headers: Record<string, string>;
     payloadJson?: string;
@@ -185,6 +204,7 @@ export const TauriBridge = {
     onEvent: Channel<StreamEvent>;
   }): Promise<OpenRouterCompletionResponse> =>
     invoke<OpenRouterCompletionResponse>("llm_stream_chat_completion", {
+      providerId: params.providerId,
       url: params.url,
       headers: params.headers,
       payloadJson: params.payloadJson ?? params.payload_json ?? "",

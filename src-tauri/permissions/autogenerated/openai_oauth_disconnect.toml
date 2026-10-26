@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-openai-oauth-disconnect"
+description = "Enables the openai_oauth_disconnect command without any pre-configured scope."
+commands.allow = ["openai_oauth_disconnect"]
+
+[[permission]]
+identifier = "deny-openai-oauth-disconnect"
+description = "Denies the openai_oauth_disconnect command without any pre-configured scope."
+commands.deny = ["openai_oauth_disconnect"]

@@ -53,7 +53,7 @@ export const GeneralSettingsView: React.FC = () => {
     hotkeyOcrSnipping,
   ]);
 
-  const handleExecuteReset = () => {
+  const handleExecuteReset = async () => {
     if (resetCategory === "all") {
       const keysToClear = [
         "vn_source_lang",
@@ -131,7 +131,7 @@ export const GeneralSettingsView: React.FC = () => {
         "vn_translator_universal_settings_v1",
       ];
       keysToClear.forEach((k) => localStorage.removeItem(k));
-      settingsManager.resetSettings();
+      await settingsManager.resetSettings();
 
 
       toast.success("All settings reset to default. Please reload or reopen tabs.", "Reset Complete");

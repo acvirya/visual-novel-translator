@@ -25,6 +25,9 @@
     "allow-openrouter-stream-chat-completion",
     "allow-llm-chat-completion",
     "allow-llm-stream-chat-completion",
-    "allow-cancel-llm-stream"
+    "allow-cancel-llm-stream",
+    "allow-openai-auth-status",
+    "allow-openai-oauth-models",
+    "allow-openai-oauth-completion"
   ]
 }

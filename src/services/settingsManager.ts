@@ -16,6 +16,7 @@ import { SecureStorageService } from "./secureStorageService";
 import { TauriBridge } from "./tauriBridge";
 import type { ManagedService } from "./appContainer";
 import { sanitizeSettings } from "./settingsValidation";
+import { hasConnectedOpenAiAccount, type OpenAiAuthStatus } from "../types/openaiAuth";
 
 export interface GeneralSettings {
   sourceLang: string;
@@ -395,6 +396,17 @@ export class SettingsManager implements ManagedService {
     if (migrationFailed) {
       throw new Error("Saved credentials could not be migrated to secure storage. Existing settings were preserved; please check access to the system credential store and restart.");
     }
+    if (SecureStorageService.isTauriEnvironment()) {
+      try {
+        this.applyOpenAiStatus(await TauriBridge.openAiAuthStatus());
+        hasChanges = true;
+      } catch (error) {
+        // An unavailable OAuth store must not prevent the other providers from starting.
+        const cfg = this.cache.llmProviders.openai;
+        if (cfg?.authMethod === "oauth") { cfg.oauthConnected = false; cfg.isVerified = false; }
+        console.warn("[SettingsManager] Could not load OpenAI sign-in status:", error);
+      }
+    }
     this.isSecureStorageInitialized = true;
     this.cache.overlay.config.isEnabled = false;
     if (hasChanges) {
@@ -469,6 +481,10 @@ export class SettingsManager implements ManagedService {
     const snapshot = this.clone(settings);
     snapshot.overlay.config.isEnabled = false;
     for (const provider of Object.values(snapshot.llmProviders)) provider.apiKey = "";
+    if (snapshot.llmProviders.openai) {
+      delete snapshot.llmProviders.openai.oauthConnected;
+      delete snapshot.llmProviders.openai.oauthAccountId;
+    }
     return snapshot;
   }
 
@@ -625,10 +641,31 @@ export class SettingsManager implements ManagedService {
     if (!this.cache.llmProviders) {
       this.cache.llmProviders = this.clone(DEFAULT_LLM_PROVIDERS);
     }
+    if (config.id === "openai") {
+      config = { ...config, authMethod: config.authMethod === "oauth" ? "oauth" : "api_key" };
+      if (SecureStorageService.isTauriEnvironment()) await TauriBridge.openAiSetAuthMethod(config.authMethod!);
+    }
     if (config.apiKey !== undefined) {
       await SecureStorageService.setApiKey(config.id, config.apiKey);
     }
     this.cache.llmProviders[config.id] = { ...this.clone(config), apiKey: (config.apiKey || "").trim() };
+    this.saveToStorage();
+  }
+
+  private applyOpenAiStatus(status: OpenAiAuthStatus): void {
+    const cfg = this.cache.llmProviders.openai || { id: "openai", apiKey: "" };
+    const changed = (cfg.authMethod ?? "api_key") !== status.authMethod
+      || (status.authMethod === "oauth" && (cfg.oauthAccountId ?? null) !== status.selectedAccountId);
+    this.cache.llmProviders.openai = {
+      ...cfg, authMethod: status.authMethod,
+      oauthConnected: hasConnectedOpenAiAccount(status), oauthAccountId: status.selectedAccountId,
+      isVerified: status.authMethod === "oauth" ? hasConnectedOpenAiAccount(status) : changed ? false : cfg.isVerified,
+      customModels: changed ? [] : cfg.customModels,
+    };
+  }
+
+  public updateOpenAiAuthStatus(status: OpenAiAuthStatus): void {
+    this.applyOpenAiStatus(status);
     this.saveToStorage();
   }
 
@@ -752,7 +789,10 @@ export class SettingsManager implements ManagedService {
     this.saveToStorage();
   }
 
-  public resetSettings(category?: keyof AppSettings) {
+  public async resetSettings(category?: keyof AppSettings): Promise<void> {
+    if ((!category || category === "llmProviders") && SecureStorageService.isTauriEnvironment()) {
+      await TauriBridge.openAiSetAuthMethod("api_key");
+    }
     if (category) {
       (this.cache as Record<keyof AppSettings, any>)[category] = this.clone(DEFAULT_APP_SETTINGS[category]);
     } else {

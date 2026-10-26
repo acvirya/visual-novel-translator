@@ -33,6 +33,7 @@ import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
 import { useToast } from "../common/ToastProvider";
 import { settingsManager } from "../../services/settingsManager";
 import { StylePresetsCard } from "./providers/StylePresetsCard";
+import { OpenAiAuthentication } from "./providers/OpenAiAuthentication";
 
 export const TranslationProvidersView: React.FC = () => {
   const confirm = useConfirmation();
@@ -80,7 +81,7 @@ export const TranslationProvidersView: React.FC = () => {
     try {
       await save;
       const current = providerConfigsRef.current[providerId];
-      if (current?.apiKey === merged.apiKey && current?.baseUrl === merged.baseUrl) {
+      if (current?.apiKey === merged.apiKey && current?.baseUrl === merged.baseUrl && current?.authMethod === merged.authMethod) {
         providerConfigsRef.current = { ...providerConfigsRef.current, [providerId]: merged };
         setProviderConfigs(providerConfigsRef.current);
       }
@@ -249,10 +250,10 @@ export const TranslationProvidersView: React.FC = () => {
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Cpu size={16} /> 2. LLM Providers & Direct API Keys
+              <Cpu size={16} /> 2. LLM Providers & Authentication
             </span>
             <span className="card-subtitle">
-              Configure direct API keys (Anthropic, DeepSeek, Google, OpenAI, Groq, NVIDIA, Copilot, etc.) or universal gateways
+              Connect a provider with an API key, an OpenAI ChatGPT account, or a compatible gateway
             </span>
           </div>
         </div>
@@ -270,7 +271,7 @@ export const TranslationProvidersView: React.FC = () => {
           {SUPPORTED_PROVIDERS.map((p) => {
             const isSelected = activeProviderTab === p.id;
             const cfg = providerConfigs[p.id];
-            const hasKey = !!(cfg?.apiKey && cfg.apiKey.trim().length > 0);
+            const hasKey = p.id === "openai" && cfg?.authMethod === "oauth" ? !!cfg.oauthConnected : !!cfg?.apiKey?.trim();
             const isVerified = !!cfg?.isVerified;
 
             return (
@@ -319,6 +320,7 @@ export const TranslationProvidersView: React.FC = () => {
           const currentCfg = providerConfigs[activeProviderTab] || { id: activeProviderTab, apiKey: "" };
           const hasKey = !!(currentCfg.apiKey && currentCfg.apiKey.trim().length > 0);
           const isVerified = !!currentCfg.isVerified;
+          const isOAuth = activeProviderTab === "openai" && currentCfg.authMethod === "oauth";
 
           return (
             <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "6px" }}>
@@ -342,7 +344,7 @@ export const TranslationProvidersView: React.FC = () => {
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  {currentDef.apiKeyHelpUrl && (
+                  {currentDef.apiKeyHelpUrl && !isOAuth && (
                     <a
                       href={currentDef.apiKeyHelpUrl}
                       target="_blank"
@@ -376,9 +378,9 @@ export const TranslationProvidersView: React.FC = () => {
                         borderRadius: "12px",
                       }}
                     >
-                      <CheckCircle2 size={11} /> Active & Verified
+                      <CheckCircle2 size={11} /> {isOAuth ? "ChatGPT connected" : "Active & Verified"}
                     </span>
-                  ) : hasKey ? (
+                  ) : hasKey && !isOAuth ? (
                     <span
                       style={{
                         display: "inline-flex",
@@ -412,6 +414,13 @@ export const TranslationProvidersView: React.FC = () => {
                 </div>
               </div>
 
+              {activeProviderTab === "openai" && <OpenAiAuthentication config={currentCfg} disabled={isTesting} beforeMethodChange={() => saveQueueRef.current} onConfigChange={(config) => {
+                providerConfigsRef.current = { ...providerConfigsRef.current, openai: config };
+                setProviderConfigs(providerConfigsRef.current);
+                setTestFeedback(null);
+              }} />}
+
+              {!isOAuth && <>
               {/* API Key Input */}
               <div>
                 <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "4px" }}>
@@ -519,6 +528,7 @@ export const TranslationProvidersView: React.FC = () => {
                 </div>
               </div>
 
+              </>}
               {/* Test Feedback */}
               {testFeedback && (
                 <div

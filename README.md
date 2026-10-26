@@ -1,3 +1,5 @@
+<div align="center">
+
 # 🌸 Visual Novel Translator
 
 **A Windows desktop application for translating visual novels while you play. Capture dialogue with Textractor or screen OCR, translate it using machine translation or a configured LLM, and read the result in a customizable in-game overlay.**
@@ -8,6 +10,8 @@
 [![Rust](https://img.shields.io/badge/Rust-1.75+-DEA584?style=flat-square&logo=rust&logoColor=black)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat-square)](LICENSE)
 
+</div>
+
 ## Features
 
 - **Live translation:** provides dialogue history, provider selection, conversation context, and session usage counters. OCR shortcuts also feed the live log.
@@ -16,7 +20,7 @@
 - **Batch script translation:** configurable chunking, concurrency, retries, cancellation, and resume from compatible saved output.
 - **Glossary:** shared terminology for LLM prompts, VNDB character import, and category filtering
 - **Script memory:** reuse translations offline, edit JSON/JSONL dialogue, and append entries from other scripts into the active file.
-- **Provider configuration:** Google machine translation, DeepL API Free, and configurable LLM providers or OpenAI-compatible endpoints.
+- **Provider configuration:** Google machine translation, DeepL API Free, and configurable LLM providers.
 - **Local credentials:** desktop API keys are stored in the operating system credential store, outside the settings JSON.
 
 ## Requirements
@@ -56,6 +60,19 @@ Open the local URL printed by Vite, normally `http://localhost:1420`. Native hoo
 3. Choose a translation engine in **Live translation**. New dialogue and shortcut results appear at the top of the log; translation failures are displayed as errors.
 4. Configure **In-game overlay**, position it over the game, and enable it. Animations affect the text while the dialogue backdrop stays in place.
 5. Add names and terminology in **Knowledge base → Glossary & terms**. Use **Categories** to filter or manage categories; closing that panel restores the full list. Lock terms you want to keep when clearing the glossary.
+
+### OpenAI: API key or OAuth
+
+In **Settings → Translation providers → OpenAI**, select one authentication method:
+
+- **API key:** enter your OpenAI API key and choose **Verify Key**. Requests use OpenAI API billing.
+- **OAuth · ChatGPT:** choose **Continue with ChatGPT**, authorize the app in your browser, and return to the desktop app. Available models are loaded from your selected account. Eligible requests use your ChatGPT plan or credits, subject to account access and usage limits. This uses the official [Sign in with ChatGPT flow for open-source applications](https://developers.openai.com/siwc/token-sharing-open-source/sign-in).
+
+Switching methods cancels active OpenAI requests. The other method remains saved and inactive; authentication failures never switch methods automatically. OAuth works with live, manual, shortcut, and batch translation. **Manage usage** opens your ChatGPT usage settings.
+
+OAuth requires the Windows desktop application. Tokens refresh in the native backend and remain encrypted with Windows DPAPI for the current Windows user. They are not stored in browser settings. ChatGPT plan requests use the Responses API; sampling and output-token overrides are omitted under its current [request limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
+See [OpenAI OAuth integration notes](docs/OPENAI_OAUTH.md) for implementation details, verification, and troubleshooting.
 
 ### Textractor
 
@@ -120,6 +137,7 @@ Tauri writes bundle artifacts under `src-tauri/target/release/bundle/`. Test ins
 ## Data and privacy
 
 - Settings and script memory are local. Desktop API keys use the OS credential store; settings snapshots omit those keys.
+- OAuth sessions remain in a local, Windows-user-encrypted credential file. **Sign out** attempts remote session revocation and clears local tokens; saved account registrations remain available for later sign-in. Token counters do not represent your remaining ChatGPT plan allowance; use **Manage usage** for that information.
 - Online translation sends selected text to the selected provider. Provider availability, pricing, and limits apply. Google MT uses public endpoints that may become unavailable or rate limited; a failed DeepL request does not switch to Google.
 - Application, batch-debug, and usage logs can contain dialogue or request snippets. Treat exported logs and scripts as potentially sensitive.
 - Overlay templates are restricted to presentation markup. Frame scripts, forms, and external resource requests are blocked; template CSS stays separate from the application UI.
@@ -140,7 +158,7 @@ src-tauri/
 e2e/                Browser regression tests
 ```
 
-The local OneOCR dependency patch is documented in [PATCHES.md](src-tauri/vendor/oneocr-rs/PATCHES.md). The repository audit and subsequent fixes are recorded in [LAPORAN_PERBAIKAN.md](LAPORAN_PERBAIKAN.md).
+The local OneOCR dependency patch is documented in [PATCHES.md](src-tauri/vendor/oneocr-rs/PATCHES.md). OpenAI authentication changes and verification are documented in [OpenAI OAuth integration notes](docs/OPENAI_OAUTH.md).
 
 ## Contributing
 

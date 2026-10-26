@@ -23,7 +23,7 @@ export interface SettingsStoreState {
   updateBatch: (batch: Partial<BatchSettings>) => void;
   updateLlmProvider: (config: StoredProviderConfig) => Promise<void>;
   setLlmApiKey: (providerId: string, apiKey: string) => Promise<void>;
-  resetSettings: (category?: keyof AppSettings) => void;
+  resetSettings: (category?: keyof AppSettings) => Promise<void>;
 }
 
 let isSubscribed = false;
@@ -78,8 +78,6 @@ export const useSettingsStore = create<SettingsStoreState>((set) => {
     setLlmApiKey: async (providerId, apiKey) => {
       await settingsManager.setLlmApiKey(providerId, apiKey);
     },
-    resetSettings: (category) => {
-      settingsManager.resetSettings(category);
-    },
+    resetSettings: (category) => settingsManager.resetSettings(category),
   };
 });

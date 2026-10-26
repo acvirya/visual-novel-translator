@@ -163,6 +163,9 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [models, setModels] = useState<OpenRouterModel[]>(FALLBACK_POPULAR_MODELS);
   const [searchFilter, setSearchFilter] = useState<string>("");
+  const [openAiConfig, setOpenAiConfig] = useState(() => settingsManager.getLlmProvider("openai"));
+  useEffect(() => settingsManager.subscribe(settings => setOpenAiConfig(settings.llmProviders.openai)), []);
+  const usingChatGptPlan = selectedModelId.startsWith("openai:") && openAiConfig?.authMethod === "oauth";
   const [starredIds, setStarredIds] = useState<string[]>(() => {
     try {
       const saved = settingsManager.getTranslation().starredModelIds;
@@ -320,7 +323,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     }
 
     return list;
-  }, [models, isOpen, selectedModelId]);
+  }, [models, isOpen, selectedModelId, openAiConfig]);
 
   const currentModel = allMergedModels.find((m) => m.id === selectedModelId);
   const currentPricing = currentModel ? formatModelPricing(currentModel.pricing) : null;
@@ -523,7 +526,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           </span>
         )}
 
-        {currentPricing && !compact && !isOpen && (
+        {currentPricing && !usingChatGptPlan && !compact && !isOpen && (
           <div style={{ display: "flex", gap: "5px", fontSize: "10.5px", flexShrink: 0 }}>
             <span style={{ color: "var(--accent-cyan)", display: "flex", alignItems: "center", gap: "2px" }} title="Prompt Input Price">
               <ArrowUp size={10} /> {currentPricing.inputPerMillion}/M
@@ -759,7 +762,7 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
               <span>No verified AI models found.</span>
               <br />
               <span style={{ fontSize: "10px", opacity: 0.8 }}>
-                Verify an API key in Translation Providers to load its models, or select Free MT above.
+                Connect a provider in Translation Providers to load its models, or select Free MT above.
               </span>
             </div>
           )}

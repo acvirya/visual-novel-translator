@@ -71,6 +71,12 @@ export class LlmDispatcherService {
     apiKey: string,
     customBaseUrl?: string
   ): Promise<{ isValid: boolean; message: string; modelsCount?: number }> {
+    if (providerId === "openai" && LlmProviderRegistry.getProviderConfig("openai").authMethod === "oauth") {
+      try {
+        const models = await TauriBridge.openAiOAuthModels();
+        return { isValid: models.length > 0, message: `ChatGPT account connected (${models.length} models available).`, modelsCount: models.length };
+      } catch (error) { return { isValid: false, message: String(error) }; }
+    }
     const cleanKey = (apiKey || "").trim();
     const def = LlmProviderRegistry.getProvider(providerId);
     if (!def) {
@@ -111,6 +117,10 @@ export class LlmDispatcherService {
     apiKey: string,
     customBaseUrl?: string
   ): Promise<CuratedModelInfo[]> {
+    if (providerId === "openai" && LlmProviderRegistry.getProviderConfig("openai").authMethod === "oauth") {
+      const models = await TauriBridge.openAiOAuthModels();
+      return models.map(model => ({ ...model, context_length: 0, pricing: { prompt: "0", completion: "0" }, reasoning: true }));
+    }
     const cleanKey = (apiKey || "").trim();
     const def = LlmProviderRegistry.getProvider(providerId);
     if (!def) return [];
@@ -177,6 +187,8 @@ export class LlmDispatcherService {
         const cfg = LlmProviderRegistry.getProviderConfig(p.id);
         try {
           const models = await this.fetchProviderModels(p.id, cfg.apiKey, cfg.baseUrl);
+          const latest = LlmProviderRegistry.getProviderConfig(p.id);
+          if (p.id === "openai" && (latest.authMethod !== cfg.authMethod || latest.oauthAccountId !== cfg.oauthAccountId)) continue;
           if (models.length > 0) {
             await LlmProviderRegistry.saveProviderConfig({
               ...cfg,
@@ -199,6 +211,20 @@ export class LlmDispatcherService {
     const { providerId, modelId } = LlmProviderRegistry.parseModelId(options.modelId);
     const def = LlmProviderRegistry.getProvider(providerId);
     const cfg = LlmProviderRegistry.getProviderConfig(providerId);
+
+    if (providerId === "openai" && cfg.authMethod === "oauth") {
+      if (options.overrideApiKey || options.overrideBaseUrl) {
+        throw new Error("API-key and endpoint overrides cannot be used while OpenAI OAuth is selected.");
+      }
+      const channel = new Channel<StreamEvent>();
+      channel.onmessage = options.onEvent ?? (() => {});
+      const native = await TauriBridge.openAiOAuthCompletion({
+        request: { model: modelId, messages: options.messages,
+          reasoning_effort: options.reasoningEffort === "max" ? "high" : options.reasoningEffort },
+        streamId: options.streamId, timeoutSeconds: options.timeoutSeconds, onEvent: channel,
+      });
+      return { content: native.content, promptTokens: native.prompt_tokens, completionTokens: native.completion_tokens, cachedTokens: native.cached_tokens, cost: native.cost };
+    }
 
     const apiKey = (options.overrideApiKey || cfg.apiKey || "").trim();
     const defaultBase = def?.defaultBaseUrl || "https://openrouter.ai/api/v1";
@@ -436,6 +462,7 @@ export class LlmDispatcherService {
         const channel = new Channel<StreamEvent>();
         channel.onmessage = options.onEvent;
         return await TauriBridge.llmStreamChatCompletion({
+          providerId,
           url,
           headers,
           payloadJson: JSON.stringify(currentPayload),
@@ -445,6 +472,7 @@ export class LlmDispatcherService {
         });
       } else {
         return await TauriBridge.llmChatCompletion({
+          providerId,
           url,
           headers,
           payloadJson: JSON.stringify(currentPayload),

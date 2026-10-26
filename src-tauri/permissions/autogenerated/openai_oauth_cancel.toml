@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-openai-oauth-cancel"
+description = "Enables the openai_oauth_cancel command without any pre-configured scope."
+commands.allow = ["openai_oauth_cancel"]
+
+[[permission]]
+identifier = "deny-openai-oauth-cancel"
+description = "Denies the openai_oauth_cancel command without any pre-configured scope."
+commands.deny = ["openai_oauth_cancel"]
