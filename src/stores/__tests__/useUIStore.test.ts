@@ -28,6 +28,15 @@ describe("useUIStore", () => {
     useUIStore.getState().setCurrentTab("batch-translate");
     expect(useUIStore.getState().currentTab).toBe("batch-translate");
 
+    useUIStore.getState().setCurrentTab("glossary");
+    expect(useUIStore.getState().currentTab).toBe("glossary");
+
+    useUIStore.getState().setCurrentTab("script-memory");
+    expect(useUIStore.getState().currentTab).toBe("script-memory");
+
+    useUIStore.getState().setCurrentTab("knowledge-base");
+    expect(useUIStore.getState().currentTab).toBe("glossary");
+
     useUIStore.getState().setLiveGameStage("overlay");
     expect(useUIStore.getState().liveGameStage).toBe("overlay");
 

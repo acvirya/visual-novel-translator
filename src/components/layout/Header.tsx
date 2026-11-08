@@ -4,11 +4,13 @@ import { useTextractorStore } from "../../stores/useTextractorStore";
 import { useOcrStore } from "../../stores/useOcrStore";
 
 const tabTitles: Record<NavigationTab, { title: string; subtitle: string; section: string }> = {
-  "live-game": { title: "Live translation", subtitle: "Keep the story moving. Capture, translate, and read in game.", section: "Workspace" },
-  "batch-translate": { title: "Script translator", subtitle: "Translate your files with consistent context and terminology.", section: "Workspace" },
-  "knowledge-base": { title: "Knowledge base", subtitle: "The characters, terms, and translations behind your story.", section: "Library" },
-  settings: { title: "Make it yours", subtitle: "Translation providers, language preferences, and shortcuts.", section: "Settings" },
-  logs: { title: "Activity & usage", subtitle: "Follow translation activity, costs, and application events.", section: "Tools" },
+  "live-game": { title: "Live translation", subtitle: "Real-time game dialogue capture, MT & LLM stream", section: "Workspace" },
+  "batch-translate": { title: "Script translator", subtitle: "Batch file translation with terminology and context memory", section: "Workspace" },
+  "glossary": { title: "Glossary & terms", subtitle: "Manage character names, custom terminology, and VNDB data", section: "Library" },
+  "script-memory": { title: "Script memory", subtitle: "Translation memory database, JSON/JSONL editing, and fuzzy search", section: "Library" },
+  "knowledge-base": { title: "Glossary & terms", subtitle: "Manage character names, custom terminology, and VNDB data", section: "Library" },
+  settings: { title: "Settings", subtitle: "Translation providers, language preferences, and shortcuts", section: "System" },
+  logs: { title: "Activity & usage", subtitle: "Token metrics, translation costs, and application events", section: "System" },
 };
 
 export function Header({ currentTab }: { currentTab: NavigationTab }) {

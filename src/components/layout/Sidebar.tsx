@@ -1,4 +1,4 @@
-﻿import { BookOpen, ChevronLeft, ChevronRight, Languages, Layers, Radio, ScrollText, Sliders } from "lucide-react";
+﻿import { BookOpen, ChevronLeft, ChevronRight, Database, Languages, Layers, Radio, ScrollText, Sliders } from "lucide-react";
 import { NavigationTab } from "../../types";
 import { useTextractorStore } from "../../stores/useTextractorStore";
 import { useOcrStore } from "../../stores/useOcrStore";
@@ -14,9 +14,10 @@ interface SidebarProps {
 const navigation = [
   { id: "live-game", label: "Live translation", shortLabel: "Live", icon: Radio, group: "Workspace" },
   { id: "batch-translate", label: "Script translator", shortLabel: "Scripts", icon: Layers, group: "Workspace" },
-  { id: "knowledge-base", label: "Knowledge base", shortLabel: "Library", icon: BookOpen, group: "Library & tools" },
-  { id: "logs", label: "Activity & usage", shortLabel: "Activity", icon: ScrollText, group: "Library & tools" },
-  { id: "settings", label: "Settings", shortLabel: "Settings", icon: Sliders, group: "Library & tools" },
+  { id: "glossary", label: "Glossary & terms", shortLabel: "Glossary", icon: BookOpen, group: "Library" },
+  { id: "script-memory", label: "Script memory", shortLabel: "Memory", icon: Database, group: "Library" },
+  { id: "logs", label: "Activity & usage", shortLabel: "Activity", icon: ScrollText, group: "System" },
+  { id: "settings", label: "Settings", shortLabel: "Settings", icon: Sliders, group: "System" },
 ] as const;
 
 export function Sidebar({ currentTab, onSelectTab, isCollapsed, onToggleCollapse }: SidebarProps) {
@@ -24,13 +25,25 @@ export function Sidebar({ currentTab, onSelectTab, isCollapsed, onToggleCollapse
   const isScanning = useOcrStore((state) => state.isScanning);
   const isBatchRunning = useBatchStore((state) => state.isRunning);
   const isActive = isHooked || isScanning || isBatchRunning;
-  const status = isBatchRunning ? "Translating scripts" : isHooked ? "Game connected" : isScanning ? "Capturing screen" : "Ready when you are";
+  const status = isBatchRunning
+    ? "Translating scripts"
+    : isHooked
+    ? "Game connected"
+    : isScanning
+    ? "Capturing screen"
+    : "Idle";
+
+  const isTabActive = (itemId: string) => {
+    if (currentTab === itemId) return true;
+    if (currentTab === "knowledge-base" && itemId === "glossary") return true;
+    return false;
+  };
 
   return (
     <aside className={`sidebar${isCollapsed ? " sidebar--collapsed" : ""}`} aria-label="Application sidebar">
       <div className="sidebar-brand">
-        <div className="brand-mark" aria-hidden="true"><Languages size={23} strokeWidth={1.6} /></div>
-        <div className="sidebar-brand-copy"><strong>VN Translator</strong><span>A window into the story.</span></div>
+        <div className="brand-mark" aria-hidden="true"><Languages size={18} strokeWidth={1.8} /></div>
+        <div className="sidebar-brand-copy"><strong>VN Translator</strong><span>Visual Novel Suite</span></div>
       </div>
       <nav className="sidebar-nav" aria-label="Main navigation">
         {navigation.map((item, index) => (
@@ -40,8 +53,8 @@ export function Sidebar({ currentTab, onSelectTab, isCollapsed, onToggleCollapse
             )}
             <button
               type="button"
-              className={`sidebar-link${currentTab === item.id ? " is-active" : ""}`}
-              aria-current={currentTab === item.id ? "page" : undefined}
+              className={`sidebar-link${isTabActive(item.id) ? " is-active" : ""}`}
+              aria-current={isTabActive(item.id) ? "page" : undefined}
               aria-label={item.label}
               title={item.label}
               onClick={() => onSelectTab(item.id)}

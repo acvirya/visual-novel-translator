@@ -39,7 +39,7 @@ export const useUIStore = create<UIState>((set) => ({
   settingsSubTab: "providers",
   logsSubTab: "usage",
 
-  setCurrentTab: (currentTab) => set({ currentTab }),
+  setCurrentTab: (tab) => set({ currentTab: tab === "knowledge-base" ? "glossary" : tab }),
   setIsSidebarCollapsed: (val) =>
     set((state) => ({
       isSidebarCollapsed: typeof val === "function" ? val(state.isSidebarCollapsed) : val,

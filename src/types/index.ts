@@ -1,9 +1,11 @@
 export type NavigationTab =
   | "live-game"
   | "batch-translate"
-  | "knowledge-base"
+  | "glossary"
+  | "script-memory"
   | "logs"
-  | "settings";
+  | "settings"
+  | "knowledge-base";
 
 export type PreprocessingType =
   | "furigana_cleaner"

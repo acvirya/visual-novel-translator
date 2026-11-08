@@ -6,10 +6,11 @@ import { ToastProvider } from "./components/common/ToastProvider";
 import { LlmDispatcherService } from "./services/providers/llmDispatcherService";
 import { useUIStore } from "./stores/useUIStore";
 
-// Primary 4-Hub Views
+// Primary Views
 const LiveGameHubView = lazy(() => import("./components/views/LiveGameHubView").then((module) => ({ default: module.LiveGameHubView })));
 const BatchTranslateView = lazy(() => import("./components/views/BatchTranslateView").then((module) => ({ default: module.BatchTranslateView })));
-const KnowledgeBaseView = lazy(() => import("./components/views/KnowledgeBaseView").then((module) => ({ default: module.KnowledgeBaseView })));
+const GlossaryManagerView = lazy(() => import("./components/views/GlossaryManagerView").then((module) => ({ default: module.GlossaryManagerView })));
+const ScriptManagerView = lazy(() => import("./components/views/ScriptManagerView").then((module) => ({ default: module.ScriptManagerView })));
 const UnifiedSettingsView = lazy(() => import("./components/views/UnifiedSettingsView").then((module) => ({ default: module.UnifiedSettingsView })));
 const LogsHubView = lazy(() => import("./components/views/LogsHubView").then((module) => ({ default: module.LogsHubView })));
 
@@ -88,10 +89,17 @@ export function App() {
             <BatchTranslateView onOpenPreprocessingSettings={() => setCurrentTab("settings")} />
           </ErrorBoundary>
         );
+      case "glossary":
       case "knowledge-base":
         return (
-          <ErrorBoundary key="knowledge" fallbackTitle="Knowledge Base Error">
-            <KnowledgeBaseView />
+          <ErrorBoundary key="glossary" fallbackTitle="Glossary & Terms Error">
+            <GlossaryManagerView />
+          </ErrorBoundary>
+        );
+      case "script-memory":
+        return (
+          <ErrorBoundary key="script-memory" fallbackTitle="Script Memory Error">
+            <ScriptManagerView />
           </ErrorBoundary>
         );
       case "settings":
