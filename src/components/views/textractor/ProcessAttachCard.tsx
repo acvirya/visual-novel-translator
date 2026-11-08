@@ -320,17 +320,15 @@ export const ProcessAttachCard: React.FC<ProcessAttachCardProps> = ({
             type="button"
             onClick={() => onSelectArch("x86")}
             disabled={isHooked}
+            className={`selector-pill${arch === "x86" ? " is-active" : ""}`}
             style={{
-              padding: "0 10px",
+              padding: "0 12px",
               height: "100%",
               fontSize: "11.5px",
               fontWeight: 600,
               borderRadius: "3px",
               border: "none",
-              backgroundColor: arch === "x86" ? "var(--accent-primary)" : "transparent",
-              color: arch === "x86" ? "#ffffff" : "var(--text-secondary)",
               cursor: isHooked ? "not-allowed" : "pointer",
-              transition: "all 0.15s ease",
             }}
             title="32-bit Visual Novel executable"
           >
@@ -340,17 +338,15 @@ export const ProcessAttachCard: React.FC<ProcessAttachCardProps> = ({
             type="button"
             onClick={() => onSelectArch("x64")}
             disabled={isHooked}
+            className={`selector-pill${arch === "x64" ? " is-active" : ""}`}
             style={{
-              padding: "0 10px",
+              padding: "0 12px",
               height: "100%",
               fontSize: "11.5px",
               fontWeight: 600,
               borderRadius: "3px",
               border: "none",
-              backgroundColor: arch === "x64" ? "var(--accent-primary)" : "transparent",
-              color: arch === "x64" ? "#ffffff" : "var(--text-secondary)",
               cursor: isHooked ? "not-allowed" : "pointer",
-              transition: "all 0.15s ease",
             }}
             title="64-bit Visual Novel executable"
           >

@@ -1,4 +1,4 @@
-﻿import { BookOpen, ChevronLeft, ChevronRight, Database, Languages, Layers, Radio, ScrollText, Sliders } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Database, Languages, Layers, Radio, ScrollText, Sliders } from "lucide-react";
 import { NavigationTab } from "../../types";
 import { useTextractorStore } from "../../stores/useTextractorStore";
 import { useOcrStore } from "../../stores/useOcrStore";

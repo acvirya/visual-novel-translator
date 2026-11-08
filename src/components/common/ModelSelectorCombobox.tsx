@@ -19,6 +19,7 @@ import {
   ArrowDown,
   X,
   Brain,
+  Database,
 } from "lucide-react";
 import { ReasoningEffort } from "../../types";
 import { settingsManager } from "../../services/settingsManager";
@@ -33,6 +34,9 @@ export interface ModelSelectorComboboxProps {
   width?: string;
   compact?: boolean;
   disabled?: boolean;
+  includeScriptOnly?: boolean;
+  isScriptOnly?: boolean;
+  onSelectScriptOnly?: () => void;
 }
 
 export function splitModelProviderAndName(model: { id: string; name?: string }): { provider: string; modelName: string } {
@@ -159,6 +163,9 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
   width = "100%",
   compact = false,
   disabled = false,
+  includeScriptOnly = false,
+  isScriptOnly = false,
+  onSelectScriptOnly,
 }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [models, setModels] = useState<OpenRouterModel[]>(FALLBACK_POPULAR_MODELS);
@@ -356,6 +363,9 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
     if (isOpen) {
       return searchFilter;
     }
+    if (includeScriptOnly && isScriptOnly) {
+      return "Script Only (Local Memory)";
+    }
     if (selectedModelId === "mt:google-translate") return "Google Translate (Free MT)";
     if (selectedModelId === "mt:deepl-free") return "DeepL API Free (Key required)";
     if (currentModel) {
@@ -446,7 +456,11 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
           </button>
         )}
 
-        {selectedModelId.startsWith("mt:") && (
+        {includeScriptOnly && isScriptOnly && !isOpen && (
+          <Database size={13} style={{ color: "var(--accent-primary)", flexShrink: 0 }} />
+        )}
+
+        {selectedModelId.startsWith("mt:") && !isScriptOnly && (
           <Globe size={13} style={{ color: "var(--accent-success)", flexShrink: 0 }} />
         )}
 
@@ -580,6 +594,58 @@ export const ModelSelectorCombobox: React.FC<ModelSelectorComboboxProps> = ({
             boxShadow: "0 12px 36px rgba(0,0,0,0.85)",
           }}
         >
+          {includeScriptOnly && (!q || "script only memory local".includes(q)) && (
+            <div
+              onClick={() => {
+                onSelectScriptOnly?.();
+                setIsOpen(false);
+                setSearchFilter("");
+              }}
+              style={{
+                padding: "8px 12px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "10px",
+                cursor: "pointer",
+                backgroundColor: isScriptOnly ? "rgba(136, 189, 242, 0.15)" : "transparent",
+                borderBottom: "1px solid var(--border-subtle)",
+                transition: "background 0.12s ease",
+              }}
+              onMouseEnter={(e) => {
+                if (!isScriptOnly) e.currentTarget.style.backgroundColor = "var(--bg-surface-hover)";
+              }}
+              onMouseLeave={(e) => {
+                if (!isScriptOnly) e.currentTarget.style.backgroundColor = "transparent";
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                <Database size={14} color={isScriptOnly ? "var(--accent-primary)" : "var(--accent-secondary)"} />
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: isScriptOnly ? "var(--accent-primary)" : "var(--text-primary)" }}>
+                    Script Only (Local Memory)
+                  </span>
+                  <span style={{ fontSize: "10.5px", color: "var(--text-muted)" }}>
+                    Match dialogue against loaded script memory without API or MT calls
+                  </span>
+                </div>
+              </div>
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  backgroundColor: "rgba(136, 189, 242, 0.15)",
+                  color: "var(--accent-primary)",
+                  border: "1px solid rgba(136, 189, 242, 0.3)",
+                  flexShrink: 0,
+                }}
+              >
+                0 tokens
+              </span>
+            </div>
+          )}
           {q && filteredStarred.length === 0 && filteredCatalog.length === 0 && (
             <div
               onClick={() => handleSelect(searchFilter.trim())}

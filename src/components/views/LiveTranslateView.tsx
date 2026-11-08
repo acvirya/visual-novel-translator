@@ -17,6 +17,7 @@ import {
   Coins,
   Activity,
   AlertTriangle,
+  Search,
 } from "lucide-react";
 import { translationManager, LlmContextSettings } from "../../services/translationManager";
 import { useUIStore } from "../../stores/useUIStore";
@@ -107,6 +108,25 @@ export const LiveTranslateView: React.FC = () => {
     translationManager.setContextSettings(newSettings);
   };
 
+  const [logSearchQuery, setLogSearchQuery] = useState("");
+
+  const filteredLiveLogs = useMemo(() => {
+    if (!logSearchQuery.trim()) return liveLogs;
+    const q = logSearchQuery.toLowerCase().trim();
+    return liveLogs.filter((item) => {
+      const rawSpeaker = item.name?.source?.toLowerCase() || "";
+      const transSpeaker = item.name?.translated?.toLowerCase() || "";
+      const rawMessage = item.message?.source?.toLowerCase() || "";
+      const transMessage = item.message?.translated?.toLowerCase() || "";
+      return (
+        rawSpeaker.includes(q) ||
+        transSpeaker.includes(q) ||
+        rawMessage.includes(q) ||
+        transMessage.includes(q)
+      );
+    });
+  }, [liveLogs, logSearchQuery]);
+
   const handleMaxContextBlur = () => {
     let val = parseInt(maxContextInput, 10);
     if (isNaN(val) || val < 0) val = 0;
@@ -159,100 +179,57 @@ export const LiveTranslateView: React.FC = () => {
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
+            justifyContent: "flex-start",
             flexWrap: "wrap",
             gap: "8px",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", minWidth: 0 }}>
-            {/* Auto Translate Toggle Button */}
-            <button
-              aria-pressed={!isPaused}
-              onClick={handleTogglePause}
-              className={!isPaused ? "btn-primary" : "btn-secondary"}
-              style={{
-                height: "32px",
-                padding: "0 14px",
-                fontWeight: 600,
-                fontSize: "12px",
-                gap: "6px",
-              }}
-            >
-              {!isPaused ? <Pause size={13} /> : <Play size={13} />}
-              <span>{!isPaused ? "Translating" : "Paused"}</span>
-            </button>
+          {/* Auto Translate Toggle Button */}
+          <button
+            aria-pressed={!isPaused}
+            onClick={handleTogglePause}
+            className={!isPaused ? "btn-primary" : "btn-secondary"}
+            style={{
+              height: "32px",
+              padding: "0 14px",
+              fontWeight: 600,
+              fontSize: "12px",
+              gap: "6px",
+            }}
+          >
+            {!isPaused ? <Pause size={13} /> : <Play size={13} />}
+            <span>{!isPaused ? "Translating" : "Paused"}</span>
+          </button>
 
-            {/* Translation Model Selector with Integrated Hover Reasoning Submenu */}
-            <ModelSelectorCombobox
-              selectedModelId={selectedProvider}
-              selectedReasoningEffort={reasoningEffort}
-              onSelectModel={(id, eff) => {
-                setSelectedProvider(id);
-                setReasoningEffort(eff || "default");
+          {/* Translation Model Selector with Integrated Hover Reasoning Submenu & Script Only Option */}
+          <ModelSelectorCombobox
+            selectedModelId={selectedProvider}
+            selectedReasoningEffort={reasoningEffort}
+            includeScriptOnly={true}
+            isScriptOnly={useScriptOnly}
+            onSelectScriptOnly={() => handleToggleScriptOnly(true)}
+            onSelectModel={(id, eff) => {
+              handleToggleScriptOnly(false);
+              setSelectedProvider(id);
+              setReasoningEffort(eff || "default");
+            }}
+            onSelectReasoningEffort={(eff) => setReasoningEffort(eff)}
+            width="260px"
+            compact={true}
+          />
+
+          {isLlmProvider && !useScriptOnly && (
+            <ProviderSelectorMultiSelect
+              modelId={selectedProvider}
+              selectedProviders={selectedProviders}
+              onChangeProviders={(newProviders) => {
+                setSelectedModelProviders(selectedProvider, newProviders);
+                setSelectedProviders(newProviders);
               }}
-              onSelectReasoningEffort={(eff) => setReasoningEffort(eff)}
-              disabled={useScriptOnly}
-              width="230px"
+              width="190px"
               compact={true}
             />
-
-            {isLlmProvider && !useScriptOnly && (
-              <ProviderSelectorMultiSelect
-                modelId={selectedProvider}
-                selectedProviders={selectedProviders}
-                onChangeProviders={(newProviders) => {
-                  setSelectedModelProviders(selectedProvider, newProviders);
-                  setSelectedProviders(newProviders);
-                }}
-                width="190px"
-                compact={true}
-              />
-            )}
-
-            {/* Use Script Only Toggle Button */}
-            <button
-              type="button"
-              aria-pressed={useScriptOnly}
-              onClick={() => handleToggleScriptOnly(!useScriptOnly)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "5px",
-                height: "32px",
-                padding: "0 10px",
-                borderRadius: "var(--radius-sm)",
-                border: `1px solid ${useScriptOnly ? "rgba(136, 189, 242, 0.5)" : "var(--border-subtle)"}`,
-                backgroundColor: useScriptOnly ? "rgba(136, 189, 242, 0.14)" : "var(--bg-surface-elevated)",
-                color: useScriptOnly ? "var(--accent-primary)" : "var(--text-secondary)",
-                fontSize: "12px",
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-              }}
-              title="When enabled, translation matches exclusively against the local script memory"
-            >
-              <Database size={13} color={useScriptOnly ? "var(--accent-primary)" : "var(--text-muted)"} />
-              <span>Script Only</span>
-            </button>
-          </div>
-
-          {/* Right actions: Line counter + Clear logs */}
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "11.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-              <strong style={{ color: "var(--text-primary)" }}>{liveLogs.length}</strong> lines
-            </span>
-
-            <button
-              onClick={() => confirm({ title: "Clear live translation logs?", message: "Remove all displayed dialogue logs?", confirmText: "Clear logs" }, clearLiveLogs)}
-              disabled={liveLogs.length === 0}
-              className="btn-secondary"
-              style={{ height: "28px", padding: "0 8px", fontSize: "11px" }}
-              title="Clear dialogue stream logs"
-            >
-              <Trash2 size={12} />
-              <span>Clear</span>
-            </button>
-          </div>
+          )}
         </div>
 
         {/* Tier 2: Telemetry, Pricing & Context Controls */}
@@ -267,28 +244,36 @@ export const LiveTranslateView: React.FC = () => {
             borderTop: "1px solid var(--border-subtle)",
           }}
         >
-          {/* Telemetry metrics pills */}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-            {/* Session Tokens Badge */}
+          {/* Telemetry metrics capsules */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            {/* Session Tokens Capsule */}
             <div
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: "6px",
-                backgroundColor: "var(--bg-panel)",
-                padding: "3px 9px",
+                gap: "8px",
+                backgroundColor: "var(--bg-surface-elevated)",
+                padding: "4px 10px",
                 borderRadius: "var(--radius-sm)",
                 border: "1px solid var(--border-subtle)",
                 fontSize: "11px",
               }}
             >
-              <Activity size={12} color="var(--accent-primary)" />
-              <span style={{ color: "var(--text-muted)" }}>Session:</span>
-              <span><strong style={{ color: "var(--accent-secondary)" }}>{sessionStats.promptTokens.toLocaleString()}</strong> in</span>
-              <span style={{ color: "var(--border-subtle)" }}>•</span>
-              <span><strong style={{ color: "var(--accent-gold)" }}>{sessionStats.completionTokens.toLocaleString()}</strong> out</span>
-              <span style={{ color: "var(--border-subtle)" }}>•</span>
-              <span>Cost: <strong style={{ color: "var(--accent-success)" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong></span>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--accent-primary)" }}>
+                <Activity size={12} />
+                <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>SESSION</span>
+              </div>
+              <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+              <span style={{ color: "var(--text-secondary)" }}>
+                In: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{sessionStats.promptTokens.toLocaleString()}</strong>
+              </span>
+              <span style={{ color: "var(--text-secondary)" }}>
+                Out: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{sessionStats.completionTokens.toLocaleString()}</strong>
+              </span>
+              <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+              <span style={{ color: "var(--text-secondary)" }}>
+                Cost: <strong style={{ color: "var(--accent-primary)", fontFamily: "var(--font-mono)" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong>
+              </span>
               {sessionStats.totalCost > 0 && (
                 <button
                   type="button"
@@ -308,26 +293,32 @@ export const LiveTranslateView: React.FC = () => {
               )}
             </div>
 
-            {/* Model Pricing Badge */}
+            {/* Model Pricing Capsule */}
             {isLlmProvider && !useScriptOnly && (
               <div
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  gap: "6px",
-                  backgroundColor: "var(--bg-panel)",
-                  padding: "3px 9px",
+                  gap: "8px",
+                  backgroundColor: "var(--bg-surface-elevated)",
+                  padding: "4px 10px",
                   borderRadius: "var(--radius-sm)",
                   border: "1px solid var(--border-subtle)",
                   fontSize: "11px",
                 }}
                 title="Model pricing per 1M tokens based on selected endpoints"
               >
-                <Coins size={12} color="var(--accent-gold)" />
-                <span style={{ color: "var(--text-muted)" }}>1M:</span>
-                <span>In <strong style={{ color: "var(--accent-secondary)" }}>{pricingSummary.input}</strong></span>
-                <span style={{ color: "var(--border-subtle)" }}>•</span>
-                <span>Out <strong style={{ color: "var(--accent-gold)" }}>{pricingSummary.output}</strong></span>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--text-muted)" }}>
+                  <Coins size={12} />
+                  <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>PER 1M</span>
+                </div>
+                <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+                <span style={{ color: "var(--text-secondary)" }}>
+                  In: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{pricingSummary.input}</strong>
+                </span>
+                <span style={{ color: "var(--text-secondary)" }}>
+                  Out: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{pricingSummary.output}</strong>
+                </span>
               </div>
             )}
           </div>
@@ -449,6 +440,36 @@ export const LiveTranslateView: React.FC = () => {
       {/* ========================================================================= */}
       {/* 3. LIVE STREAM DIALOGUE BACKLOG (Visual Novel Style)                      */}
       {/* ========================================================================= */}
+      {/* Dialogue Stream Toolbar (Search + Line Count + Clear Logs) */}
+      <div className="knowledge-toolbar" style={{ padding: "0 2px" }}>
+        <div className="knowledge-search">
+          <Search size={14} />
+          <input
+            type="search"
+            aria-label="Filter dialogue logs"
+            placeholder="Search dialogue, speaker, or translation..."
+            value={logSearchQuery}
+            onChange={(e) => setLogSearchQuery(e.target.value)}
+          />
+        </div>
+        <div className="knowledge-actions">
+          <span className="entry-count">
+            <strong>{filteredLiveLogs.length}</strong>
+            {filteredLiveLogs.length !== liveLogs.length ? ` / ${liveLogs.length}` : ""} lines
+          </span>
+          <button
+            onClick={() => confirm({ title: "Clear live translation logs?", message: "Remove all displayed dialogue logs?", confirmText: "Clear logs" }, clearLiveLogs)}
+            disabled={liveLogs.length === 0}
+            className="btn-secondary"
+            style={{ height: "30px", padding: "0 10px", fontSize: "11px", gap: "5px" }}
+            title="Clear dialogue stream logs"
+          >
+            <Trash2 size={12} />
+            <span>Clear</span>
+          </button>
+        </div>
+      </div>
+
       <div
         style={{
           display: "flex",
@@ -470,8 +491,18 @@ export const LiveTranslateView: React.FC = () => {
             </div>
             <button className="btn-secondary" onClick={() => useUIStore.getState().setLiveGameStage("input")}>Set up dialogue capture</button>
           </div>
+        ) : filteredLiveLogs.length === 0 ? (
+          <div className="empty-state-container" style={{ flex: 1, minHeight: "180px", margin: 0, width: "100%", boxSizing: "border-box" }}>
+            <div className="empty-state-title" style={{ fontSize: "14px" }}>
+              No dialogue matches "{logSearchQuery}"
+            </div>
+            <div className="empty-state-desc" style={{ fontSize: "12px", marginTop: "4px" }}>
+              Try a different keyword or reset the search filter.
+            </div>
+            <button className="btn-secondary" style={{ marginTop: "10px" }} onClick={() => setLogSearchQuery("")}>Clear filter</button>
+          </div>
         ) : (
-          liveLogs.map((item) => {
+          filteredLiveLogs.map((item) => {
             const rawSpeaker = item.name?.source;
             const transSpeaker = item.name?.translated;
             const rawMessage = item.message?.source || "";

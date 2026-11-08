@@ -4,9 +4,6 @@ import {
   Filter,
   Trash2,
   Download,
-  Coins,
-  Cpu,
-  Zap,
   Activity,
   Radio,
   FileText,
@@ -16,16 +13,15 @@ import {
 import {
   usageLogService,
   AiUsageLogEntry,
-  UsageSummaryStats,
   AiUsageStatus,
 } from "../../../services/usageLogService";
 import { ConfirmDialog } from "../../common/ConfirmDialog";
 import { AiUsageDetailModal } from "./AiUsageDetailModal";
+import { UsageSummaryCard } from "./UsageSummaryCard";
 import { useToast } from "../../common/ToastProvider";
 
 export const AiUsageLogsView: React.FC = () => {
   const [logs, setLogs] = useState<AiUsageLogEntry[]>(() => usageLogService.getLogs());
-  const [stats, setStats] = useState<UsageSummaryStats>(() => usageLogService.getSummaryStats());
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [selectedLog, setSelectedLog] = useState<AiUsageLogEntry | null>(null);
 
@@ -40,12 +36,10 @@ export const AiUsageLogsView: React.FC = () => {
     // Initial load
     usageLogService.loadHistory().then(() => {
       setLogs(usageLogService.getLogs());
-      setStats(usageLogService.getSummaryStats());
     });
 
     const unsubscribe = usageLogService.subscribe((updatedLogs) => {
       setLogs(updatedLogs);
-      setStats(usageLogService.getSummaryStats());
     });
 
     return () => unsubscribe();
@@ -206,157 +200,18 @@ export const AiUsageLogsView: React.FC = () => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "16px" }}>
-      {/* KPI Stats Bar */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
-          gap: "12px",
+      {/* Usage Summary Dashboard (OpenRouter Reference Design) */}
+      <UsageSummaryCard
+        logs={logs}
+        onViewAllLogs={() => {
+          const el = document.getElementById("ai-usage-table-panel");
+          if (el) el.scrollIntoView({ behavior: "smooth" });
         }}
-      >
-        <div
-          style={{
-            padding: "12px 16px",
-            backgroundColor: "var(--bg-surface)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-md)",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-          }}
-        >
-          <div
-            style={{
-              width: "36px",
-              height: "36px",
-              borderRadius: "8px",
-              backgroundColor: "rgba(245, 158, 11, 0.15)",
-              color: "#f59e0b",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Coins size={18} />
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-              Total Est. Cost
-            </div>
-            <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)" }}>
-              ${stats.totalCost.toFixed(4)}
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            padding: "12px 16px",
-            backgroundColor: "var(--bg-surface)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-md)",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-          }}
-        >
-          <div
-            style={{
-              width: "36px",
-              height: "36px",
-              borderRadius: "8px",
-              backgroundColor: "rgba(59, 130, 246, 0.15)",
-              color: "#60a5fa",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Activity size={18} />
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-              Total Requests
-            </div>
-            <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)" }}>
-              {stats.totalCalls.toLocaleString()}
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            padding: "12px 16px",
-            backgroundColor: "var(--bg-surface)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-md)",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-          }}
-        >
-          <div
-            style={{
-              width: "36px",
-              height: "36px",
-              borderRadius: "8px",
-              backgroundColor: "rgba(168, 85, 247, 0.15)",
-              color: "#c084fc",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Cpu size={18} />
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-              Total Tokens
-            </div>
-            <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)" }}>
-              {stats.totalTokens.toLocaleString()}
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            padding: "12px 16px",
-            backgroundColor: "var(--bg-surface)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-md)",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-          }}
-        >
-          <div
-            style={{
-              width: "36px",
-              height: "36px",
-              borderRadius: "8px",
-              backgroundColor: "rgba(34, 197, 94, 0.15)",
-              color: "#4ade80",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Zap size={18} />
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-              Avg Latency
-            </div>
-            <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)" }}>
-              {stats.avgLatencyMs.toLocaleString()} ms
-            </div>
-          </div>
-        </div>
-      </div>
+      />
 
       {/* Control Bar: Filters & Actions */}
       <div
+        id="ai-usage-table-panel"
         style={{
           display: "flex",
           alignItems: "center",

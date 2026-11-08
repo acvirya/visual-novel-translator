@@ -233,21 +233,19 @@ export const TranslationProvidersView: React.FC = () => {
             return (
               <button
                 key={p.id}
+                type="button"
+                aria-pressed={isSelected}
                 onClick={() => {
                   setActiveProviderTab(p.id);
                   setTestFeedback(null);
                 }}
-                className={isSelected ? "btn-primary" : "btn-secondary"}
+                className={`selector-pill${isSelected ? " is-active" : ""}`}
                 style={{
                   fontSize: "12px",
-                  padding: "5px 10px",
+                  padding: "5px 12px",
                   display: "inline-flex",
                   alignItems: "center",
                   gap: "6px",
-                  borderRadius: "var(--radius-sm)",
-                  border: isSelected ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
-                  backgroundColor: isSelected ? "var(--accent-primary)" : "var(--bg-app)",
-                  color: isSelected ? "#fff" : "var(--text-primary)",
                   cursor: "pointer",
                 }}
               >
