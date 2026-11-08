@@ -16,7 +16,6 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
-  Globe,
   Eye,
   EyeOff,
   ExternalLink,
@@ -29,7 +28,6 @@ import {
   StoredProviderConfig,
 } from "../../services/providers/llmProviderRegistry";
 import { LlmDispatcherService } from "../../services/providers/llmDispatcherService";
-import { LanguageSelectorCombobox } from "../common/LanguageSelectorCombobox";
 import { useToast } from "../common/ToastProvider";
 import { settingsManager } from "../../services/settingsManager";
 import { StylePresetsCard } from "./providers/StylePresetsCard";
@@ -100,21 +98,13 @@ export const TranslationProvidersView: React.FC = () => {
   const [activePresetId, setActivePresetId] = useState<string>(() => getActiveStylePresetId());
   const [styleInstructions, setStyleInstructions] = useState<string>(() => getActiveStyleInstructions());
 
-  const [sourceLang, setSourceLang] = useState<string>(() => {
-    return settingsManager.getSourceLang();
-  });
-  const [targetLang, setTargetLang] = useState<string>(() => {
-    return settingsManager.getTargetLang();
-  });
+  const sourceLang = settingsManager.getSourceLang();
+  const targetLang = settingsManager.getTargetLang();
 
   useEffect(() => {
     localStorage.setItem("vn_active_style_preset_id", activePresetId);
     localStorage.setItem("vn_active_style_instructions", styleInstructions);
   }, [activePresetId, styleInstructions]);
-
-  useEffect(() => {
-    settingsManager.updateGeneral({ sourceLang, targetLang });
-  }, [sourceLang, targetLang]);
 
   useEffect(() => {
     settingsManager.updateTranslation({ temperature });
@@ -211,46 +201,12 @@ export const TranslationProvidersView: React.FC = () => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%" }}>
-      {/* 1. Translation Languages Configuration */}
+      {/* LLM Providers & Direct API Keys Hub */}
       <div className="card" style={{ margin: 0 }}>
         <div className="card-header">
           <div>
             <span className="card-title">
-              <Globe size={16} /> Translation Language Pair (Source & Target)
-            </span>
-            <span className="card-subtitle">
-              Configure original game dialogue source language and desired translation output language
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "16px" }}>
-          <div>
-            <LanguageSelectorCombobox
-              label="Original Game Source Language"
-              value={sourceLang}
-              onChange={(code) => setSourceLang(code)}
-              placeholder="Search or enter source language..."
-            />
-          </div>
-
-          <div>
-            <LanguageSelectorCombobox
-              label="Target Translation Language"
-              value={targetLang}
-              onChange={(code) => setTargetLang(code)}
-              placeholder="Search or enter target language..."
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* 2. Multi-LLM Providers & Direct API Keys Hub */}
-      <div className="card" style={{ margin: 0 }}>
-        <div className="card-header">
-          <div>
-            <span className="card-title">
-              <Cpu size={16} /> 2. LLM Providers & Authentication
+              <Cpu size={16} /> LLM Providers & Authentication
             </span>
             <span className="card-subtitle">
               Connect a provider with an API key, an OpenAI ChatGPT account, or a compatible gateway
