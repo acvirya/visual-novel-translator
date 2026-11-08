@@ -110,6 +110,7 @@ export const LiveTranslateView: React.FC = () => {
   const handleMaxContextBlur = () => {
     let val = parseInt(maxContextInput, 10);
     if (isNaN(val) || val < 0) val = 0;
+    val = Math.min(500, val);
     setMaxContextInput(String(val));
     const newRetain = Math.min(contextSettings.retainContextLines, val);
     setRetainContextInput(String(newRetain));
@@ -389,11 +390,12 @@ export const LiveTranslateView: React.FC = () => {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
           <div>
-            <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
+            <label htmlFor="live-max-context" style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
               Max Context Lines (History Limit):
             </label>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <input
+                id="live-max-context"
                 type="number"
                 min={0}
                 max={500}
@@ -413,11 +415,12 @@ export const LiveTranslateView: React.FC = () => {
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
+            <label htmlFor="live-retain-context" style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
               Retained Lines After Cut (Sliding Buffer):
             </label>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <input
+                id="live-retain-context"
                 type="number"
                 min={0}
                 max={contextSettings.maxContextLines}
