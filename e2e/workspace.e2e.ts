@@ -25,7 +25,7 @@ for (const viewport of [{ width: 620, height: 480 }, { width: 900, height: 650 }
     await expect(page.locator("iframe")).toBeVisible();
     await expect(page.frameLocator("iframe").locator("body")).toContainText("Tomoyo");
     await assertFits(page);
-    for (const name of ["Script translator", "Knowledge base", "Activity & usage", "Settings"]) {
+    for (const name of ["Script translator", "Glossary & terms", "Script memory", "Activity & usage", "Settings"]) {
       await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name, exact: true }).click();
       await assertFits(page);
     }

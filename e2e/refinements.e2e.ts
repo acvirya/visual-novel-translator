@@ -4,7 +4,7 @@ test("glossary dialogs, category filters and locked terms", async ({ page }) => 
   await page.setViewportSize({ width: 620, height: 620 });
   await page.addInitScript(() => { if (!localStorage.getItem("vn_translator_universal_settings_v2")) localStorage.setItem("vn_translator_universal_settings_v2", JSON.stringify({ glossary: { terms: [] } })); });
   await page.goto("/");
-  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Knowledge base", exact: true }).click();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Glossary & terms", exact: true }).click();
   await expect(page.getByLabel("Original term", { exact: true })).toBeHidden();
   for (const [original, translation, category] of [["Sakura", "Cherry", "Name"], ["School", "Academy", "Place"]]) {
     await page.getByRole("button", { name: "Add term", exact: true }).click();
@@ -39,15 +39,14 @@ test("glossary dialogs, category filters and locked terms", async ({ page }) => 
   await expect(page.locator(".glossary-table")).toContainText("Cherry blossom");
   await page.evaluate(async () => { const { settingsManager } = await import("/src/services/settingsManager.ts"); await settingsManager.flushPendingSaves(); });
   await page.reload();
-  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Knowledge base", exact: true }).click();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Glossary & terms", exact: true }).click();
   await expect(page.getByRole("button", { name: "Unlock Sakura", exact: true })).toBeVisible();
 });
 
 test("script memory only imports into an open script and confirms destructive edits", async ({ page }) => {
   await page.setViewportSize({ width: 620, height: 620 });
   await page.goto("/");
-  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Knowledge base", exact: true }).click();
-  await page.getByRole("tab", { name: "Script memory", exact: true }).click();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Script memory", exact: true }).click();
   await expect(page.getByRole("button", { name: /Import (from Scripts|entries)/ })).toHaveCount(0);
   await page.evaluate(async () => {
     const { scriptManagerService } = await import("/src/services/scriptManagerService.ts");
