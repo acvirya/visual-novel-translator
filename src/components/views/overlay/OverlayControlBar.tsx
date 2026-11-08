@@ -1,7 +1,7 @@
 import React from "react";
 import { OverlayConfig } from "../../../types";
 import { formatMonitorLabel } from "../../../utils/monitorUtils";
-import { Monitor, Power, Move, Check, Sparkles } from "lucide-react";
+import { Monitor, Move, Check, Sparkles, Square, Play } from "lucide-react";
 
 export interface MonitorInfo {
   name: string;
@@ -107,15 +107,15 @@ export const OverlayControlBar: React.FC<OverlayControlBarProps> = ({
         {/* Master Start / Stop Button */}
         <button
           onClick={onToggleOverlay}
-          className={config.isEnabled ? "btn-primary" : "btn-secondary"}
+          className={config.isEnabled ? "btn-danger" : "btn-primary"}
           style={{
-            backgroundColor: config.isEnabled ? "var(--accent-success)" : "var(--bg-surface-elevated)",
             height: "34px",
             padding: "0 18px",
             fontWeight: 600,
+            whiteSpace: "nowrap",
           }}
         >
-          <Power size={14} />
+          {config.isEnabled ? <Square size={13} /> : <Play size={13} />}
           <span>{config.isEnabled ? "Stop In-Game Overlay" : "Start In-Game Overlay"}</span>
         </button>
 

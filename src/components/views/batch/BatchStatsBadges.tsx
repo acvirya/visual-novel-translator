@@ -43,79 +43,103 @@ export const BatchStatsBadges: React.FC<BatchStatsBadgesProps> = ({
 }) => {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-      {/* Model Pricing Badge (Input / Output / Cache per 1M tokens) */}
+      {/* Session Tokens Capsule */}
       <div
         style={{
-          display: "flex",
+          display: "inline-flex",
           alignItems: "center",
           gap: "8px",
-          backgroundColor: "var(--bg-app)",
+          backgroundColor: "var(--bg-surface-elevated)",
           padding: "4px 10px",
-          borderRadius: "20px",
+          borderRadius: "var(--radius-sm)",
           border: "1px solid var(--border-subtle)",
           fontSize: "11px",
-          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--accent-primary)" }}>
+          <Activity size={12} />
+          <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>SESSION</span>
+        </div>
+        <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+        <span style={{ color: "var(--text-secondary)" }}>
+          In: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{sessionStats.promptTokens.toLocaleString()}</strong>
+        </span>
+        <span style={{ color: "var(--text-secondary)" }}>
+          Out: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{sessionStats.completionTokens.toLocaleString()}</strong>
+        </span>
+        {sessionStats.cachedTokens > 0 && (
+          <span style={{ color: "var(--text-secondary)" }}>
+            Cached: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{sessionStats.cachedTokens.toLocaleString()}</strong>
+          </span>
+        )}
+        <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+        <span style={{ color: "var(--text-secondary)" }}>
+          Cost: <strong style={{ color: "var(--accent-primary)", fontFamily: "var(--font-mono)" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong>
+        </span>
+      </div>
+
+      {/* Model Pricing Capsule */}
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "8px",
+          backgroundColor: "var(--bg-surface-elevated)",
+          padding: "4px 10px",
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--border-subtle)",
+          fontSize: "11px",
         }}
         title="Model Pricing per 1 Million tokens (Input, Output, and Prompt Cache) based on selected endpoints"
       >
-        <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
-          <Coins size={12} color="var(--accent-primary)" /> Pricing / 1M:
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--text-muted)" }}>
+          <Coins size={12} />
+          <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>PER 1M</span>
+        </div>
+        <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+        <span style={{ color: "var(--text-secondary)" }}>
+          In: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{pricingSummary.input}</strong>
         </span>
-        <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{pricingSummary.input}</strong></span>
-        <span style={{ color: "var(--border-subtle)" }}>•</span>
-        <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{pricingSummary.output}</strong></span>
-        <span style={{ color: "var(--border-subtle)" }}>•</span>
-        <span>Cache: <strong style={{ color: "var(--accent-success)" }}>{pricingSummary.cache}</strong></span>
+        <span style={{ color: "var(--text-secondary)" }}>
+          Out: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{pricingSummary.output}</strong>
+        </span>
+        {pricingSummary.cache && pricingSummary.cache !== "$0" && (
+          <>
+            <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+            <span style={{ color: "var(--text-secondary)" }}>
+              Cache: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{pricingSummary.cache}</strong>
+            </span>
+          </>
+        )}
       </div>
 
-      {/* Session Usage Badge */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          backgroundColor: "var(--bg-app)",
-          padding: "4px 10px",
-          borderRadius: "20px",
-          border: "1px solid var(--border-subtle)",
-          fontSize: "11px",
-          flexWrap: "wrap",
-        }}
-      >
-        <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
-          <Activity size={12} color="var(--accent-primary)" /> Session Tokens:
-        </span>
-        <span>In: <strong style={{ color: "var(--accent-cyan)" }}>{sessionStats.promptTokens.toLocaleString()}</strong></span>
-        <span style={{ color: "var(--border-subtle)" }}>•</span>
-        <span>Out: <strong style={{ color: "var(--accent-gold)" }}>{sessionStats.completionTokens.toLocaleString()}</strong></span>
-        <span style={{ color: "var(--border-subtle)" }}>•</span>
-        <span>Cached: <strong style={{ color: "var(--accent-success)" }}>{sessionStats.cachedTokens.toLocaleString()}</strong></span>
-        <span style={{ color: "var(--border-subtle)" }}>•</span>
-        <span>Cost: <strong style={{ color: "#38ef7d" }}>${sessionStats.totalCost < 0.01 && sessionStats.totalCost > 0 ? sessionStats.totalCost.toFixed(5) : sessionStats.totalCost.toFixed(4)}</strong></span>
-      </div>
-
-      {/* Live Speed & ETA Badge (Displayed when batch translation is active) */}
+      {/* Live Speed & ETA Capsule (Displayed when batch translation is active) */}
       {isRunning && Boolean(avgBatchDurationMs && avgBatchDurationMs > 0) && (
         <div
           style={{
-            display: "flex",
+            display: "inline-flex",
             alignItems: "center",
             gap: "8px",
-            backgroundColor: "var(--bg-app)",
+            backgroundColor: "var(--bg-surface-elevated)",
             padding: "4px 10px",
-            borderRadius: "20px",
+            borderRadius: "var(--radius-sm)",
             border: "1px solid var(--border-subtle)",
             fontSize: "11px",
-            flexWrap: "wrap",
           }}
           title="Average execution duration per batch and estimated time to completion (ETA)"
         >
-          <span style={{ color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
-            <Timer size={12} color="var(--accent-primary)" /> Speed:
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--accent-primary)" }}>
+            <Timer size={12} />
+            <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>SPEED</span>
+          </div>
+          <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+          <span style={{ color: "var(--text-secondary)" }}>
+            Rate: <strong style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>{(avgBatchDurationMs! / 1000).toFixed(1)}s</strong>/batch
           </span>
-          <span><strong style={{ color: "var(--accent-cyan)" }}>{(avgBatchDurationMs! / 1000).toFixed(1)}s</strong>/batch</span>
-          <span style={{ color: "var(--border-subtle)" }}>•</span>
-          <span>ETA: <strong style={{ color: "#38ef7d" }}>{formatEta(estimatedRemainingSeconds)}</strong></span>
+          <div style={{ width: "1px", height: "12px", backgroundColor: "var(--border-subtle)" }} />
+          <span style={{ color: "var(--text-secondary)" }}>
+            ETA: <strong style={{ color: "var(--accent-primary)", fontFamily: "var(--font-mono)" }}>{formatEta(estimatedRemainingSeconds)}</strong>
+          </span>
         </div>
       )}
     </div>

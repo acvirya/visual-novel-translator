@@ -376,25 +376,29 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* 2. PERSISTENT MODEL & SESSION CONTROL BAR (Visible in both subtabs)       */}
+      {/* 2. PERSISTENT MODEL & SESSION CONTROL BAR (2-TIER ARCHITECTURE)            */}
       {/* ========================================================================= */}
       <div
+        className="card"
         style={{
-          backgroundColor: "var(--bg-surface)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-md)",
-          padding: "8px 14px",
-          marginBottom: "10px",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: "10px",
+          flexDirection: "column",
+          gap: "8px",
+          margin: "0 0 10px 0",
+          padding: "10px 14px",
           flexShrink: 0,
         }}
       >
-        {/* Left Side: Model Selector + Master Execution Buttons */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+        {/* Tier 1: Model Selector + Master Execution Buttons */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "8px",
+          }}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", minWidth: 0 }}>
             <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
               Model:
@@ -436,7 +440,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
                 disabled={!hasTranslatableLines}
                 className="btn-primary"
                 style={{
-                  padding: "6px 14px",
+                  height: "32px",
+                  padding: "0 16px",
                   fontSize: "12px",
                   opacity: !hasTranslatableLines ? 0.5 : 1,
                   cursor: !hasTranslatableLines ? "not-allowed" : "pointer",
@@ -466,8 +471,8 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
             ) : (
               <button
                 onClick={handleCancelBatch}
-                className="btn-secondary"
-                style={{ padding: "6px 14px", fontSize: "12px", color: "var(--accent-danger)", borderColor: "var(--accent-danger)" }}
+                className="btn-danger"
+                style={{ height: "32px", padding: "0 16px", fontSize: "12px" }}
               >
                 <Square size={13} />
                 <span>Cancel Translation</span>
@@ -476,13 +481,26 @@ export const BatchTranslateView: React.FC<BatchTranslateViewProps> = ({
           </div>
         </div>
 
-        <BatchStatsBadges
-          pricingSummary={pricingSummary}
-          sessionStats={sessionStats}
-          isRunning={isRunning}
-          avgBatchDurationMs={avgBatchDurationMs}
-          estimatedRemainingSeconds={estimatedRemainingSeconds}
-        />
+        {/* Tier 2: Telemetry & Pricing Bar */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "8px",
+            paddingTop: "6px",
+            borderTop: "1px solid var(--border-subtle)",
+          }}
+        >
+          <BatchStatsBadges
+            pricingSummary={pricingSummary}
+            sessionStats={sessionStats}
+            isRunning={isRunning}
+            avgBatchDurationMs={avgBatchDurationMs}
+            estimatedRemainingSeconds={estimatedRemainingSeconds}
+          />
+        </div>
       </div>
 
       {/* ========================================================================= */}
